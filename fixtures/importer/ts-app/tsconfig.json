@@ -1,0 +1,7 @@
+{
+  // JSONC comment to exercise the tolerant parser
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": { "@app/*": ["src/app/*"] },
+  }
+}

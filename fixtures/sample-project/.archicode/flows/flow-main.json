@@ -1,0 +1,211 @@
+{
+  "id": "flow-main",
+  "name": "ArchiCode MVP Harness",
+  "description": "Top-level flow for the runnable agent harness.",
+  "nodes": [
+    {
+      "id": "node-project",
+      "type": "project",
+      "title": "Project Workspace",
+      "description": "Folder-based workspace storing all durable project state under .archicode.",
+      "stage": "plan-approved",
+      "flags": [
+        "changed"
+      ],
+      "locked": false,
+      "position": {
+        "x": 35.55975004039129,
+        "y": -124.02306142147287
+      },
+      "techStack": [
+        "JSON",
+        "Electron IPC"
+      ],
+      "acceptanceCriteria": [
+        "Project reloads from readable JSON",
+        "Validation errors are visible"
+      ],
+      "dependencies": [],
+      "attachments": [],
+      "todos": [
+        {
+          "id": "todo-project-import-export",
+          "text": "Support import/export and validation",
+          "done": false
+        }
+      ],
+      "updatedAt": "2026-06-16T11:47:12.044Z"
+    },
+    {
+      "id": "node-json-model",
+      "type": "setting",
+      "title": "LLM-Clarifying JSON Model",
+      "description": "Projects, flows, nodes, comments, runs, artifacts, summaries, and settings stay as explicit JSON files.",
+      "stage": "plan-approved",
+      "flags": [
+        "changed"
+      ],
+      "locked": false,
+      "position": {
+        "x": 415.04941333942526,
+        "y": 59.057600270076826
+      },
+      "techStack": [
+        "Zod",
+        "TypeScript"
+      ],
+      "acceptanceCriteria": [
+        "Schemas cover stages and flags",
+        "Locked approved nodes reject LLM edits"
+      ],
+      "dependencies": [
+        "node-project"
+      ],
+      "attachments": [],
+      "todos": [],
+      "updatedAt": "2026-06-16T11:48:56.728Z"
+    },
+    {
+      "id": "node-canvas",
+      "type": "feature",
+      "title": "React Flow Canvas",
+      "description": "Visual-first interface for nodes, edges, subflows, status badges, diffs, comments, and approvals.",
+      "stage": "working",
+      "flags": [
+        "modified-not-built"
+      ],
+      "locked": false,
+      "position": {
+        "x": 741.6839272777519,
+        "y": -84.73227787684195
+      },
+      "techStack": [
+        "React",
+        "React Flow",
+        "Zustand"
+      ],
+      "acceptanceCriteria": [
+        "Node status is scannable",
+        "Inspector edits persist to JSON"
+      ],
+      "dependencies": [
+        "node-json-model"
+      ],
+      "attachments": [],
+      "todos": [],
+      "updatedAt": "2026-06-16T11:13:02.795Z"
+    },
+    {
+      "id": "node-orchestrator",
+      "type": "component",
+      "title": "Local Agent Orchestrator",
+      "description": "Electron main process manages providers, context compaction, shell permissions, runs, and artifacts.",
+      "stage": "working",
+      "flags": [
+        "needs-attention",
+        "llm-question"
+      ],
+      "locked": false,
+      "position": {
+        "x": 696.161036493342,
+        "y": 315.9233782516978
+      },
+      "techStack": [
+        "Electron main",
+        "child_process",
+        "provider adapters"
+      ],
+      "acceptanceCriteria": [
+        "Shell commands require explicit approval",
+        "Runs persist logs and instructions"
+      ],
+      "dependencies": [
+        "node-project",
+        "node-json-model"
+      ],
+      "attachments": [],
+      "todos": [
+        {
+          "id": "todo-provider-api",
+          "text": "Wire direct provider calls after API key settings are confirmed",
+          "done": false
+        }
+      ],
+      "updatedAt": "2026-06-16T11:14:06.830Z"
+    },
+    {
+      "id": "node-approved-contract",
+      "type": "task",
+      "title": "Approved Node Contract",
+      "description": "Once a node reaches production approval, LLM runs can read it but must create a revision before changing it.",
+      "stage": "draft-approved-production",
+      "flags": [
+        "user-approved"
+      ],
+      "locked": true,
+      "position": {
+        "x": 8.360991372481749,
+        "y": 313.9664367980389
+      },
+      "techStack": [
+        "Zod",
+        "policy"
+      ],
+      "acceptanceCriteria": [
+        "LLM patch is rejected",
+        "User patch can unlock revision intentionally"
+      ],
+      "dependencies": [
+        "node-json-model"
+      ],
+      "attachments": [],
+      "todos": [],
+      "updatedAt": "2026-06-16T11:14:08.797Z"
+    }
+  ],
+  "edges": [
+    {
+      "id": "edge-project-json",
+      "source": "node-project",
+      "target": "node-json-model",
+      "label": "stores"
+    },
+    {
+      "id": "edge-json-canvas",
+      "source": "node-json-model",
+      "target": "node-canvas",
+      "label": "renders"
+    },
+    {
+      "id": "edge-json-orchestrator",
+      "source": "node-json-model",
+      "target": "node-orchestrator",
+      "label": "feeds context"
+    },
+    {
+      "id": "edge-policy-orchestrator",
+      "source": "node-approved-contract",
+      "target": "node-orchestrator",
+      "label": "guards edits"
+    },
+    {
+      "id": "edge-mqh1ojtf-ua13yy",
+      "source": "node-orchestrator",
+      "target": "node-approved-contract",
+      "label": "relates"
+    }
+  ],
+  "subflows": [
+    {
+      "id": "subflow-orchestrator",
+      "name": "Local Orchestrator",
+      "parentNodeId": "node-orchestrator"
+    },
+    {
+      "id": "subflow-json",
+      "name": "JSON Project Model",
+      "parentNodeId": "node-json-model"
+    }
+  ],
+  "updatedAt": "2026-06-16T19:38:20.886Z"
+}

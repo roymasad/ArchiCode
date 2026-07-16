@@ -1,0 +1,12 @@
+node_modules/
+out/
+dist/
+release/
+artifacts/
+.DS_Store
+*.log
+coverage/
+.env
+.env.*
+!.env.example
+website/

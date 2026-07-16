@@ -1,0 +1,250 @@
+{
+  "schemaVersion": 1,
+  "id": "project-archicode",
+  "name": "ArchiCode",
+  "description": "A visual-first local harness for designing and evolving applications with LLM-guided node flows.",
+  "rootPath": "/Users/roymassaad/code/ArchiText/fixtures/sample-project",
+  "activeFlowId": "flow-main",
+  "settings": {
+    "contextBudgetMode": "auto",
+    "patchReviewMode": "auto",
+    "planningReviewMode": "auto",
+    "codeReviewMode": "auto-apply",
+    "stopOnUnansweredQuestions": true,
+    "contextTokenBudget": 120000,
+    "compactionThreshold": 90000,
+    "contextBuilder": {
+      "includeComments": true,
+      "includeArtifacts": true,
+      "includeRuns": true,
+      "includeSummaries": true,
+      "includeLockedNodes": true,
+      "recentRunLimit": 8,
+      "artifactLimit": 20
+    },
+    "filesystem": {
+      "policy": "project-write",
+      "allowedRoots": [],
+      "blockOutsideProjectPaths": true
+    },
+    "webSearch": {
+      "enabled": false,
+      "requirePerRunApproval": true,
+      "persistSearchArtifacts": true
+    },
+    "defaultBuildCommand": "",
+    "defaultRunCommand": "",
+    "environmentNotes": "Local Electron app. Provider keys are read from environment variables, never stored in project JSON.",
+    "stackAssumptions": [
+      "Electron",
+      "React",
+      "TypeScript",
+      "React Flow",
+      "folder-based JSON"
+    ],
+    "allowedShellCommands": [],
+    "shellPolicies": [],
+    "providers": [
+      {
+        "id": "openai-compatible",
+        "kind": "openai-compatible",
+        "label": "Custom OpenAI-Compatible",
+        "baseUrl": "https://api.openai.com/v1",
+        "model": "gpt-5.5",
+        "detectedAvailableModels": [],
+        "apiKeyEnv": "OPENAI_API_KEY",
+        "localSandbox": "read-only",
+        "ephemeral": true,
+        "phaseModelPolicies": {
+          "planning": {
+            "temperature": 0.2,
+            "reasoningMode": "high",
+            "maxOutputTokens": 2400,
+            "enabledTools": []
+          },
+          "coding": {
+            "temperature": 0.1,
+            "reasoningMode": "medium",
+            "maxOutputTokens": 3200,
+            "enabledTools": []
+          },
+          "debugging": {
+            "temperature": 0,
+            "reasoningMode": "high",
+            "maxOutputTokens": 3200,
+            "enabledTools": []
+          },
+          "review": {
+            "temperature": 0.1,
+            "reasoningMode": "medium",
+            "maxOutputTokens": 2200,
+            "enabledTools": []
+          },
+          "verifying": {
+            "temperature": 0,
+            "reasoningMode": "low",
+            "maxOutputTokens": 1200,
+            "enabledTools": []
+          },
+          "summarizing": {
+            "temperature": 0.1,
+            "reasoningMode": "low",
+            "maxOutputTokens": 1600,
+            "enabledTools": []
+          },
+          "brainstorming": {
+            "temperature": 0.6,
+            "reasoningMode": "medium",
+            "maxOutputTokens": 2600,
+            "enabledTools": []
+          }
+        },
+        "enabled": true
+      },
+      {
+        "id": "anthropic-compatible",
+        "kind": "anthropic-compatible",
+        "label": "Anthropic Compatible",
+        "model": "claude-sonnet-4-6",
+        "detectedAvailableModels": [],
+        "apiKeyEnv": "ANTHROPIC_API_KEY",
+        "localSandbox": "read-only",
+        "ephemeral": true,
+        "phaseModelPolicies": {
+          "planning": {
+            "temperature": 0.2,
+            "reasoningMode": "high",
+            "maxOutputTokens": 2400,
+            "enabledTools": []
+          },
+          "coding": {
+            "temperature": 0.1,
+            "reasoningMode": "medium",
+            "maxOutputTokens": 3200,
+            "enabledTools": []
+          },
+          "debugging": {
+            "temperature": 0,
+            "reasoningMode": "high",
+            "maxOutputTokens": 3200,
+            "enabledTools": []
+          },
+          "review": {
+            "temperature": 0.1,
+            "reasoningMode": "medium",
+            "maxOutputTokens": 2200,
+            "enabledTools": []
+          },
+          "verifying": {
+            "temperature": 0,
+            "reasoningMode": "low",
+            "maxOutputTokens": 1200,
+            "enabledTools": []
+          },
+          "summarizing": {
+            "temperature": 0.1,
+            "reasoningMode": "low",
+            "maxOutputTokens": 1600,
+            "enabledTools": []
+          },
+          "brainstorming": {
+            "temperature": 0.6,
+            "reasoningMode": "medium",
+            "maxOutputTokens": 2600,
+            "enabledTools": []
+          }
+        },
+        "enabled": false
+      },
+      {
+        "id": "codex-local",
+        "kind": "codex-local",
+        "label": "Codex App Local",
+        "model": "",
+        "detectedAvailableModels": [],
+        "localCommand": "codex",
+        "localSandbox": "read-only",
+        "ephemeral": true,
+        "phaseModelPolicies": {
+          "planning": {
+            "temperature": 0.2,
+            "reasoningMode": "high",
+            "maxOutputTokens": 2400,
+            "enabledTools": []
+          },
+          "coding": {
+            "temperature": 0.1,
+            "reasoningMode": "medium",
+            "maxOutputTokens": 3200,
+            "enabledTools": []
+          },
+          "debugging": {
+            "temperature": 0,
+            "reasoningMode": "high",
+            "maxOutputTokens": 3200,
+            "enabledTools": []
+          },
+          "review": {
+            "temperature": 0.1,
+            "reasoningMode": "medium",
+            "maxOutputTokens": 2200,
+            "enabledTools": []
+          },
+          "verifying": {
+            "temperature": 0,
+            "reasoningMode": "low",
+            "maxOutputTokens": 1200,
+            "enabledTools": []
+          },
+          "summarizing": {
+            "temperature": 0.1,
+            "reasoningMode": "low",
+            "maxOutputTokens": 1600,
+            "enabledTools": []
+          },
+          "brainstorming": {
+            "temperature": 0.6,
+            "reasoningMode": "medium",
+            "maxOutputTokens": 2600,
+            "enabledTools": []
+          }
+        },
+        "enabled": false
+      }
+    ],
+    "tools": [
+      {
+        "id": "shell",
+        "kind": "shell",
+        "label": "Permissioned Shell",
+        "enabled": true
+      },
+      {
+        "id": "artifacts",
+        "kind": "artifact",
+        "label": "Project Artifacts",
+        "enabled": true
+      },
+      {
+        "id": "skills",
+        "kind": "skill",
+        "label": "Skills Registry",
+        "enabled": true
+      },
+      {
+        "id": "mcp",
+        "kind": "mcp",
+        "label": "MCP Registry",
+        "enabled": false
+      },
+      {
+        "id": "web-search",
+        "kind": "web-search",
+        "label": "Permissioned Web Search",
+        "enabled": false
+      }
+    ]
+  },
+  "createdAt": "2026-06-15T18:00:00.000Z",
+  "updatedAt": "2026-06-16T19:38:20.889Z"
+}

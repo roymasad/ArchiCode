@@ -1,0 +1,12 @@
+[
+  {
+    "id": "comment-seed-question",
+    "flowId": "flow-main",
+    "nodeId": "node-orchestrator",
+    "kind": "llm-question",
+    "author": "llm",
+    "body": "Which provider should be made active first: direct OpenAI-compatible calls or a local/offline review workflow?",
+    "resolved": false,
+    "createdAt": "2026-06-15T18:00:00.000Z"
+  }
+]

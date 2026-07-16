@@ -1,0 +1,15 @@
+ArchiCode
+Copyright (C) 2026 Roy Massaad
+
+ArchiCode is available under the GNU Affero General Public License,
+version 3 only (AGPL-3.0-only). Separate commercial licenses may be
+available from the copyright holder. See LICENSE and LICENSING.md.
+
+This notice identifies the origin and copyright holder of ArchiCode. It does
+not add restrictions to the AGPL. Covered copies and modified versions must
+preserve applicable copyright and legal notices as required by that license.
+
+Third-party components retain their own copyright and license terms. Bundled
+semantic-model notices and license texts are located in
+resources/semantic-model/.
+

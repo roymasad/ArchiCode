@@ -1,0 +1,150 @@
+{
+  "name": "archicode",
+  "version": "0.3.1",
+  "description": "A local visual-first Electron harness for designing and evolving apps with node-based LLM workflows.",
+  "author": "Roy Massaad",
+  "license": "AGPL-3.0-only",
+  "main": "out/main/index.js",
+  "type": "module",
+  "packageManager": "npm@11.7.0",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "dev": "electron-vite dev",
+    "icons": "node scripts/generate-icons.mjs",
+    "semantic-model": "node scripts/fetch-semantic-model.mjs",
+    "build": "npm run typecheck && electron-vite build",
+    "pack": "npm run icons && npm run build && electron-builder --dir",
+    "dist": "npm run icons && npm run build && electron-builder",
+    "dist:mac": "npm run icons && npm run build && electron-builder --mac",
+    "dist:win": "npm run icons && npm run build && electron-builder --win",
+    "preview": "electron-vite preview",
+    "test": "vitest run",
+    "benchmark:importer": "vite-node scripts/benchmark-importer.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "visual-qa": "npm run build && electron scripts/visual-qa-main.cjs",
+    "visual-qa:readme": "npm run build && electron scripts/visual-qa-main.cjs --readme-only",
+    "visual-qa:notes": "npm run build && electron scripts/visual-qa-notes.cjs",
+    "visual-qa:settings": "npm run build && electron scripts/visual-qa-settings.cjs",
+    "visual-qa:preferences": "npm run build && electron scripts/visual-qa-preferences.cjs"
+  },
+  "build": {
+    "appId": "app.archicode.desktop",
+    "productName": "ArchiCode",
+    "directories": {
+      "buildResources": "build",
+      "output": "release"
+    },
+    "npmRebuild": false,
+    "asarUnpack": [
+      "**/*.wasm"
+    ],
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "resources/semantic-model",
+        "to": "semantic-model",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "resources/tree-sitter-wasms",
+        "to": "tree-sitter-wasms",
+        "filter": [
+          "**/*.wasm"
+        ]
+      }
+    ],
+    "afterSign": "scripts/notarize.cjs",
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns",
+      "target": [
+        "dmg",
+        "zip"
+      ],
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist",
+      "extendInfo": {
+        "NSMicrophoneUsageDescription": "ArchiCode uses the microphone only when you record voice input for local chat transcription."
+      }
+    },
+    "dmg": {
+      "sign": false
+    },
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        "nsis",
+        "zip"
+      ]
+    },
+    "linux": {
+      "icon": "build/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  },
+  "dependencies": {
+    "@huggingface/transformers": "4.2.0",
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "@radix-ui/react-dialog": "1.1.17",
+    "@radix-ui/react-dropdown-menu": "2.1.18",
+    "@radix-ui/react-label": "2.1.10",
+    "@radix-ui/react-popover": "1.1.17",
+    "@radix-ui/react-scroll-area": "1.2.12",
+    "@radix-ui/react-select": "2.3.1",
+    "@radix-ui/react-separator": "1.1.10",
+    "@radix-ui/react-switch": "1.3.1",
+    "@radix-ui/react-tabs": "1.1.15",
+    "@radix-ui/react-tooltip": "1.2.10",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/addon-search": "0.16.0",
+    "@xterm/addon-serialize": "0.14.0",
+    "@xterm/addon-web-links": "0.12.0",
+    "@xterm/xterm": "6.0.0",
+    "@xyflow/react": "^12.4.4",
+    "electron-store": "^10.0.0",
+    "ignore": "7.0.5",
+    "jsonrepair": "3.15.0",
+    "kokoro-js": "1.2.1",
+    "lucide-react": "^0.468.0",
+    "mammoth": "1.12.0",
+    "node-pty": "1.1.0",
+    "p-limit": "7.3.0",
+    "pdf-parse": "2.4.5",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "10.1.0",
+    "rehype-highlight": "7.0.2",
+    "remark-gfm": "4.0.1",
+    "tree-sitter-wasms": "0.1.11",
+    "web-tree-sitter": "0.25.10",
+    "zod": "3.25.76",
+    "zustand": "^5.0.2"
+  },
+  "devDependencies": {
+    "@electron-toolkit/preload": "^3.0.1",
+    "@electron/notarize": "^3.1.1",
+    "@types/node": "^22.10.2",
+    "@types/react": "^18.3.18",
+    "@types/react-dom": "^18.3.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^33.2.1",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^2.3.0",
+    "typescript": "^5.7.2",
+    "vite": "^5.4.11",
+    "vitest": "^2.1.8"
+  }
+}
