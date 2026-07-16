@@ -80,6 +80,7 @@ import {
   type LlmUsage
 } from "../shared/schema";
 import { autoLayoutFlow, deleteSubflowFromFlow, isSubflowIgnored, linkNodeToSubflow, normalizeEvidenceFlow, workingNodesForFlow } from "../shared/graph";
+import { researchChangeSetCategory, type ResearchChangeSetCategory } from "../shared/researchChangeSetSemantics";
 import { runCodebaseImport } from "./importer";
 import { CodebaseImportCancelledError, type CodebaseImportInput } from "./importer/types";
 import { layoutImportedFlow, layoutScopeByDependencyDepth } from "./importer/layout";
@@ -118,6 +119,7 @@ import {
   findFlow,
   formatResearchChangeSetValidationErrors,
   isNoopResearchUpdateNode,
+  normalizeResearchAgentRunNodeIds,
   normalizeResearchQueueProviders,
   normalizeResearchSubflowFlowIds,
   shouldAutoApproveResearchChangeSet
@@ -1012,6 +1014,8 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
     "This is transient UI state, not graph scope or permission. If and only if the user explicitly asks to select/focus graph items, switch the visible flow/detail flow, pan, center, or zoom, you must use archicode_control_canvas (or canvasAction on the local JSON path) in this turn. Prose cannot move the canvas, so never say the action is happening or will happen unless the same response contains the action. Canvas actions are reversible UI-only actions and do not need a graph review card.",
     "CURRENT TURN COMPLETION CHECKLIST — perform this semantic check before finalizing:",
     "1. MEMORY: Make exactly one explicit memory decision before finalizing. If this turn assigns or changes a task/goal/requirement, covers a key matter worth retaining, establishes a decision/direction, receives a durable result/fact/finding/failure, leaves anything pending/blocked/unclear/awaiting confirmation, or materially changes the cumulative summary, call archicode_update_memory now. Store a pending graph scope and its confirmation/review state. Otherwise call archicode_leave_memory_unchanged with a semantic reason. Never omit both tools.",
+    "PROJECT KNOWLEDGE: Session research memory above keeps this chat coherent. Separately, use archicode_project_remember_note only for small important knowledge that should be available to future chats in this project. Use archicode_chat_create_artifact for large reports, raw research, detailed plans, comparisons, or working journals that belong to this chat. Do not duplicate ordinary conversation into either surface.",
+    "JAVASCRIPT SCRATCHPAD: Use archicode_scratchpad_repl when arithmetic, statistics, data shaping, or a small helper function would make the answer more reliable. Write standard JavaScript. Each call uses a fresh isolated runtime with no Node.js globals, project files, packages, imports, network APIs, or persistent state.",
     graphLockRunsAtTurnStart.length
       ? `2. GRAPH PERSISTENCE LOCK: Active run${graphLockRunsAtTurnStart.length === 1 ? "" : "s"} ${graphLockRunsAtTurnStart.map((run) => `${run.id} (${run.status})`).join(", ")} currently own project graph truth. You may discuss, clarify, design, call Picasso, and prepare a pending review card normally, but the card cannot be auto-approved or applied until the lock clears. Never claim a graph edit was persisted during this run.`
       : graphReconciliationToolEnabled
@@ -1315,7 +1319,10 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
             });
           }
           const result = isProjectFileTool
-            ? await callResearchProjectFileTool(input.projectRoot, toolInput)
+            ? await callResearchProjectFileTool(input.projectRoot, toolInput, {
+                sessionId: nextSession.id,
+                sessionScope: nextSession.scope
+              })
             : await executeResearchToolCall(input.projectRoot, researchMcpSettings, toolInput, {
                 ruleMutationApproved: consumeExactRuleMutationApproval(toolInput)
               });
@@ -1372,7 +1379,7 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
     }
     // Prefer structured output captured from native sink-tool calls; fall back
     // to the legacy text envelope for codex/offline providers.
-    let changeSet = buildResearchTurnChangeSet(capturedChangeSet, parsed?.changeSet);
+    let changeSet = buildResearchTurnChangeSet(capturedChangeSet, parsed?.changeSet, bundle);
     let canvasAction = capturedCanvasAction;
     if (!canvasAction && parsed?.canvasAction) {
       try {
@@ -1696,11 +1703,11 @@ export async function applyResearchGraphChangeSet(input: {
     const message = session?.messages.find((item) => item.id === input.messageId);
     const changeSet = message?.changeSet;
     if (!session || !message || !changeSet || changeSet.id !== input.changeSetId) {
-      throw new Error("Research graph change set was not found.");
+      throw new Error("Research change set was not found.");
     }
-    const retryableFailedReview = input.retryReviewed && isRetryableFailedGraphReview(session, input.messageId, changeSet.operations.length);
+    const retryableFailedReview = input.retryReviewed && isRetryableFailedResearchReview(session, input.messageId, changeSet.operations.length);
     if (changeSet.reviewedAt && !retryableFailedReview) {
-      throw new Error("Research graph change set was already reviewed.");
+      throw new Error("Research change set was already reviewed.");
     }
     const reviewResult = await reviewResearchGraphChangeSet({
       projectRoot: input.projectRoot,
@@ -1708,7 +1715,7 @@ export async function applyResearchGraphChangeSet(input: {
       messageId: input.messageId,
       changeSetId: input.changeSetId,
       decisions: input.decisions,
-      resultPrefix: input.retryReviewed ? "Graph changes retry reviewed" : "Graph changes reviewed",
+      resultPrefix: researchChangeSetReviewPrefix(changeSet, Boolean(input.retryReviewed)),
       allowReviewedRetry: retryableFailedReview
     });
     await persistResearchSession(input.projectRoot, reviewResult.session);
@@ -1716,13 +1723,13 @@ export async function applyResearchGraphChangeSet(input: {
   });
   const { reviewResult: reviewOutcome, message, changeSet, session } = result;
   const reviewReturn = { session: reviewOutcome.session, bundle: reviewOutcome.bundle, results: reviewOutcome.results };
-  const hasUnblockedSubflowWork = shouldContinueAfterGraphReview(changeSet, reviewOutcome.results);
+  const hasUnblockedSubflowWork = shouldContinueAfterResearchReview(changeSet, reviewOutcome.results);
   const hasRejectedOperations = reviewOutcome.results.some((result) => result.status === "rejected");
   if (!hasUnblockedSubflowWork && !hasRejectedOperations) {
     const reported = await appendAssistantReportMessage(
       input.projectRoot,
       session.id,
-      graphReviewResultReport(changeSet, reviewOutcome.results, reviewOutcome.bundle)
+      researchChangeSetResultReport(changeSet, reviewOutcome.results, reviewOutcome.bundle)
     ).catch(() => reviewOutcome.session);
     return { ...reviewReturn, session: reported, bundle: await loadProject(input.projectRoot) };
   }
@@ -1730,7 +1737,7 @@ export async function applyResearchGraphChangeSet(input: {
     const continued = await sendResearchChatMessage({
       projectRoot: input.projectRoot,
       sessionId: session.id,
-      content: graphReviewContinuationPrompt(message, changeSet, reviewOutcome.results, hasUnblockedSubflowWork),
+      content: researchChangeSetContinuationPrompt(message, changeSet, reviewOutcome.results, hasUnblockedSubflowWork),
       providerId: session.providerId,
       internalContinuation: true
     });
@@ -1739,20 +1746,33 @@ export async function applyResearchGraphChangeSet(input: {
     const reported = await appendAssistantReportMessage(
       input.projectRoot,
       session.id,
-      graphReviewResultReport(changeSet, reviewOutcome.results, reviewOutcome.bundle)
+      researchChangeSetResultReport(changeSet, reviewOutcome.results, reviewOutcome.bundle)
     ).catch(() => reviewOutcome.session);
     return { ...reviewReturn, session: reported, bundle: await loadProject(input.projectRoot) };
   }
 }
 
-function isRetryableFailedGraphReview(session: ResearchChatSession, messageId: string, operationCount: number): boolean {
+function researchChangeSetReviewPrefix(changeSet: ResearchChangeSet, retry: boolean): string {
+  const category = researchChangeSetCategory(changeSet.operations);
+  if (category === "queue") return retry ? "Queue submission retry reviewed" : "Queue submission reviewed";
+  if (category === "graph") return retry ? "Graph changes retry reviewed" : "Graph changes reviewed";
+  return retry ? "Changes retry reviewed" : "Changes reviewed";
+}
+
+function researchChangeSetReportHeading(category: ResearchChangeSetCategory): string {
+  if (category === "queue") return "Queue submission complete";
+  if (category === "graph") return "Graph review complete";
+  return "Change review complete";
+}
+
+function isRetryableFailedResearchReview(session: ResearchChatSession, messageId: string, operationCount: number): boolean {
   const messageIndex = session.messages.findIndex((message) => message.id === messageId);
   if (messageIndex < 0) return false;
   let latest: { applied: number; rejected: number; failed: number } | null = null;
   for (const message of session.messages.slice(messageIndex + 1)) {
     if (message.changeSet) break;
     if (message.role !== "system") continue;
-    const match = message.content.trim().match(/^(?:Graph changes reviewed|Graph changes retry reviewed|Auto-approved graph changes):\s+(\d+)\s+applied,\s+(\d+)\s+rejected,\s+(\d+)\s+failed\./);
+    const match = message.content.trim().match(/^(?:Graph changes reviewed|Graph changes retry reviewed|Auto-approved graph changes|Queue submission reviewed|Queue submission retry reviewed|Changes reviewed|Changes retry reviewed):\s+(\d+)\s+(?:applied|queued),\s+(\d+)\s+rejected,\s+(\d+)\s+failed\./);
     if (match) latest = { applied: Number(match[1]), rejected: Number(match[2]), failed: Number(match[3]) };
   }
   return Boolean(latest && latest.applied === 0 && latest.rejected === 0 && latest.failed === operationCount);
@@ -1776,20 +1796,24 @@ function graphReviewNodeLabel(nodeId: string | undefined, titles: Map<string, st
   return titles.get(nodeId) ?? nodeId;
 }
 
-function graphReviewResultReport(changeSet: ResearchChangeSet, results: ResearchGraphChangeResult[], bundle: ProjectBundle): string {
+function researchChangeSetResultReport(changeSet: ResearchChangeSet, results: ResearchGraphChangeResult[], bundle: ProjectBundle): string {
   const applied = results.filter((result) => result.status === "applied").length;
   const rejected = results.filter((result) => result.status === "rejected").length;
   const failed = results.filter((result) => result.status === "failed").length;
   const nodeTitles = graphReviewNodeTitleMap(bundle, changeSet);
+  const category = researchChangeSetCategory(changeSet.operations);
   const lines = [
-    `Graph review complete for "${changeSet.summary}".`,
-    `${applied} applied, ${rejected} rejected, ${failed} failed.`
+    `${researchChangeSetReportHeading(category)} for "${changeSet.summary}".`,
+    `${applied} ${category === "queue" ? "queued" : "applied"}, ${rejected} rejected, ${failed} failed.`
   ];
 
   for (const result of results) {
     const operation = changeSet.operations[result.operationIndex];
-    const detail = operation ? graphReviewOperationDetail(operation, nodeTitles) : `operation ${result.operationIndex}`;
-    lines.push(`${capitalizeStatus(result.status)}: ${detail}${result.message ? ` (${result.message})` : ""}`);
+    const detail = operation ? researchChangeSetOperationDetail(operation, nodeTitles) : `operation ${result.operationIndex}`;
+    const queued = category === "queue" && result.status === "applied";
+    const statusLabel = queued ? "Queued" : capitalizeStatus(result.status);
+    const presentedDetail = queued ? detail.replace(/^Queued\s+/, "") : detail;
+    lines.push(`${statusLabel}: ${presentedDetail}${result.message ? ` (${result.message})` : ""}`);
     if (operation?.kind === "add-note" && operation.note.kind === "system-note" && !operation.note.pinned) {
       lines.push("Note: this was added as an unpinned system note, so the default Relevant notes filter may hide it. Use All notes or pin it if you want it to stay visible there.");
     }
@@ -1802,7 +1826,7 @@ function capitalizeStatus(status: ResearchGraphChangeResult["status"]): string {
   return status.charAt(0).toUpperCase() + status.slice(1);
 }
 
-function graphReviewOperationDetail(operation: ResearchChangeSet["operations"][number], nodeTitles: Map<string, string>): string {
+function researchChangeSetOperationDetail(operation: ResearchChangeSet["operations"][number], nodeTitles: Map<string, string>): string {
   if (operation.kind === "add-note") {
     const pinned = operation.note.pinned ? "pinned" : "unpinned";
     const kind = operation.note.kind.replace("-", " ");
@@ -1851,7 +1875,7 @@ function graphReviewOperationDetail(operation: ResearchChangeSet["operations"][n
   return "Applied graph operation.";
 }
 
-function shouldContinueAfterGraphReview(changeSet: ResearchChangeSet, results: ResearchGraphChangeResult[]): boolean {
+function shouldContinueAfterResearchReview(changeSet: ResearchChangeSet, results: ResearchGraphChangeResult[]): boolean {
   const appliedOperationIndexes = new Set(results
     .filter((result) => result.status === "applied")
     .map((result) => result.operationIndex));
@@ -1861,12 +1885,18 @@ function shouldContinueAfterGraphReview(changeSet: ResearchChangeSet, results: R
   );
 }
 
-function graphReviewContinuationPrompt(
+function researchChangeSetContinuationPrompt(
   message: ResearchChatMessage,
   changeSet: ResearchChangeSet,
   results: ResearchGraphChangeResult[],
   hasUnblockedSubflowWork: boolean
 ): string {
+  const category = researchChangeSetCategory(changeSet.operations);
+  const reviewLabel = category === "queue"
+    ? "Queue submission review"
+    : category === "graph"
+      ? "Graph review"
+      : "Change review";
   const resultSummary = results
     .map((result) => `operation ${result.operationIndex}: ${result.status}${result.message ? ` (${result.message})` : ""}`)
     .join("; ");
@@ -1876,18 +1906,28 @@ function graphReviewContinuationPrompt(
   const failedCount = results.filter((result) => result.status === "failed").length;
   const rejectedCount = results.filter((result) => result.status === "rejected").length;
   const appliedCount = results.filter((result) => result.status === "applied").length;
-  const outcomeInstruction = failedCount > 0
-    ? "Some operations failed to apply (see their result messages above). Explain plainly what failed and why, and propose a concrete fix or retry before offering next steps. Do not suggest queueing an AI Implement run while the graph does not yet reflect the intended change, and do not claim the change is fully in place."
-    : rejectedCount > 0 && appliedCount === 0
-      ? "The user rejected all proposed operations. Briefly acknowledge that, ask why the proposal did not look right, and ask what they'd like to change about it instead of offering to implement or continue with work that was not applied."
-      : rejectedCount > 0
-        ? "Some operations were applied and some were rejected. Briefly note which parts landed and which did not, ask why the rejected parts were not right, and check what they'd like to change next."
-        : null;
-  const nextStepInstruction = hasUnblockedSubflowWork
-    ? "Continue any remaining orchestration work that was already approved or clearly unblocked by this review. If the approved direction needs another graph review card, briefly explain the next step and return the next archicodeResearch changeSet."
-    : "There is no further orchestration work already unblocked by this review, so do not return another changeSet unless the user asks for one. Instead, briefly and concisely ask the user what they'd like to do next: keep editing the graph further, queue this work as an AI Implement run now that the graph reflects it, or just keep discussing/refining the decision.";
+  const outcomeInstruction = category === "queue"
+    ? failedCount > 0
+      ? "Some queue actions failed. Explain plainly what could not be queued and why, then propose a concrete retry or correction. Do not call this a graph review or claim the run was queued successfully."
+      : rejectedCount > 0 && appliedCount === 0
+        ? "The user rejected all proposed queue actions. Briefly acknowledge that nothing was queued, ask what they want changed about the submission, and do not call this a graph review."
+        : rejectedCount > 0
+          ? "Some queue actions were submitted and some were rejected. Briefly distinguish what was queued from what was not, then ask what they want changed. Do not call this a graph review."
+          : null
+    : failedCount > 0
+      ? "Some operations failed to apply (see their result messages above). Explain plainly what failed and why, and propose a concrete fix or retry before offering next steps. Do not suggest queueing an AI Implement run while the graph does not yet reflect the intended change, and do not claim the change is fully in place."
+      : rejectedCount > 0 && appliedCount === 0
+        ? "The user rejected all proposed operations. Briefly acknowledge that, ask why the proposal did not look right, and ask what they'd like to change about it instead of offering to implement or continue with work that was not applied."
+        : rejectedCount > 0
+          ? "Some operations were applied and some were rejected. Briefly note which parts landed and which did not, ask why the rejected parts were not right, and check what they'd like to change next."
+          : null;
+  const nextStepInstruction = category === "queue"
+    ? "The requested queue submission is complete. Do not return another changeSet unless the user asks for another action. Briefly confirm what was queued and stop."
+    : hasUnblockedSubflowWork
+      ? "Continue any remaining orchestration work that was already approved or clearly unblocked by this review. If the approved direction needs another graph review card, briefly explain the next step and return the next archicodeResearch changeSet."
+      : "There is no further orchestration work already unblocked by this review, so do not return another changeSet unless the user asks for one. Instead, briefly and concisely ask the user what they'd like to do next: keep editing the graph further, queue this work as an AI Implement run now that the graph reflects it, or just keep discussing/refining the decision.";
   return [
-    "Graph review was just completed for your previous proposed change set.",
+    `${reviewLabel} was just completed for your previous proposed change set.`,
     `Reviewed changeSet: ${changeSet.summary}.`,
     `Operations: ${operationSummary}.`,
     `Results: ${resultSummary}.`,
@@ -2176,7 +2216,7 @@ export async function respondToSubagentRun(input: {
       if (!message || runIndex < 0) throw new Error("Subagent run was not found.");
       const output = reconciliationResult.output as GraphReconciliationOutput | undefined;
       finalChangeSet = reconciliationResult.status !== "failed" && output?.graphChangeSet
-        ? buildResearchTurnChangeSet(output.graphChangeSet, undefined)
+        ? buildResearchTurnChangeSet(output.graphChangeSet, undefined, bundle)
         : undefined;
       const reconciliationRun: SubagentRun = {
         ...message.subagentRuns[runIndex],
@@ -2343,18 +2383,29 @@ async function reviewResearchGraphChangeSet(input: {
   const message = input.session.messages.find((item) => item.id === input.messageId);
   const changeSet = message?.changeSet;
   if (!message || !changeSet || changeSet.id !== input.changeSetId) {
-    throw new Error("Research graph change set was not found.");
+    throw new Error("Research change set was not found.");
   }
   if (changeSet.reviewedAt && !input.allowReviewedRetry) {
-    throw new Error("Research graph change set was already reviewed.");
+    throw new Error("Research change set was already reviewed.");
   }
   const validationBundle = await loadProject(input.projectRoot);
-  const acceptedOperationEntries = changeSet.operations
+  const capturedAcceptedOperationEntries = changeSet.operations
     .map((operation, operationIndex) => ({ operation, operationIndex }))
     .filter(({ operationIndex }) => accepted.get(operationIndex)?.decision === "accepted");
+  const normalizedAcceptedOperations = normalizeResearchAgentRunNodeIds(
+    validationBundle,
+    capturedAcceptedOperationEntries.map(({ operation }) => operation)
+  );
+  const acceptedOperationEntries = capturedAcceptedOperationEntries.map((entry, index) => ({
+    ...entry,
+    operation: normalizedAcceptedOperations[index]!
+  }));
   const graphLockRuns = activeResearchGraphLockRuns(validationBundle);
   if (acceptedOperationEntries.length && graphLockRuns.length) {
-    throw new Error(`Graph editing is locked while active run${graphLockRuns.length === 1 ? "" : "s"} ${graphLockRuns.map((run) => `${run.id} (${run.status})`).join(", ")} ${graphLockRuns.length === 1 ? "is" : "are"} in progress or waiting for review. Finish or cancel the active run before applying Research graph changes.`);
+    const category = researchChangeSetCategory(changeSet.operations);
+    const action = category === "queue" ? "Queue submission" : category === "graph" ? "Graph editing" : "Research changes";
+    const nextStep = category === "queue" ? "submitting more queued work" : category === "graph" ? "applying Research graph changes" : "applying this Research change set";
+    throw new Error(`${action} is locked while active run${graphLockRuns.length === 1 ? "" : "s"} ${graphLockRuns.map((run) => `${run.id} (${run.status})`).join(", ")} ${graphLockRuns.length === 1 ? "is" : "are"} in progress or waiting for review. Finish or cancel the active run before ${nextStep}.`);
   }
   const redundantUpdateOperationIndexes = acceptedOperationEntries.length > 1
     ? new Set(acceptedOperationEntries
@@ -2459,10 +2510,11 @@ async function reviewResearchGraphChangeSet(input: {
   }
 
   const reviewedAt = iso();
+  const resultCategory = researchChangeSetCategory(changeSet.operations);
   const resultMessage: ResearchChatMessage = {
     id: id("msg"),
     role: "system",
-    content: `${input.resultPrefix}: ${results.filter((result) => result.status === "applied").length} applied, ${results.filter((result) => result.status === "rejected").length} rejected, ${results.filter((result) => result.status === "failed").length} failed.`,
+    content: `${input.resultPrefix}: ${results.filter((result) => result.status === "applied").length} ${resultCategory === "queue" ? "queued" : "applied"}, ${results.filter((result) => result.status === "rejected").length} rejected, ${results.filter((result) => result.status === "failed").length} failed.`,
     createdAt: reviewedAt,
     attachmentIds: [],
     webUsed: false,

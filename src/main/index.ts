@@ -18,6 +18,7 @@ import { archicodeGitAttributesStatus, checkGlobalProvider, createProject, delet
 import { approveRun, cancelRun, dismissRunError, rejectRun, removeRunFromQueue, reportBug, retryRun, runAgent, startAgentRun, startDebuggingRun, startIncidentDebugRun, startRunProfile, startRuntimeDebugRun, updateBugIncident } from "./storage/runEngine";
 import { setRunUpdatePublisher } from "./storage/runLogs";
 import { listRuntimeServices, restartRuntimeService, startRuntimeService, stopRuntimeService } from "./storage/runtimeServices";
+import { listChatArtifacts, listProjectMemoryNotes, readChatArtifact, updateProjectMemoryNote } from "./storage/researchKnowledge";
 import { setWebSearchSecretResolver } from "./internalTools";
 import {
   clearSemanticIndex,
@@ -2404,6 +2405,10 @@ function registerIpc(): void {
   ipcMain.handle("archicode:list-patch-proposals", async (_event, projectRoot) => listPatchProposals(projectRoot));
   ipcMain.handle("archicode:read-artifact-text", async (_event, projectRoot, artifactPath) => readArtifactText(projectRoot, artifactPath));
   ipcMain.handle("archicode:read-artifact-data-url", async (_event, projectRoot, artifactPath) => readArtifactDataUrl(projectRoot, artifactPath));
+  ipcMain.handle("archicode:list-project-memory-notes", async (_event, projectRoot, options) => listProjectMemoryNotes(projectRoot, options));
+  ipcMain.handle("archicode:update-project-memory-note", async (_event, projectRoot, noteId, input) => updateProjectMemoryNote(projectRoot, noteId, input));
+  ipcMain.handle("archicode:list-chat-artifacts", async (_event, projectRoot, chatId) => listChatArtifacts(projectRoot, chatId));
+  ipcMain.handle("archicode:read-chat-artifact", async (_event, projectRoot, chatId, artifactId) => readChatArtifact(projectRoot, chatId, artifactId));
   ipcMain.handle("archicode:get-git-status", async (_event, projectRoot: string) => getGitStatus(projectRoot));
   ipcMain.handle("archicode:git-init", async (_event, projectRoot: string) => gitInit(projectRoot));
   ipcMain.handle("archicode:git-pull", async (_event, projectRoot: string) => gitPull(projectRoot));

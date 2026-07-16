@@ -136,6 +136,7 @@ Each ArchiCode project is a normal folder containing a `.archicode/` directory.
   artifacts/
   summaries/
   memory/
+  memory-notes/
   manifests/
   reviews/
   runtime/
@@ -160,6 +161,7 @@ ArchiCode creates project ignore rules so durable planning files can be shared w
 - `artifacts/`: logs, diffs, screenshots, attachments, generated files, patch/planning proposals, context manifests, memory artifacts, and plans.
 - `summaries/`: compacted context summaries and durable summaries.
 - `memory/`: project, flow, subflow, and node memory records.
+- `memory-notes/`: small agent-authored project memory notes shared across Research chats, with optional flow/subflow/node scope, provenance, revisions, pinning, and stale/archive state.
 - `manifests/`: per-run context manifests.
 - `reviews/`: accepted/rejected patch, planning, code, and research proposal decisions.
 - `runtime/`: local runtime service state plus importer/resync/analysis records — `initial-import-report.json`, `resync-baseline.json`, resync reports, `import-review-latest.json`, the code-knowledge snapshot, architecture-policy evaluation, source-analysis baseline, project-maintenance status, and graph-evidence freshness observations.
@@ -423,6 +425,7 @@ Research chats support:
 - MCP tool-call badges
 - approval-gated graph change sets
 - a memory panel (`ResearchMemoryPanel.tsx`) exposing durable agent memory records
+- project memory-note and chat-artifact panels that make cross-chat knowledge and session-owned files visible and manageable
 
 ### Activity Panel
 
@@ -744,6 +747,21 @@ Project skills are Markdown files under `.archicode/skills/<skill-id>/SKILL.md`.
 
 Skill IDs must be lowercase, hyphenated, and 3-64 characters. Enabled skills are read and inserted into prompts as project-local instructions. Skills are useful for repo-specific conventions, domain rules, or repeatable review/build expectations.
 
+### Project Memory Notes And Chat Artifacts
+
+Research has two deliberately separate local persistence scopes:
+
+- **Project memory notes** are small records under `.archicode/memory-notes/`. They are owned by the project, available across its chats, optionally scoped to a flow/subflow/node, and capped at 4,000 characters each. Notes retain their origin chat, source-message/file/artifact references, revision, pin state, and active/stale/archived status. Relevant active notes are included in Research context as untrusted working memory rather than instructions or graph/source truth.
+- **Chat artifacts** are larger Markdown, text, JSON, or CSV files under `.archicode/artifacts/chats/<chat-id>/`. Their top-level artifact metadata carries `chatId` and a revision so the normal bundle/artifact browser can discover them while reads and updates remain confined to the owning chat. They are never injected into other chats automatically; a project memory note can retain a pointer to an important artifact.
+
+Research tools list, read, create, and revision-check updates for both surfaces. The model never chooses a chat id or filesystem path: the host binds artifact operations to the active session and chooses the storage path. Writes are size/count bounded, secret-redacted, local/Git-ignored, and surfaced in Research activity and panels.
+
+### Ephemeral Research Scratchpad
+
+Research also receives `archicode_scratchpad_repl` for calculations and small helper functions. It executes standard JavaScript in a fresh QuickJS WebAssembly runtime and returns the final statement value plus bounded `console` output. Normal JavaScript declarations, functions, arrays, objects, control flow, and built-ins work directly.
+
+Each call receives a new runtime with a 10-second execution deadline, 64 MiB guest heap, 2 MiB guest stack, and separate 32,000-character limits for JavaScript source, the returned value, and captured console output. No Node.js globals, project files, packages, module loader, network APIs, or persistent runtime state are exposed. The scratchpad never writes an artifact unless the agent separately uses the explicit chat-artifact tool.
+
 ### Rules And Policy Tools
 
 All run agents receive the built-in `archicode_project_manage_rules` tool as a read-only surface for listing reusable guidance/decisions/policies and filtering current violations by flow, node, rule, severity, or enforcement. Research receives the same reads plus `create` and `update`; each mutation pauses for a non-reusable approval of that exact payload before changing the rule library or node attachments. Policy linting itself is deterministic and local, not an LLM call.
@@ -984,6 +1002,7 @@ Selection uses:
 - reusable guidance, decisions, live policies, and current deterministic violations
 - summaries
 - project memory records
+- relevant active project memory notes
 - selected skills
 - approved MCP tool metadata
 
@@ -1337,6 +1356,7 @@ Third-party material retains its own license and notice files.
 - API providers write source through validated source-file proposals; Codex Local and Claude Code Local may edit directly only when configured with write-capable command access.
 - Approved production nodes are locked against LLM mutation.
 - Durable JSON is favored over hidden in-memory state.
+- Small cross-chat knowledge is project-owned; large generated working material remains owned by its Research chat.
 - Context is graph-aware and compacted; ArchiCode does not load every node/artifact into every run.
 - Provider-specific behavior is isolated behind adapters.
 - Security is enforced in the main process, not the renderer.

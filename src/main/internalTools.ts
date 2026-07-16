@@ -1245,7 +1245,7 @@ async function readArtifact(env: InternalToolEnvironment, args: Record<string, u
   const artifactId = typeof args.artifactId === "string" ? args.artifactId.trim() : "";
   const requestedPath = typeof args.path === "string" ? args.path.trim() : "";
   if (!artifactId && !requestedPath) throw new Error("A known artifactId or artifact path is required.");
-  const artifact = resolveArtifactReference(bundle.artifacts, artifactId, requestedPath);
+  const artifact = resolveArtifactReference(bundle.artifacts.filter((item) => item.type !== "chat-artifact"), artifactId, requestedPath);
   if (!artifact) throw new Error(artifactId ? `Artifact ${artifactId} was not found.` : "A known artifactId or artifact path is required.");
   const maxChars = clampInteger(args.maxChars, 40_000, 1, TOOL_MAX_READ_CHARS);
   const redacted = redactSensitiveText(await env.readArtifactText(artifact.path));
@@ -1828,7 +1828,7 @@ async function readArtifact(args) {
   const artifactId = typeof args.artifactId === "string" ? args.artifactId.trim() : "";
   const requestedPath = typeof args.path === "string" ? args.path.trim() : "";
   if (!artifactId && !requestedPath) throw new Error("A known artifactId or artifact path is required.");
-  const artifact = resolveArtifactReference(bundle.artifacts, artifactId, requestedPath);
+  const artifact = resolveArtifactReference(bundle.artifacts.filter((item) => item.type !== "chat-artifact"), artifactId, requestedPath);
   if (!artifact) throw new Error(artifactId ? "Artifact " + artifactId + " was not found." : "A known artifactId or artifact path is required.");
   const maxChars = clampInteger(args.maxChars, 40000, 1, MAX_READ);
   const text = redact(await readFile(path.join(CONFIG.projectRoot, artifact.path), "utf8"));

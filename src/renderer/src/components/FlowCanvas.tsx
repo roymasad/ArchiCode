@@ -2130,7 +2130,7 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
                     aria-expanded="false"
                     onClick={() => setPolicyIssuesOpen(true)}
                   >
-                    <AlertTriangle size={22} aria-hidden="true" />
+                    <AlertTriangle size={18} aria-hidden="true" />
                     <span>{policyViolations.length}</span>
                   </button>
                 </Tooltip>

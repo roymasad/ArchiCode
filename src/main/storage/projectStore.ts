@@ -77,6 +77,7 @@ export const PROJECT_STATE_LOCAL_GITIGNORE_PATTERNS = [
   ".archicode/summaries/",
   ".archicode/manifests/",
   ".archicode/memory/",
+  ".archicode/memory-notes/",
   ".archicode/reviews/",
   ".archicode/repair-backup-*/",
   ".archicode/runtime/",
@@ -470,6 +471,7 @@ export async function ensureProjectDirectories(projectRoot: string): Promise<voi
   await mkdir(projectStatePath(projectRoot, "artifacts"), { recursive: true });
   await mkdir(projectStatePath(projectRoot, "summaries"), { recursive: true });
   await mkdir(projectStatePath(projectRoot, "memory"), { recursive: true });
+  await mkdir(projectStatePath(projectRoot, "memory-notes"), { recursive: true });
   await mkdir(projectStatePath(projectRoot, "manifests"), { recursive: true });
   await mkdir(projectStatePath(projectRoot, "reviews"), { recursive: true });
 }

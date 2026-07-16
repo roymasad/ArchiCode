@@ -108,6 +108,40 @@ export function normalizeResearchQueueProviders(operations: ResearchOperation[])
   });
 }
 
+export function normalizeResearchAgentRunNodeIds(bundle: ProjectBundle, operations: ResearchOperation[]): ResearchOperation[] {
+  const knownNodeIdsByFlow = new Map(bundle.flows.map((flow) => [flow.id, new Set(flow.nodes.map((node) => node.id))]));
+  for (const operation of operations) {
+    if (operation.kind === "create-flow") {
+      knownNodeIdsByFlow.set(operation.flow.id, new Set(operation.flow.nodes.map((node) => node.id)));
+    }
+    if (operation.kind === "create-node" && operation.node.id) {
+      const nodeIds = knownNodeIdsByFlow.get(operation.flowId) ?? new Set<string>();
+      nodeIds.add(operation.node.id);
+      knownNodeIdsByFlow.set(operation.flowId, nodeIds);
+    }
+  }
+
+  return operations.map((operation) => {
+    if (
+      operation.kind !== "start-agent-run" ||
+      operation.nodeId !== operation.flowId ||
+      operation.scope?.kind === "nodes" ||
+      knownNodeIdsByFlow.get(operation.flowId)?.has(operation.nodeId)
+    ) return operation;
+
+    const { nodeId: _copiedFlowId, ...runOperation } = operation;
+    void _copiedFlowId;
+    return {
+      ...runOperation,
+      scope: operation.scope ?? {
+        kind: "flow",
+        flowId: operation.flowId,
+        nodeIds: []
+      }
+    };
+  });
+}
+
 export function normalizeResearchSubflowFlowIds(operations: ResearchOperation[]): ResearchOperation[] {
   const subflowToFlowId = new Map<string, string>();
   for (const operation of operations) {

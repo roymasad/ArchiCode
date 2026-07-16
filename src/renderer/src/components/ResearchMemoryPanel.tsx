@@ -1,7 +1,7 @@
-import { AlertCircle, Archive, Brain, Check, CheckCircle2, ChevronDown, ChevronUp, Circle, Copy, Download, FileJson, FileText, History, ListTodo, Loader2, MessageSquare, Mic, Paperclip, Play, Plus, RefreshCw, Send, ShieldCheck, Sparkles, Split, Square, Volume2, X } from "lucide-react";
+import { AlertCircle, Archive, BookMarked, Brain, Check, CheckCircle2, ChevronDown, ChevronUp, Circle, Copy, Download, FileJson, Files, FileText, History, ListTodo, Loader2, MessageSquare, Mic, Paperclip, Pin, PinOff, Play, Plus, RefreshCw, Send, ShieldCheck, Sparkles, Split, Square, Volume2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
-import type { Artifact, LlmUsage, ProjectBundle, ProjectSettings, ResearchChatScope, ResearchChatSession } from "@shared/schema";
+import type { Artifact, LlmUsage, ProjectBundle, ProjectMemoryNote, ProjectSettings, ResearchChatScope, ResearchChatSession } from "@shared/schema";
 import { deriveResearchChatContextPlan, estimateTextTokens } from "@shared/contextBudget";
 import { sumLlmUsage, isAllUsageUnavailable, formatCostUsd, formatTokenCount, llmUsageTotalTokens } from "@shared/llmPricing";
 import { extractArchicodeResearch } from "@shared/researchExtraction";
@@ -101,6 +101,184 @@ export function ResearchMemoryPanel({ session }: { session: ResearchChatSession 
           {debugFindings.length ? <MemoryList title="Debug" items={debugFindings.map((item) => item.text)} /> : null}
         </div>
         {memory.lastUpdateError ? <small className="research-memory-error">Memory update failed: {memory.lastUpdateError}</small> : null}
+      </PopoverContent>
+    </PopoverRoot>
+  );
+}
+
+function projectMemoryScopeLabel(note: ProjectMemoryNote): string {
+  if (note.scope.type === "project") return "Project";
+  if (note.scope.type === "flow") return `Flow · ${note.scope.flowId}`;
+  if (note.scope.type === "subflow") return `Subflow · ${note.scope.subflowId}`;
+  return `Node · ${note.scope.nodeId}`;
+}
+
+export function ProjectMemoryNotesPanel({ projectRoot, refreshKey }: { projectRoot: string; refreshKey: string }) {
+  const [notes, setNotes] = useState<ProjectMemoryNote[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [includeArchived, setIncludeArchived] = useState(false);
+
+  const refresh = useCallback(async () => {
+    if (!window.archicode) return;
+    try {
+      setError(null);
+      setNotes(await window.archicode.listProjectMemoryNotes(projectRoot, { includeArchived }));
+    } catch (loadError) {
+      setError(loadError instanceof Error ? loadError.message : String(loadError));
+    } finally {
+      setLoading(false);
+    }
+  }, [includeArchived, projectRoot]);
+
+  useEffect(() => {
+    setLoading(true);
+    void refresh();
+  }, [refresh, refreshKey]);
+
+  const update = async (note: ProjectMemoryNote, patch: { pinned?: boolean; status?: ProjectMemoryNote["status"] }) => {
+    if (!window.archicode) return;
+    setUpdatingId(note.id);
+    try {
+      await window.archicode.updateProjectMemoryNote(projectRoot, note.id, {
+        expectedRevision: note.revision,
+        ...patch
+      });
+      await refresh();
+    } catch (updateError) {
+      setError(updateError instanceof Error ? updateError.message : String(updateError));
+    } finally {
+      setUpdatingId(null);
+    }
+  };
+
+  const label = `Project memory notes: ${notes.length}${error ? ", unavailable" : ""}`;
+  return (
+    <PopoverRoot>
+      <PopoverTrigger asChild>
+        <button type="button" className={error ? "research-memory-panel has-error" : "research-memory-panel"} title={label} aria-label={label}>
+          <BookMarked size={15} aria-hidden="true" />
+          <span>{loading ? "…" : notes.length}</span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="research-memory-popover" align="start" side="bottom" sideOffset={6}>
+        <div className="research-memory-popover-head">
+          <strong>Project memory notes</strong>
+          <div className="research-memory-badges">
+            <Badge tone="neutral">Across chats</Badge>
+            <Button variant="ghost" size="sm" onClick={() => setIncludeArchived((current) => !current)}>
+              {includeArchived ? "Hide archived" : "Show archived"}
+            </Button>
+          </div>
+        </div>
+        <p>Small, important knowledge retained for this project. Notes are local and may be scoped to a flow, subflow, or node.</p>
+        {notes.length ? (
+          <div className="research-knowledge-list">
+            {notes.map((note) => (
+              <article key={note.id} className={`research-knowledge-card${note.status === "stale" ? " is-stale" : ""}${note.status === "archived" ? " is-archived" : ""}`}>
+                <div className="research-knowledge-card-head">
+                  <div>
+                    <strong>{note.title}</strong>
+                    <small>{projectMemoryScopeLabel(note)} · revision {note.revision}{note.status === "stale" ? " · stale" : ""}</small>
+                  </div>
+                  <div className="research-knowledge-actions">
+                    <IconButton
+                      title={note.pinned ? "Unpin memory note" : "Pin memory note"}
+                      disabled={updatingId === note.id}
+                      onClick={() => void update(note, { pinned: !note.pinned })}
+                    >
+                      {note.pinned ? <PinOff size={13} /> : <Pin size={13} />}
+                    </IconButton>
+                    <IconButton
+                      title={note.status === "archived" ? "Restore memory note" : "Archive memory note"}
+                      disabled={updatingId === note.id}
+                      onClick={() => void update(note, { status: note.status === "archived" ? "active" : "archived" })}
+                    >
+                      {note.status === "archived" ? <RefreshCw size={13} /> : <Archive size={13} />}
+                    </IconButton>
+                  </div>
+                </div>
+                <p>{note.body}</p>
+                {note.artifactIds.length ? <small>Artifacts: {note.artifactIds.join(", ")}</small> : null}
+              </article>
+            ))}
+          </div>
+        ) : loading ? <small>Loading project memory…</small> : <small>No project memory notes yet.</small>}
+        {error ? <small className="research-memory-error">{error}</small> : null}
+      </PopoverContent>
+    </PopoverRoot>
+  );
+}
+
+export function ChatArtifactsPanel({ projectRoot, session, refreshKey }: { projectRoot: string; session: ResearchChatSession; refreshKey: string }) {
+  const [artifacts, setArtifacts] = useState<Artifact[]>([]);
+  const [preview, setPreview] = useState<{ artifactId: string; text: string } | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!window.archicode) return;
+    setError(null);
+    void window.archicode.listChatArtifacts(projectRoot, session.id).then((items) => {
+      if (!cancelled) setArtifacts(items);
+    }).catch((loadError) => {
+      if (!cancelled) setError(loadError instanceof Error ? loadError.message : String(loadError));
+    });
+    return () => { cancelled = true; };
+  }, [projectRoot, session.id, refreshKey]);
+
+  const readPreview = async (artifact: Artifact) => {
+    if (!window.archicode) return;
+    try {
+      setError(null);
+      const result = await window.archicode.readChatArtifact(projectRoot, session.id, artifact.id);
+      setPreview({ artifactId: artifact.id, text: result.text });
+    } catch (readError) {
+      setError(readError instanceof Error ? readError.message : String(readError));
+    }
+  };
+
+  if (!artifacts.length) return null;
+  const selectedArtifact = artifacts.find((artifact) => artifact.id === preview?.artifactId);
+  const label = `Chat artifacts: ${artifacts.length}${error ? ", unavailable" : ""}`;
+  return (
+    <PopoverRoot>
+      <PopoverTrigger asChild>
+        <button type="button" className={error ? "research-memory-panel has-error" : "research-memory-panel"} title={label} aria-label={label}>
+          <Files size={15} aria-hidden="true" />
+          <span>{artifacts.length}</span>
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="research-memory-popover" align="end" side="bottom" sideOffset={6}>
+        <div className="research-memory-popover-head">
+          <strong>Chat artifacts</strong>
+          <Badge tone="neutral">This chat only</Badge>
+        </div>
+        <p>Large reports and working files created for this chat are loaded only when requested.</p>
+        <div className="research-chat-artifact-layout">
+          <div className="research-knowledge-list">
+            {artifacts.map((artifact) => (
+              <button key={artifact.id} type="button" className={preview?.artifactId === artifact.id ? "research-artifact-row is-active" : "research-artifact-row"} onClick={() => void readPreview(artifact)}>
+                <strong>{artifact.title}</strong>
+                <small>{artifact.mediaType ?? "text"} · revision {artifact.revision ?? 1}</small>
+                {artifact.summary ? <span>{artifact.summary}</span> : null}
+              </button>
+            ))}
+          </div>
+          {preview ? (
+            <div className="research-chat-artifact-preview">
+              <div className="research-knowledge-card-head">
+                <strong>{selectedArtifact?.title ?? "Artifact preview"}</strong>
+                {selectedArtifact ? (
+                  <Button variant="ghost" size="sm" onClick={() => void window.archicode.openProjectFile(projectRoot, selectedArtifact.path)}>Open file</Button>
+                ) : null}
+              </div>
+              <pre>{preview.text.slice(0, 20_000)}</pre>
+            </div>
+          ) : null}
+        </div>
+        {error ? <small className="research-memory-error">{error}</small> : null}
       </PopoverContent>
     </PopoverRoot>
   );

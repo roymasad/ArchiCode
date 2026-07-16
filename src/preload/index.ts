@@ -1,5 +1,5 @@
 import { clipboard, contextBridge, ipcRenderer, webFrame } from "electron";
-import type { Note, DebugIncident, Flow, LlmPatchProposal, NodePatch, PatchOperationDecision, Project, ProjectBundle, ProjectSettings, Artifact, PatchReviewRecord, Run, RunEffort, RunGuidance, RunScope, RuntimeService, ResearchChatScope, ResearchChatSession, ResearchGraphChangeDecision, ResearchGraphChangeResult, ResearchMessageNodeReference } from "../shared/schema";
+import type { Note, DebugIncident, Flow, LlmPatchProposal, NodePatch, PatchOperationDecision, Project, ProjectBundle, ProjectSettings, ProjectMemoryNote, Artifact, PatchReviewRecord, Run, RunEffort, RunGuidance, RunScope, RuntimeService, ResearchChatScope, ResearchChatSession, ResearchGraphChangeDecision, ResearchGraphChangeResult, ResearchMessageNodeReference } from "../shared/schema";
 import type { SpeechModelId, SpeechSettings, TtsModelId, TtsSettings, TtsVoiceId } from "../shared/schema";
 import type { TtsModelDownloadProgress, TtsModelStatus, TtsRuntimeStatus, TtsSpeechStreamChunk, TtsSpeechStreamResult, TtsSynthesisResult } from "../main/tts";
 import type {
@@ -460,6 +460,20 @@ const api = {
     ipcRenderer.invoke("archicode:read-artifact-text", projectRoot, artifactPath),
   readArtifactDataUrl: (projectRoot: string, artifactPath: string): Promise<string> =>
     ipcRenderer.invoke("archicode:read-artifact-data-url", projectRoot, artifactPath),
+  listProjectMemoryNotes: (projectRoot: string, options?: { includeArchived?: boolean; scope?: ResearchChatScope }): Promise<ProjectMemoryNote[]> =>
+    ipcRenderer.invoke("archicode:list-project-memory-notes", projectRoot, options),
+  updateProjectMemoryNote: (projectRoot: string, noteId: string, input: {
+    expectedRevision: number;
+    title?: string;
+    body?: string;
+    scope?: ResearchChatScope;
+    pinned?: boolean;
+    status?: ProjectMemoryNote["status"];
+  }): Promise<ProjectMemoryNote> => ipcRenderer.invoke("archicode:update-project-memory-note", projectRoot, noteId, input),
+  listChatArtifacts: (projectRoot: string, chatId: string): Promise<Artifact[]> =>
+    ipcRenderer.invoke("archicode:list-chat-artifacts", projectRoot, chatId),
+  readChatArtifact: (projectRoot: string, chatId: string, artifactId: string): Promise<{ artifact: Artifact; text: string }> =>
+    ipcRenderer.invoke("archicode:read-chat-artifact", projectRoot, chatId, artifactId),
   getGitStatus: (projectRoot: string): Promise<GitStatus> =>
     ipcRenderer.invoke("archicode:get-git-status", projectRoot),
   gitInit: (projectRoot: string): Promise<GitOperationResult> =>

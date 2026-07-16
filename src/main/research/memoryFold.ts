@@ -1,11 +1,12 @@
 import { createHash } from "node:crypto";
-import type { ProjectSettings, ResearchChatMessage, ResearchChatScope, ResearchChatSession, ResearchGraphChangeResult, ResearchMemory, ResearchMemoryDelta, ResearchOrchestration } from "../../shared/schema";
+import type { ProjectBundle, ProjectSettings, ResearchChatMessage, ResearchChatScope, ResearchChatSession, ResearchGraphChangeResult, ResearchMemory, ResearchMemoryDelta, ResearchOrchestration } from "../../shared/schema";
 import { researchChatSessionSchema, researchGraphChangeSetSchema, researchMemoryDeltaSchema, researchMemorySchema } from "../../shared/schema";
 import { extractResearchMemoryDelta } from "../../shared/researchExtraction";
+import { researchChangeSetCategory } from "../../shared/researchChangeSetSemantics";
 import { callResearchProvider } from "../providers";
 import { hydrateProviderForUse } from "../storage/projectStore";
 import { id, iso } from "../research";
-import { type ResearchChangeSet, normalizeResearchQueueProviders, normalizeResearchSubflowFlowIds } from "./graphOps";
+import { type ResearchChangeSet, normalizeResearchAgentRunNodeIds, normalizeResearchQueueProviders, normalizeResearchSubflowFlowIds } from "./graphOps";
 
 export type ResearchProvider = ProjectSettings["providers"][number];
 
@@ -82,14 +83,17 @@ export async function compactResearchMemoryIfNeeded(
  * parsed from a legacy text envelope (codex/offline). Malformed or empty change
  * sets are dropped so the prose answer is still delivered.
  */
-export function buildResearchTurnChangeSet(captured: unknown, envelope: unknown): ResearchChangeSet | undefined {
+export function buildResearchTurnChangeSet(captured: unknown, envelope: unknown, bundle: ProjectBundle): ResearchChangeSet | undefined {
   const source = captured !== undefined ? captured : envelope;
   if (!source || typeof source !== "object") return undefined;
   const validated = researchGraphChangeSetSchema.omit({ id: true, createdAt: true }).safeParse(source);
   if (!validated.success || !validated.data.operations.length) return undefined;
   return {
     ...validated.data,
-    operations: normalizeResearchQueueProviders(normalizeResearchSubflowFlowIds(validated.data.operations)),
+    operations: normalizeResearchAgentRunNodeIds(
+      bundle,
+      normalizeResearchQueueProviders(normalizeResearchSubflowFlowIds(validated.data.operations))
+    ),
     id: id("changes"),
     createdAt: iso()
   };
@@ -272,6 +276,8 @@ export function trackResearchChangeSetTodo(
   updatedAt: string
 ): ResearchOrchestration {
   const existingIndex = orchestration.todos.findIndex((todo) => todo.changeSetId === changeSet.id);
+  const category = researchChangeSetCategory(changeSet.operations);
+  const operationLabel = category === "queue" ? "queue action" : category === "graph" ? "graph operation" : "review action";
   const todo = {
     ...(existingIndex >= 0 ? orchestration.todos[existingIndex] : {
       id: id("research-todo"),
@@ -279,7 +285,7 @@ export function trackResearchChangeSetTodo(
     }),
     title: changeSet.summary,
     status: "awaiting-approval" as const,
-    notes: `${changeSet.operations.length} graph operation${changeSet.operations.length === 1 ? "" : "s"} waiting for review.`,
+    notes: `${changeSet.operations.length} ${operationLabel}${changeSet.operations.length === 1 ? "" : "s"} waiting for review.`,
     changeSetId: changeSet.id,
     messageId,
     operationIndexes: changeSet.operations.map((_, operationIndex) => operationIndex),

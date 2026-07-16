@@ -30,6 +30,9 @@ export function investigationToolProgressMessage(providerToolName: string, args:
   if (providerToolName === "archicode_web_open_url") {
     return `Opening ${text("url") || "an unspecified URL"}`;
   }
+  if (providerToolName === "archicode_scratchpad_repl") {
+    return "Calculating in the ephemeral scratchpad";
+  }
   return `Using ${providerToolName}`;
 }
 

@@ -436,6 +436,37 @@ describe("renderer UI system", () => {
     expect(css).toContain(".research-history-list");
   });
 
+  it("shows the selected chat scope as one compact icon with its name in a tooltip", () => {
+    const panel = readResearchPanelSource();
+    const css = readFileSync(resolve(repoRoot, "src/renderer/src/styles/app.css"), "utf8");
+    const scopeCapsuleStyles = css.slice(
+      css.indexOf(".research-scope-badge {"),
+      css.indexOf(".research-scope-badge:focus-visible")
+    );
+
+    expect(panel).toContain("function ResearchScopeIcon");
+    expect(panel).toContain("<Tooltip content={`Scope : ${currentScopeLabel}`}>");
+    expect(panel).toContain("<ResearchScopeIcon scope={scope} />");
+    expect(panel).toContain("aria-label={`Current chat scope: ${currentScopeLabel}`}");
+    expect(panel).not.toContain("compactScopeLabel");
+    expect(css).toContain(".research-scope-badge {");
+    expect(css).toContain("flex: 0 0 28px;");
+    expect(css).toContain("width: 28px;");
+    expect(scopeCapsuleStyles).toContain("border-color: transparent;");
+    expect(css).toContain(".research-scope-badge:focus-visible");
+    expect(css).toContain(".research-session-controls .ui-switch-row > span");
+    expect(css).toContain("font-size: 11px;");
+  });
+
+  it("hides the chat artifact counter when the selected chat has no artifacts", () => {
+    const panel = readResearchPanelSource();
+
+    expect(panel).toContain("if (!artifacts.length) return null;");
+    expect(panel).toContain("<span>{artifacts.length}</span>");
+    expect(panel).toContain('key={`chat-artifacts-${selected.id}`}');
+    expect(panel).not.toContain("No chat artifacts yet.");
+  });
+
   it("confirms chat archival from the shared normal and focus-mode history list", () => {
     const panel = readResearchPanelSource();
 
@@ -1520,8 +1551,8 @@ describe("renderer UI system", () => {
     expect(sidebar).toContain('navigateToGraphTarget({ kind: "node", flowId: flow.id, nodeId })');
     expect(sidebar).toContain("onDoubleClick={() => centerSidebarNodeOnCanvas(node.id)}");
     expect(css).toContain(':root[data-theme="dark"] .project-sidebar .node-list-row.has-custom-color');
-    expect(css).toContain("var(--node-list-accent) 70%, var(--border)");
-    expect(css).toContain("var(--node-list-accent) 88%, var(--border)");
+    expect(css).toContain("var(--node-list-accent) 60%, var(--border)");
+    expect(css).toContain("var(--node-list-accent) 78%, var(--border)");
     expect(css).toContain(".sidebar-node-list .node-list-row");
     expect(css).toContain("gap: 4.8px");
     expect(css).toContain("min-height: 43px");
@@ -1574,12 +1605,20 @@ describe("renderer UI system", () => {
       panel.indexOf("function ResearchTodoCapsule"),
       panel.indexOf("export function ResearchMarkdown")
     );
+    const memoryCapsuleStyles = css.slice(
+      css.indexOf(".research-memory-panel {"),
+      css.indexOf(".research-memory-panel svg")
+    );
     expect(todoCapsuleSource).toContain("onClick={toggle}");
     expect(todoCapsuleSource).not.toContain("title={label}");
     expect(todoCapsuleSource).not.toContain("onFocus={show}");
+    expect(todoCapsuleSource).not.toContain("<small>todo");
     expect(css).toContain(".research-memory-panel");
+    expect(memoryCapsuleStyles).toContain("border: 1px solid transparent;");
     expect(css).toContain(".research-memory-popover");
     expect(css).toContain(".research-todo-capsule");
+    expect(css).toContain(".research-todo-capsule > svg");
+    expect(css).toContain("color: var(--text);");
     expect(css).toContain(".research-todo-popover");
     expect(css).toContain(".research-status-cluster");
     expect(css).toContain("border-radius: 999px");
@@ -1587,27 +1626,51 @@ describe("renderer UI system", () => {
     expect(main).toContain("shell.openExternal(url)");
   });
 
-  it("derives research graph review UI state from applied versus failed review summaries", () => {
+  it("derives graph-edit and queue-submission UI from their actual reviewed operations", () => {
     const panel = readResearchPanelSource();
     const css = readFileSync(resolve(repoRoot, "src/renderer/src/styles/app.css"), "utf8");
 
     expect(panel).toContain("function reviewSummaryAfterChangeSet");
     expect(panel).toContain("function reviewStatusPresentation");
-    expect(panel).toContain("Graph changes reviewed|Graph changes retry reviewed|Auto-approved graph changes");
-    expect(panel).toContain('badgeLabel: "Failed"');
-    expect(panel).toContain('actionLabel: "Apply Failed"');
+    expect(panel).toContain("if (isChangeSetReviewMessage(message)) return null;");
+    expect(panel).toContain("!selected.messages.slice(messageIndex + 1).some((laterMessage) => !isChangeSetReviewMessage(laterMessage))");
+    expect(panel).toContain("Queue submission reviewed|Queue submission retry reviewed|Changes reviewed|Changes retry reviewed");
+    expect(panel).toContain('queueSubmission ? "Queue failed" : "Failed"');
+    expect(panel).toContain('queueSubmission ? "Queue failed" : "Apply Failed"');
+    expect(panel).toContain('queueSubmission ? "Queued"');
     expect(panel).toContain("canRetryFailedReview");
     expect(panel).toContain('"Repair & Apply"');
+    expect(panel).toContain('"Queue Selected"');
     expect(panel).toContain("retryReviewed");
-    expect(panel).toContain("graphReviewReportPresentation(message.content)");
-    expect(panel).toContain('className="research-graph-review-report"');
+    expect(panel).toContain("changeSetResultReportPresentation(presentationContent)");
+    expect(panel).toContain('"Queue submission complete"');
+    expect(panel).toContain('tone: "success" | "warning" | "danger"');
+    expect(panel).toContain('failed > 0 && applied === 0');
+    expect(panel).toContain('failed > 0 || rejected > 0');
+    expect(panel).toContain('className={`research-change-set-result is-${changeSetResultReport.tone}`}');
     expect(panel).toContain("Operation details");
-    expect(css).toContain(".research-graph-review-report");
-    expect(css).toContain(".research-graph-review-report-details");
-    expect(panel).toContain('badgeLabel: "Partial"');
-    expect(panel).toContain('badgeLabel: summary.autoApproved ? "Auto-applied" : "Applied"');
-    expect(panel).toContain('reviewPresentation?.actionLabel ?? "Applied"');
-    expect(panel).toContain('reviewed ? "Reviewed" : "Reject"');
+    expect(css).toContain(".research-change-set-result");
+    expect(css).toContain(".research-change-set-result.is-success");
+    expect(css).toContain(".research-change-set-result.is-warning");
+    expect(css).toContain(".research-change-set-result.is-danger");
+    expect(css).toContain(".research-change-set-result-details");
+    expect(panel).toContain('queueSubmission ? "Partially queued" : "Partial"');
+    expect(panel).toContain('summary.autoApproved ? "Auto-applied" : "Applied"');
+    expect(panel).toContain('reviewPresentation?.actionLabel ?? (queueSubmission ? "Queued" : "Applied")');
+  });
+
+  it("keeps the collapsed canvas policy-violation indicator compact", () => {
+    const canvas = readFileSync(resolve(repoRoot, "src/renderer/src/components/FlowCanvas.tsx"), "utf8");
+    const css = readFileSync(resolve(repoRoot, "src/renderer/src/styles/app.css"), "utf8");
+    const triggerStyles = css.slice(
+      css.indexOf(".architecture-policy-trigger {"),
+      css.indexOf(".architecture-policy-issues {")
+    );
+
+    expect(canvas).toContain('<AlertTriangle size={18} aria-hidden="true" />');
+    expect(triggerStyles).toContain("width: 38px;");
+    expect(triggerStyles).toContain("height: 38px;");
+    expect(triggerStyles).toContain("min-width: 17px;");
   });
 
   it("adds optional local speech transcription to research chat input", () => {

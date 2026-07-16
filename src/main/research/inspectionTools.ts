@@ -1,13 +1,24 @@
 import { spawn } from "node:child_process";
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import type { GraphReconciliationOutput, MergeResolutionOutput, PicassoGraphOutput, ProjectBundle, ProjectSettings, ResearchChatMessage, ResearchChatSession, SherlockResearchOutput } from "../../shared/schema";
+import type { GraphReconciliationOutput, MergeResolutionOutput, PicassoGraphOutput, ProjectBundle, ProjectSettings, ResearchChatMessage, ResearchChatScope, ResearchChatSession, SherlockResearchOutput } from "../../shared/schema";
 import { runStatusSchema } from "../../shared/schema";
 import { normalizeProjectToolArguments } from "../../shared/toolRepair";
 import type { MicroRunResult } from "../microRuns";
+import { RESEARCH_SCRATCHPAD_MAX_CODE_CHARS, runResearchJavaScript } from "./scratchpad";
 import { readArtifactText } from "../storage/patches";
 import { loadProject } from "../storage/projectStore";
 import { listRuntimeServices } from "../storage/runtimeServices";
+import {
+  createChatArtifact,
+  createProjectMemoryNote,
+  listChatArtifacts,
+  listProjectMemoryNotes,
+  readChatArtifact,
+  readProjectMemoryNote,
+  updateChatArtifact,
+  updateProjectMemoryNote
+} from "../storage/researchKnowledge";
 import type { ProviderMcpTool } from "../mcp";
 
 export const RESEARCH_FILE_IGNORE_DIRS = new Set([
@@ -30,7 +41,10 @@ export const RESEARCH_CLI_MAX_ARGS = 64;
 export const RESEARCH_CLI_MAX_OUTPUT_CHARS = 60_000;
 export const RESEARCH_CLI_TIMEOUT_MS = 15_000;
 export const RESEARCH_PROJECT_FILE_SERVER_ID = "archicode-project-files";
+export const RESEARCH_SCRATCHPAD_SERVER_ID = "archicode-scratchpad";
 export const RESEARCH_CLI_SERVER_LABEL = "Project Inspection CLI";
+export const RESEARCH_KNOWLEDGE_SERVER_LABEL = "Project Memory & Chat Artifacts";
+export const RESEARCH_SCRATCHPAD_SERVER_LABEL = "Ephemeral Scratchpad";
 
 export const RESEARCH_CLI_ALLOWED_COMMANDS = [
   "git", "rg",
@@ -99,7 +113,7 @@ export function researchSinkTools(): ProviderMcpTool[] {
           operations: {
             type: "array",
             items: { type: "object", additionalProperties: true },
-            description: "Ordered changeSet operations exactly as defined by the archicodeResearch changeSet contract."
+            description: "Ordered changeSet operations exactly as defined by the archicodeResearch changeSet contract. For start-agent-run, always include scope; nodeId is optional and must be a real node ID, never a flow ID."
           }
         }
       }
@@ -565,6 +579,165 @@ export function researchProjectFileTools(): ProviderMcpTool[] {
       }
     },
     {
+      providerToolName: "archicode_project_list_memory_notes",
+      serverId: RESEARCH_PROJECT_FILE_SERVER_ID,
+      serverLabel: RESEARCH_KNOWLEDGE_SERVER_LABEL,
+      toolName: "list_memory_notes",
+      description: "List small durable memory notes owned by this project and shared across its Research chats. Use this to discover previously remembered decisions, constraints, facts, preferences, or pointers to larger chat artifacts.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        properties: {
+          scope: { type: "string", enum: ["current", "all"], description: "Use current for notes relevant to this chat scope, or all for every project note. Defaults to current." },
+          includeArchived: { type: "boolean", description: "Include archived notes. Defaults to false." },
+          maxResults: { type: "integer", minimum: 1, maximum: 50, description: "Maximum notes to return. Defaults to 20." }
+        }
+      }
+    },
+    {
+      providerToolName: "archicode_project_read_memory_note",
+      serverId: RESEARCH_PROJECT_FILE_SERVER_ID,
+      serverLabel: RESEARCH_KNOWLEDGE_SERVER_LABEL,
+      toolName: "read_memory_note",
+      description: "Read one durable project memory note by id.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["noteId"],
+        properties: {
+          noteId: { type: "string", minLength: 1 }
+        }
+      }
+    },
+    {
+      providerToolName: "archicode_project_remember_note",
+      serverId: RESEARCH_PROJECT_FILE_SERVER_ID,
+      serverLabel: RESEARCH_KNOWLEDGE_SERVER_LABEL,
+      toolName: "remember_note",
+      description: "Create a small durable memory note for important knowledge that should survive across chats in this project. Use chat artifacts instead for long reports, raw research, large plans, or working journals. The note is visible to the user and records this chat as its origin.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["title", "body"],
+        properties: {
+          title: { type: "string", minLength: 1, maxLength: 160 },
+          body: { type: "string", minLength: 1, maxLength: 4000 },
+          scopeType: { type: "string", enum: ["current", "project", "flow", "subflow", "node"], description: "Defaults to current chat scope." },
+          flowId: { type: "string" },
+          subflowId: { type: "string" },
+          nodeId: { type: "string" },
+          pinned: { type: "boolean" },
+          sourceMessageIds: { type: "array", items: { type: "string" }, maxItems: 20 },
+          artifactIds: { type: "array", items: { type: "string" }, maxItems: 20 },
+          filePaths: { type: "array", items: { type: "string" }, maxItems: 20 }
+        }
+      }
+    },
+    {
+      providerToolName: "archicode_project_update_memory_note",
+      serverId: RESEARCH_PROJECT_FILE_SERVER_ID,
+      serverLabel: RESEARCH_KNOWLEDGE_SERVER_LABEL,
+      toolName: "update_memory_note",
+      description: "Update, pin, mark stale, reactivate, or archive an existing project memory note. Supply the revision returned by list/read to avoid overwriting a newer update.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["noteId", "expectedRevision"],
+        properties: {
+          noteId: { type: "string", minLength: 1 },
+          expectedRevision: { type: "integer", minimum: 1 },
+          title: { type: "string", minLength: 1, maxLength: 160 },
+          body: { type: "string", minLength: 1, maxLength: 4000 },
+          status: { type: "string", enum: ["active", "stale", "archived"] },
+          pinned: { type: "boolean" },
+          sourceMessageIds: { type: "array", items: { type: "string" }, maxItems: 20 },
+          artifactIds: { type: "array", items: { type: "string" }, maxItems: 20 },
+          filePaths: { type: "array", items: { type: "string" }, maxItems: 20 }
+        }
+      }
+    },
+    {
+      providerToolName: "archicode_chat_list_artifacts",
+      serverId: RESEARCH_PROJECT_FILE_SERVER_ID,
+      serverLabel: RESEARCH_KNOWLEDGE_SERVER_LABEL,
+      toolName: "list_chat_artifacts",
+      description: "List large or detailed artifacts owned by this Research chat. These artifacts stay session-scoped and are not automatically loaded into other chats.",
+      inputSchema: { type: "object", additionalProperties: false, properties: {} }
+    },
+    {
+      providerToolName: "archicode_chat_read_artifact",
+      serverId: RESEARCH_PROJECT_FILE_SERVER_ID,
+      serverLabel: RESEARCH_KNOWLEDGE_SERVER_LABEL,
+      toolName: "read_chat_artifact",
+      description: "Read a text artifact owned by this Research chat.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["artifactId"],
+        properties: {
+          artifactId: { type: "string", minLength: 1 },
+          maxChars: { type: "integer", minimum: 1, maximum: 80000 }
+        }
+      }
+    },
+    {
+      providerToolName: "archicode_chat_create_artifact",
+      serverId: RESEARCH_PROJECT_FILE_SERVER_ID,
+      serverLabel: RESEARCH_KNOWLEDGE_SERVER_LABEL,
+      toolName: "create_chat_artifact",
+      description: "Create a potentially large artifact owned by this chat for detailed research, plans, comparisons, structured data, or working journals. Use project memory notes for small important knowledge that must be available across chats.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["title", "content"],
+        properties: {
+          title: { type: "string", minLength: 1, maxLength: 200 },
+          content: { type: "string", minLength: 1, maxLength: 1000000 },
+          format: { type: "string", enum: ["markdown", "text", "json", "csv"] },
+          summary: { type: "string", maxLength: 500 }
+        }
+      }
+    },
+    {
+      providerToolName: "archicode_chat_update_artifact",
+      serverId: RESEARCH_PROJECT_FILE_SERVER_ID,
+      serverLabel: RESEARCH_KNOWLEDGE_SERVER_LABEL,
+      toolName: "update_chat_artifact",
+      description: "Update an artifact owned by this chat. Supply its current revision to avoid overwriting a newer update.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["artifactId", "expectedRevision"],
+        properties: {
+          artifactId: { type: "string", minLength: 1 },
+          expectedRevision: { type: "integer", minimum: 1 },
+          title: { type: "string", minLength: 1, maxLength: 200 },
+          content: { type: "string", minLength: 1, maxLength: 1000000 },
+          summary: { type: "string", maxLength: 500 }
+        }
+      }
+    },
+    {
+      providerToolName: "archicode_scratchpad_repl",
+      serverId: RESEARCH_SCRATCHPAD_SERVER_ID,
+      serverLabel: RESEARCH_SCRATCHPAD_SERVER_LABEL,
+      toolName: "scratchpad_repl",
+      description: "Run standard JavaScript in a fresh isolated QuickJS WebAssembly runtime for calculations and small helper functions. The final statement value and captured console output are returned. Node.js globals, filesystem access, packages, imports, network APIs, and persistent runtime state are not exposed. Each call has a 10-second limit and separate 32,000-character limits for source, returned value, and console output.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["code"],
+        properties: {
+          code: {
+            type: "string",
+            minLength: 1,
+            maxLength: RESEARCH_SCRATCHPAD_MAX_CODE_CHARS,
+            description: "Standard synchronous JavaScript. For example: `const compound = (p, r, years) => p * (1 + r) ** years; compound(1000, 0.05, 10);`."
+          }
+        }
+      }
+    },
+    {
       providerToolName: "archicode_project_list_runtime_services",
       serverId: RESEARCH_PROJECT_FILE_SERVER_ID,
       serverLabel: "Project Files",
@@ -626,7 +799,11 @@ export function isResearchProjectFileTool(providerToolName: string): boolean {
   return researchProjectFileTools().some((tool) => tool.providerToolName === providerToolName);
 }
 
-export async function callResearchProjectFileTool(projectRoot: string, input: { providerToolName: string; argumentsJson: string }): Promise<{
+export async function callResearchProjectFileTool(
+  projectRoot: string,
+  input: { providerToolName: string; argumentsJson: string },
+  context: { sessionId?: string; sessionScope?: ResearchChatScope } = {}
+): Promise<{
   serverId: string;
   serverLabel: string;
   toolName: string;
@@ -647,14 +824,172 @@ export async function callResearchProjectFileTool(projectRoot: string, input: { 
   else if (tool.toolName === "list_runs") result = await researchToolListRuns(projectRoot, args);
   else if (tool.toolName === "read_run") result = await researchToolReadRun(projectRoot, args);
   else if (tool.toolName === "read_artifact") result = await researchToolReadArtifact(projectRoot, args);
+  else if (tool.toolName === "list_memory_notes") result = await researchToolListMemoryNotes(projectRoot, args, context.sessionScope);
+  else if (tool.toolName === "read_memory_note") result = await researchToolReadMemoryNote(projectRoot, args);
+  else if (tool.toolName === "remember_note") result = await researchToolRememberNote(projectRoot, args, context);
+  else if (tool.toolName === "update_memory_note") result = await researchToolUpdateMemoryNote(projectRoot, args);
+  else if (tool.toolName === "list_chat_artifacts") result = await researchToolListChatArtifacts(projectRoot, context.sessionId);
+  else if (tool.toolName === "read_chat_artifact") result = await researchToolReadChatArtifact(projectRoot, args, context.sessionId);
+  else if (tool.toolName === "create_chat_artifact") result = await researchToolCreateChatArtifact(projectRoot, args, context.sessionId);
+  else if (tool.toolName === "update_chat_artifact") result = await researchToolUpdateChatArtifact(projectRoot, args, context.sessionId);
+  else if (tool.toolName === "scratchpad_repl") result = await runResearchJavaScript(requiredToolString(args, "code"));
   else if (tool.toolName === "list_runtime_services") result = await researchToolListRuntimeServices(projectRoot, args);
   else result = await researchToolInspectCli(projectRoot, args);
   return {
-    serverId: RESEARCH_PROJECT_FILE_SERVER_ID,
+    serverId: tool.serverId,
     serverLabel: tool.serverLabel,
     toolName: tool.toolName,
     resultText: JSON.stringify(result, null, 2)
   };
+}
+
+function requiredToolString(args: Record<string, unknown>, key: string): string {
+  const value = typeof args[key] === "string" ? args[key].trim() : "";
+  if (!value) throw new Error(`${key} is required.`);
+  return value;
+}
+
+function optionalToolStrings(args: Record<string, unknown>, key: string): string[] | undefined {
+  const value = args[key];
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) throw new Error(`${key} must be an array of strings.`);
+  return value as string[];
+}
+
+function expectedRevision(args: Record<string, unknown>): number {
+  const value = args.expectedRevision;
+  if (typeof value !== "number" || !Number.isInteger(value) || value < 1) throw new Error("expectedRevision must be a positive integer.");
+  return value;
+}
+
+async function memoryScopeFromArgs(
+  projectRoot: string,
+  args: Record<string, unknown>,
+  currentScope?: ResearchChatScope
+): Promise<ResearchChatScope> {
+  const scopeType = typeof args.scopeType === "string" ? args.scopeType : "current";
+  if (scopeType === "current" && currentScope) return currentScope;
+  const bundle = await loadProject(projectRoot);
+  if (scopeType === "current" || scopeType === "project") return { type: "project", projectId: bundle.project.id };
+  const flowId = requiredToolString(args, "flowId");
+  if (scopeType === "flow") return { type: "flow", flowId };
+  if (scopeType === "subflow") return { type: "subflow", flowId, subflowId: requiredToolString(args, "subflowId") };
+  if (scopeType === "node") return { type: "node", flowId, nodeId: requiredToolString(args, "nodeId") };
+  throw new Error("scopeType must be current, project, flow, subflow, or node.");
+}
+
+export async function researchToolListMemoryNotes(
+  projectRoot: string,
+  args: Record<string, unknown>,
+  currentScope?: ResearchChatScope
+): Promise<unknown> {
+  const requestedScope = args.scope === "all" ? undefined : currentScope;
+  const maxResults = clampInteger(args.maxResults, 20, 1, 50);
+  const notes = await listProjectMemoryNotes(projectRoot, {
+    includeArchived: args.includeArchived === true,
+    scope: requestedScope
+  });
+  return {
+    scope: requestedScope ?? "all",
+    notes: notes.slice(0, maxResults).map((note) => ({
+      ...note,
+      body: note.body.length > 600 ? `${note.body.slice(0, 600)}...` : note.body
+    })),
+    omitted: Math.max(0, notes.length - maxResults),
+    note: "Project memory notes are small durable knowledge shared across chats. Read one note for its complete body."
+  };
+}
+
+export async function researchToolReadMemoryNote(projectRoot: string, args: Record<string, unknown>): Promise<unknown> {
+  return readProjectMemoryNote(projectRoot, requiredToolString(args, "noteId"));
+}
+
+export async function researchToolRememberNote(
+  projectRoot: string,
+  args: Record<string, unknown>,
+  context: { sessionId?: string; sessionScope?: ResearchChatScope }
+): Promise<unknown> {
+  if (!context.sessionId) throw new Error("A current Research chat is required to create a project memory note.");
+  const redacted = redactSensitiveText(requiredToolString(args, "body"));
+  const note = await createProjectMemoryNote(projectRoot, {
+    title: requiredToolString(args, "title"),
+    body: redacted.text,
+    scope: await memoryScopeFromArgs(projectRoot, args, context.sessionScope),
+    pinned: args.pinned === true,
+    originChatId: context.sessionId,
+    sourceMessageIds: optionalToolStrings(args, "sourceMessageIds"),
+    artifactIds: optionalToolStrings(args, "artifactIds"),
+    filePaths: optionalToolStrings(args, "filePaths")
+  });
+  return { note, redacted: redacted.redacted };
+}
+
+export async function researchToolUpdateMemoryNote(projectRoot: string, args: Record<string, unknown>): Promise<unknown> {
+  const rawBody = typeof args.body === "string" ? args.body : undefined;
+  const redactedBody = rawBody === undefined ? undefined : redactSensitiveText(rawBody);
+  if (args.status !== undefined && args.status !== "active" && args.status !== "stale" && args.status !== "archived") {
+    throw new Error("status must be active, stale, or archived.");
+  }
+  const status = args.status as "active" | "stale" | "archived" | undefined;
+  const note = await updateProjectMemoryNote(projectRoot, requiredToolString(args, "noteId"), {
+    expectedRevision: expectedRevision(args),
+    title: typeof args.title === "string" ? args.title : undefined,
+    body: redactedBody?.text,
+    status,
+    pinned: typeof args.pinned === "boolean" ? args.pinned : undefined,
+    sourceMessageIds: optionalToolStrings(args, "sourceMessageIds"),
+    artifactIds: optionalToolStrings(args, "artifactIds"),
+    filePaths: optionalToolStrings(args, "filePaths")
+  });
+  return { note, redacted: redactedBody?.redacted ?? false };
+}
+
+function requireSessionId(sessionId?: string): string {
+  if (!sessionId) throw new Error("A current Research chat is required for chat artifacts.");
+  return sessionId;
+}
+
+export async function researchToolListChatArtifacts(projectRoot: string, sessionId?: string): Promise<unknown> {
+  return { artifacts: await listChatArtifacts(projectRoot, requireSessionId(sessionId)) };
+}
+
+export async function researchToolReadChatArtifact(projectRoot: string, args: Record<string, unknown>, sessionId?: string): Promise<unknown> {
+  const result = await readChatArtifact(projectRoot, requireSessionId(sessionId), requiredToolString(args, "artifactId"));
+  const redacted = redactSensitiveText(result.text);
+  const maxChars = clampInteger(args.maxChars, 40_000, 1, RESEARCH_TOOL_MAX_READ_CHARS);
+  return {
+    ...result.artifact,
+    text: redacted.text.slice(0, maxChars),
+    truncated: redacted.text.length > maxChars,
+    redacted: redacted.redacted
+  };
+}
+
+export async function researchToolCreateChatArtifact(projectRoot: string, args: Record<string, unknown>, sessionId?: string): Promise<unknown> {
+  const redacted = redactSensitiveText(requiredToolString(args, "content"));
+  if (args.format !== undefined && args.format !== "markdown" && args.format !== "text" && args.format !== "json" && args.format !== "csv") {
+    throw new Error("format must be markdown, text, json, or csv.");
+  }
+  const format = args.format === "text" || args.format === "json" || args.format === "csv" ? args.format : "markdown";
+  const artifact = await createChatArtifact(projectRoot, requireSessionId(sessionId), {
+    title: requiredToolString(args, "title"),
+    content: redacted.text,
+    format,
+    summary: typeof args.summary === "string" ? args.summary : undefined
+  });
+  return { artifact, redacted: redacted.redacted };
+}
+
+export async function researchToolUpdateChatArtifact(projectRoot: string, args: Record<string, unknown>, sessionId?: string): Promise<unknown> {
+  const rawContent = typeof args.content === "string" ? args.content : undefined;
+  const redactedContent = rawContent === undefined ? undefined : redactSensitiveText(rawContent);
+  const artifact = await updateChatArtifact(projectRoot, requireSessionId(sessionId), requiredToolString(args, "artifactId"), {
+    expectedRevision: expectedRevision(args),
+    title: typeof args.title === "string" ? args.title : undefined,
+    content: redactedContent?.text,
+    summary: typeof args.summary === "string" ? args.summary : undefined
+  });
+  return { artifact, redacted: redactedContent?.redacted ?? false };
 }
 
 export async function collectResearchProjectFiles(projectRoot: string): Promise<ResearchFileInventory> {
@@ -1435,6 +1770,7 @@ export async function researchToolReadArtifact(projectRoot: string, args: Record
     ? bundle.artifacts.find((item) => item.id === artifactId)
     : bundle.artifacts.find((item) => item.path === requestedPath);
   if (!artifact) throw new Error(artifactId ? `Artifact ${artifactId} was not found.` : "A known artifactId or artifact path is required.");
+  if (artifact.type === "chat-artifact") throw new Error("Chat artifacts can only be read through archicode_chat_read_artifact from their owning chat.");
   const maxChars = clampInteger(args.maxChars, 40_000, 1, RESEARCH_TOOL_MAX_READ_CHARS);
   const text = await readArtifactText(projectRoot, artifact.path);
   const redacted = redactSensitiveText(text);
@@ -1475,7 +1811,7 @@ export async function researchToolListRuntimeServices(projectRoot: string, args:
 export function researchProjectFileAccessContext(projectRoot: string): Record<string, unknown> {
   return {
     rootPath: path.resolve(projectRoot),
-    access: "Use project file and read-only CLI inspection tools on demand instead of assuming all file contents or command output are in context.",
+    access: "Use project file and read-only CLI inspection tools on demand instead of assuming all file contents or command output are in context. Managed writes are limited to small project memory notes and artifacts inside the current chat's local artifact directory.",
     tools: researchProjectFileTools().map((tool) => ({
       name: tool.providerToolName,
       description: tool.description

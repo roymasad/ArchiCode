@@ -122,7 +122,6 @@ export function ResearchTodoCapsule({ items }: { items: ResearchTodoCapsuleItem[
         >
           <ListTodo size={14} aria-hidden="true" />
           <span>{items.length}</span>
-          <small>todo{items.length === 1 ? "" : "s"}</small>
         </button>
       </PopoverTrigger>
       <PopoverContent
@@ -159,4 +158,3 @@ export function ResearchTodoCapsule({ items }: { items: ResearchTodoCapsuleItem[
     </PopoverRoot>
   );
 }
-

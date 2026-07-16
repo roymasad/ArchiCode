@@ -110,7 +110,7 @@ function ArtifactSplitView({
 }) {
   const [preview, setPreview] = useState<{ artifactId: string; text: string } | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);
-  const canPreview = Boolean(selected && ["diff", "generated-file", "log", "instructions", "context-manifest", "memory", "summary", "plan"].includes(selected.type));
+  const canPreview = Boolean(selected && ["diff", "generated-file", "chat-artifact", "log", "instructions", "context-manifest", "memory", "summary", "plan"].includes(selected.type));
   const selectedPreviewText = preview && preview.artifactId === selected?.id ? preview.text : null;
   const selectedPlanDisplay = selected
     ? planArtifactDerivedDisplay(selected, selected.type === "plan" ? selectedPreviewText : null)

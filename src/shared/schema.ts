@@ -269,12 +269,13 @@ export const shellPolicySchema = z.object({
 
 export const artifactSchema = z.object({
   id: z.string(),
-  type: z.enum(["summary", "diff", "log", "attachment", "screenshot", "instructions", "generated-file", "context-manifest", "memory", "plan"]),
+  type: z.enum(["summary", "diff", "log", "attachment", "screenshot", "instructions", "generated-file", "chat-artifact", "context-manifest", "memory", "plan"]),
   title: z.string(),
   path: z.string(),
   nodeId: z.string().optional(),
   noteId: z.string().optional(),
   runId: z.string().optional(),
+  chatId: z.string().optional(),
   mediaType: z.string().optional(),
   status: z.enum(["pending-review", "partially-applied", "applied", "rejected"]).optional(),
   summary: z.string().optional(),
@@ -282,7 +283,9 @@ export const artifactSchema = z.object({
   providerSummary: z.string().optional(),
   planOutputAt: z.string().optional(),
   sizeBytes: z.number().int().nonnegative().optional(),
-  createdAt: z.string()
+  revision: z.number().int().positive().optional(),
+  createdAt: z.string(),
+  updatedAt: z.string().optional()
 });
 
 // Structured, verifiable counterpart to the free-text `acceptanceCriteria`.
@@ -1699,6 +1702,23 @@ export const researchChatScopeSchema = z.discriminatedUnion("type", [
   z.object({ type: z.literal("node"), flowId: z.string(), nodeId: z.string() })
 ]);
 
+export const projectMemoryNoteStatusSchema = z.enum(["active", "stale", "archived"]);
+export const projectMemoryNoteSchema = z.object({
+  id: z.string(),
+  title: z.string().trim().min(1).max(160),
+  body: z.string().trim().min(1).max(4_000),
+  scope: researchChatScopeSchema,
+  status: projectMemoryNoteStatusSchema.default("active"),
+  pinned: z.boolean().default(false),
+  originChatId: z.string().optional(),
+  sourceMessageIds: z.array(z.string()).default([]),
+  artifactIds: z.array(z.string()).default([]),
+  filePaths: z.array(z.string()).default([]),
+  revision: z.number().int().positive().default(1),
+  createdAt: z.string(),
+  updatedAt: z.string()
+});
+
 export const researchMessageNodeReferenceSchema = z.object({
   flowId: z.string(),
   nodeId: z.string()
@@ -2345,6 +2365,8 @@ export type AppliedSourceFileChange = z.infer<typeof appliedSourceFileChangeSche
 export type PatchOperationDecision = z.infer<typeof patchOperationDecisionSchema>;
 export type PatchReviewRecord = z.infer<typeof patchReviewRecordSchema>;
 export type ResearchChatScope = z.infer<typeof researchChatScopeSchema>;
+export type ProjectMemoryNote = z.infer<typeof projectMemoryNoteSchema>;
+export type ProjectMemoryNoteStatus = z.infer<typeof projectMemoryNoteStatusSchema>;
 
 export type ResearchMessageNodeReference = z.infer<typeof researchMessageNodeReferenceSchema>;
 export type ResearchCanvasViewportAction = z.infer<typeof researchCanvasViewportActionSchema>;

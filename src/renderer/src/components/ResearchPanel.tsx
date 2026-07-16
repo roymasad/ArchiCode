@@ -1,4 +1,4 @@
-import { AlertCircle, AlertTriangle, Archive, Brain, Check, CheckCircle2, ChevronDown, ChevronUp, Circle, Copy, Download, FileJson, FileText, History, ListTodo, Loader2, Maximize2, MessageSquare, Mic, Minimize2, PanelLeftClose, PanelLeftOpen, Paperclip, Play, Plus, RefreshCw, Send, ShieldCheck, Sparkles, Split, Square, Volume2, X } from "lucide-react";
+import { AlertCircle, AlertTriangle, Archive, Box, Brain, Check, CheckCircle2, ChevronDown, ChevronUp, Circle, Copy, Download, FileJson, FileText, FolderKanban, History, Layers3, ListTodo, Loader2, Maximize2, MessageSquare, Mic, Minimize2, PanelLeftClose, PanelLeftOpen, Paperclip, Play, Plus, RefreshCw, Send, ShieldCheck, Sparkles, Split, Square, Volume2, Workflow, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import type { Artifact, LlmUsage, ProjectBundle, ProjectSettings, ResearchChatScope, ResearchChatSession } from "@shared/schema";
@@ -6,6 +6,7 @@ import { deriveResearchChatContextPlan, estimateTextTokens } from "@shared/conte
 import { sumLlmUsage, isAllUsageUnavailable, formatCostUsd, formatTokenCount, llmUsageTotalTokens } from "@shared/llmPricing";
 import { extractArchicodeResearch } from "@shared/researchExtraction";
 import { isResearchThinkingPhrase } from "@shared/researchPersonality";
+import { researchChangeSetCategory, type ResearchChangeSetCategory } from "@shared/researchChangeSetSemantics";
 import { defaultResearchScope, getActiveFlow, useArchicodeStore } from "../store/useArchicodeStore";
 import archiChatEmptyIllustration from "../assets/archi-chat-empty.png";
 import { ChatComposer } from "./ChatComposer";
@@ -18,7 +19,7 @@ import {
   attachmentFileName,
   displayResearchContent,
   formatUsageSummaryLine,
-  graphReviewReportPresentation,
+  changeSetResultReportPresentation,
   isImageAttachmentPath,
   isImageArtifact,
   isTextAttachmentArtifact,
@@ -55,7 +56,7 @@ import {
 } from "./researchTranscript";
 import { ResearchTodoCapsule, researchTodosForSession } from "./ResearchTodoCapsule";
 import { type ArchicodeGraphLink, type ArchicodeProjectPathLink, ResearchMarkdown } from "./ResearchMarkdown";
-import { ResearchHistoryList, ResearchMemoryPanel } from "./ResearchMemoryPanel";
+import { ChatArtifactsPanel, ProjectMemoryNotesPanel, ResearchHistoryList, ResearchMemoryPanel } from "./ResearchMemoryPanel";
 import { ChatModelPicker } from "./ChatModelPicker";
 import { modelOptionsForProvider } from "./projectToolbarShared";
 import { providerImageInputSupportStatus } from "@shared/providerCapabilities";
@@ -153,6 +154,13 @@ function scopeLabel(scope: ResearchChatScope, bundle: ReturnType<typeof useArchi
   return `Node: ${node?.title ?? scope.nodeId}`;
 }
 
+function ResearchScopeIcon({ scope }: { scope: ResearchChatScope }) {
+  if (scope.type === "project") return <FolderKanban size={14} aria-hidden="true" />;
+  if (scope.type === "flow") return <Workflow size={14} aria-hidden="true" />;
+  if (scope.type === "subflow") return <Layers3 size={14} aria-hidden="true" />;
+  return <Box size={14} aria-hidden="true" />;
+}
+
 function parseScope(value: string, projectId: string): ResearchChatScope {
   const [type, flowId, id] = value.split(":");
   if (type === "flow" && flowId) return { type: "flow", flowId };
@@ -163,7 +171,7 @@ function parseScope(value: string, projectId: string): ResearchChatScope {
 
 type ResearchOperationView = NonNullable<ResearchChatSession["messages"][number]["changeSet"]>["operations"][number];
 type ResearchChangeSetView = NonNullable<ResearchChatSession["messages"][number]["changeSet"]>;
-type ResearchGraphReviewSummary = {
+type ResearchChangeSetReviewSummary = {
   applied: number;
   rejected: number;
   failed: number;
@@ -174,9 +182,9 @@ function changeSetReviewKey(sessionId: string, messageId: string, changeSetId: s
   return `${sessionId}:${messageId}:${changeSetId}`;
 }
 
-export function parseGraphReviewSummary(message: ResearchChatSession["messages"][number]): ResearchGraphReviewSummary | null {
+export function parseResearchChangeSetReviewSummary(message: ResearchChatSession["messages"][number]): ResearchChangeSetReviewSummary | null {
   if (message.role !== "system") return null;
-  const match = message.content.trim().match(/^(Graph changes reviewed|Graph changes retry reviewed|Auto-approved graph changes):\s+(\d+)\s+applied,\s+(\d+)\s+rejected,\s+(\d+)\s+failed\./);
+  const match = message.content.trim().match(/^(Graph changes reviewed|Graph changes retry reviewed|Auto-approved graph changes|Queue submission reviewed|Queue submission retry reviewed|Changes reviewed|Changes retry reviewed):\s+(\d+)\s+(?:applied|queued),\s+(\d+)\s+rejected,\s+(\d+)\s+failed\./);
   if (!match) return null;
   return {
     autoApproved: match[1] === "Auto-approved graph changes",
@@ -186,48 +194,67 @@ export function parseGraphReviewSummary(message: ResearchChatSession["messages"]
   };
 }
 
-function isGraphReviewMessage(message: ResearchChatSession["messages"][number]): boolean {
-  return Boolean(parseGraphReviewSummary(message));
+function researchMessagePresentationContent(
+  session: ResearchChatSession,
+  messageIndex: number,
+  message: ResearchChatSession["messages"][number]
+): string {
+  const summary = parseResearchChangeSetReviewSummary(message);
+  if (!summary || summary.autoApproved) return message.content;
+  const previousChangeSet = [...session.messages.slice(0, messageIndex)].reverse().find((item) => item.changeSet)?.changeSet;
+  if (!previousChangeSet) return message.content;
+  const category = researchChangeSetCategory(previousChangeSet.operations);
+  if (category === "graph") return message.content;
+  const retry = /retry reviewed/i.test(message.content);
+  const prefix = category === "queue"
+    ? retry ? "Queue submission retry reviewed" : "Queue submission reviewed"
+    : retry ? "Changes retry reviewed" : "Changes reviewed";
+  return `${prefix}: ${summary.applied} ${category === "queue" ? "queued" : "applied"}, ${summary.rejected} rejected, ${summary.failed} failed.`;
 }
 
-function reviewSummaryAfterChangeSet(session: ResearchChatSession, messageIndex: number): ResearchGraphReviewSummary | null {
-  let latest: ResearchGraphReviewSummary | null = null;
+function isChangeSetReviewMessage(message: ResearchChatSession["messages"][number]): boolean {
+  return Boolean(parseResearchChangeSetReviewSummary(message));
+}
+
+function reviewSummaryAfterChangeSet(session: ResearchChatSession, messageIndex: number): ResearchChangeSetReviewSummary | null {
+  let latest: ResearchChangeSetReviewSummary | null = null;
   for (const laterMessage of session.messages.slice(messageIndex + 1)) {
     if (laterMessage.changeSet) break;
-    const summary = parseGraphReviewSummary(laterMessage);
+    const summary = parseResearchChangeSetReviewSummary(laterMessage);
     if (summary) latest = summary;
   }
   return latest;
 }
 
-function reviewStatusPresentation(summary: ResearchGraphReviewSummary | null): {
+function reviewStatusPresentation(summary: ResearchChangeSetReviewSummary | null, category: ResearchChangeSetCategory): {
   badgeTone: "success" | "warning" | "danger";
   badgeLabel: string;
   actionLabel: string;
   summaryLabel: string;
 } | null {
   if (!summary) return null;
-  const summaryLabel = `${summary.applied} applied, ${summary.rejected} rejected, ${summary.failed} failed`;
+  const queueSubmission = category === "queue";
+  const summaryLabel = `${summary.applied} ${queueSubmission ? "queued" : "applied"}, ${summary.rejected} rejected, ${summary.failed} failed`;
   if (summary.failed > 0 && summary.applied === 0) {
     return {
       badgeTone: "danger",
-      badgeLabel: "Failed",
-      actionLabel: "Apply Failed",
+      badgeLabel: queueSubmission ? "Queue failed" : "Failed",
+      actionLabel: queueSubmission ? "Queue failed" : "Apply Failed",
       summaryLabel
     };
   }
   if (summary.failed > 0 || summary.rejected > 0) {
     return {
       badgeTone: "warning",
-      badgeLabel: "Partial",
-      actionLabel: "Partially Applied",
+      badgeLabel: queueSubmission ? "Partially queued" : "Partial",
+      actionLabel: queueSubmission ? "Partially queued" : "Partially Applied",
       summaryLabel
     };
   }
   return {
     badgeTone: "success",
-    badgeLabel: summary.autoApproved ? "Auto-applied" : "Applied",
-    actionLabel: summary.autoApproved ? "Auto-applied" : "Applied",
+    badgeLabel: queueSubmission ? "Queued" : summary.autoApproved ? "Auto-applied" : "Applied",
+    actionLabel: queueSubmission ? "Queued" : summary.autoApproved ? "Auto-applied" : "Applied",
     summaryLabel
   };
 }
@@ -2133,7 +2160,7 @@ export function ResearchPanel({
       </aside>
     );
   }
-  const compactScopeLabel = scopeLabel(scope, bundle).replace(/^([^:]+):\s+/, "$1 ");
+  const currentScopeLabel = scopeLabel(scope, bundle);
   const historyVisible = focusMode ? focusHistoryOpen : showHistory;
   const beginNewChat = () => {
     setShowHistory(false);
@@ -2268,13 +2295,23 @@ export function ResearchPanel({
         {selected ? (
           <div className="research-status-row">
             <div className="research-status-cluster">
-              <Badge tone="neutral" className="research-scope-badge">{compactScopeLabel}</Badge>
+              <Tooltip content={`Scope : ${currentScopeLabel}`}>
+                <span
+                  className="ui-badge research-scope-badge"
+                  tabIndex={0}
+                  aria-label={`Current chat scope: ${currentScopeLabel}`}
+                >
+                  <ResearchScopeIcon scope={scope} />
+                </span>
+              </Tooltip>
             </div>
           </div>
         ) : null}
         <div className="research-session-controls">
           {selected ? <ResearchTodoCapsule items={researchTodosForSession(selected)} /> : null}
           {selected && hasResearchMemory(selected.memory) ? <ResearchMemoryPanel session={selected} /> : null}
+          {selected && rootPath ? <ProjectMemoryNotesPanel projectRoot={rootPath} refreshKey={selected.updatedAt} /> : null}
+          {selected && rootPath ? <ChatArtifactsPanel key={`chat-artifacts-${selected.id}`} projectRoot={rootPath} session={selected} refreshKey={selected.updatedAt} /> : null}
           {researchAutoApproveGraphChanges ? (
             <Switch
               checked={researchAutoApproveGraphChanges.enabled}
@@ -2313,7 +2350,9 @@ export function ResearchPanel({
             ) : (
               <div className="research-message-list">
                 {selected ? selected.messages.map((message, messageIndex) => {
+                  if (isChangeSetReviewMessage(message)) return null;
                   const isStreamingMessage = researchBusy && message.id.startsWith("research-waiting");
+                  const presentationContent = researchMessagePresentationContent(selected, messageIndex, message);
                   const streamKind = researchStreamStates[message.id]?.kind;
                   const isThinkingDraft = isStreamingMessage && streamKind === "thinking";
                   const liveSubagentRuns = researchSubagentActivity[message.id] ?? [];
@@ -2331,8 +2370,8 @@ export function ResearchPanel({
                   const parentActivityLines = liveParentActivity?.lines.length
                     ? liveParentActivity.lines
                     : persistedContinuationLines;
-                  const retryableMessage = canRetryResearchMessage(message) && messageIndex === selected.messages.length - 1;
-                  const isLastMessage = messageIndex === selected.messages.length - 1;
+                  const isLastMessage = !selected.messages.slice(messageIndex + 1).some((laterMessage) => !isChangeSetReviewMessage(laterMessage));
+                  const retryableMessage = canRetryResearchMessage(message) && isLastMessage;
                   const messageImageAttachments = message.attachmentIds
                     .map((attachmentId) => messageAttachmentArtifactsById.get(attachmentId))
                     .filter(isImageArtifact);
@@ -2345,7 +2384,7 @@ export function ResearchPanel({
                         .filter((filePath) => !isImageAttachmentPath(filePath))
                         .map(attachmentFileName);
                   const messageAttachmentCount = message.attachmentIds.length || (researchPendingAttachmentPaths[message.id]?.length ?? 0);
-                  const graphReviewReport = isStreamingMessage ? null : graphReviewReportPresentation(message.content);
+                  const changeSetResultReport = isStreamingMessage ? null : changeSetResultReportPresentation(presentationContent);
                   const ruleApproval = message.mcpApprovalRequest?.providerToolName === RESEARCH_RULES_TOOL_NAME
                     ? ruleApprovalPresentation(message.mcpApprovalRequest.argumentsJson ?? "{}")
                     : null;
@@ -2454,20 +2493,20 @@ export function ResearchPanel({
                         ))}
                       </div>
                     ) : null}
-                    {graphReviewReport ? (
-                      <div className="research-graph-review-report">
-                        <div className="research-graph-review-report-summary">
-                          <strong>Graph review complete</strong>
-                          <span>{graphReviewReport.summary}</span>
+                    {changeSetResultReport ? (
+                      <div className={`research-change-set-result is-${changeSetResultReport.tone}`}>
+                        <div className="research-change-set-result-summary">
+                          <strong>{changeSetResultReport.title}</strong>
+                          <span>{changeSetResultReport.summary}</span>
                         </div>
                         <details>
                           <summary>
                             <span>Operation details</span>
-                            <small>{graphReviewReport.operationCount}</small>
+                            <small>{changeSetResultReport.operationCount}</small>
                           </summary>
-                          <div className="research-graph-review-report-details">
+                          <div className="research-change-set-result-details">
                             <ResearchMarkdown
-                              content={graphReviewReport.details}
+                              content={changeSetResultReport.details}
                               onGraphLink={navigateGraphLink}
                               onProjectPathLink={openProjectPathLink}
                             />
@@ -2476,7 +2515,7 @@ export function ResearchPanel({
                       </div>
                     ) : (
                       <ResearchMarkdown
-                        content={displayResearchContent(message.content, isStreamingMessage)}
+                        content={displayResearchContent(presentationContent, isStreamingMessage)}
                         highlightText={ttsHighlight?.messageId === message.id ? ttsHighlight.text : null}
                         onGraphLink={navigateGraphLink}
                         onProjectPathLink={openProjectPathLink}
@@ -2735,13 +2774,24 @@ export function ResearchPanel({
                     ) : null}
                     {message.changeSet ? (() => {
                       const changeSet = message.changeSet;
+                      const changeSetCategory = researchChangeSetCategory(changeSet.operations);
+                      const queueSubmission = changeSetCategory === "queue";
                       const reviewKey = changeSetReviewKey(selected.id, message.id, changeSet.id);
                       const reviewPending = pendingChangeSetKeys.has(reviewKey);
                       const reviewSummary = reviewSummaryAfterChangeSet(selected, messageIndex);
-                      const reviewPresentation = reviewStatusPresentation(reviewSummary);
+                      const reviewPresentation = reviewStatusPresentation(reviewSummary, changeSetCategory);
                       const reviewed = Boolean(changeSet.reviewedAt) || Boolean(reviewSummary) || hasLegacyReviewAfterChangeSet(selected, messageIndex);
                       const canRetryFailedReview = Boolean(reviewSummary && reviewSummary.applied === 0 && reviewSummary.rejected === 0 && reviewSummary.failed === changeSet.operations.length);
                       const waitingForRun = Boolean(activeGraphLockRun && (!reviewed || canRetryFailedReview));
+                      const primaryActionLabel = waitingForRun
+                        ? queueSubmission ? "Queue after run" : "Apply after run"
+                        : reviewPending
+                          ? canRetryFailedReview ? "Retrying" : queueSubmission ? "Queueing" : "Applying"
+                          : canRetryFailedReview
+                            ? queueSubmission ? "Retry Queue" : "Repair & Apply"
+                            : reviewed
+                              ? reviewPresentation?.actionLabel ?? (queueSubmission ? "Queued" : "Applied")
+                              : queueSubmission ? "Queue Selected" : "Apply Selected";
                       return (
                         <div className="research-change-set">
                           <div className="research-change-set-head">
@@ -2749,7 +2799,7 @@ export function ResearchPanel({
                             {reviewPresentation
                               ? <Badge tone={reviewPresentation.badgeTone}>{reviewPresentation.badgeLabel}</Badge>
                               : reviewed
-                                ? <Badge tone="success">Reviewed</Badge>
+                                ? <Badge tone="success">{queueSubmission ? "Queued" : "Reviewed"}</Badge>
                                 : waitingForRun
                                   ? <Badge tone="warning">Waiting for run</Badge>
                                 : null}
@@ -2759,7 +2809,7 @@ export function ResearchPanel({
                             <div className="research-change-run-lock" role="status">
                               <AlertTriangle size={15} />
                               <span>
-                                Apply unlocks after run <strong>{activeGraphLockRun.id}</strong> ({activeGraphLockRun.status}) finishes or is cancelled. You can review the proposed operations or reject this card now; no graph changes have been applied.
+                                {queueSubmission ? "Queueing" : "Applying"} unlocks after run <strong>{activeGraphLockRun.id}</strong> ({activeGraphLockRun.status}) finishes or is cancelled. You can review the proposed operations or reject this card now; {queueSubmission ? "nothing has been queued" : "no changes have been applied"}.
                               </span>
                             </div>
                           ) : null}
@@ -2798,9 +2848,9 @@ export function ResearchPanel({
                               size="sm"
                               variant="primary"
                               title={waitingForRun && activeGraphLockRun
-                                ? `Apply is locked until run ${activeGraphLockRun.id} finishes or is cancelled.`
+                                ? `${queueSubmission ? "Queueing" : "Apply"} is locked until run ${activeGraphLockRun.id} finishes or is cancelled.`
                                 : canRetryFailedReview
-                                  ? "Run recovery preflight on the retained card, then apply it"
+                                  ? `Run recovery preflight on the retained card, then ${queueSubmission ? "submit it again" : "apply it"}`
                                   : undefined}
                               disabled={waitingForRun || reviewPending || (reviewed && !canRetryFailedReview)}
                               onClick={() => {
@@ -2817,7 +2867,7 @@ export function ResearchPanel({
                               }}
                             >
                               <CheckCircle2 size={15} />
-                              <span>{waitingForRun ? "Apply after run" : reviewPending ? (canRetryFailedReview ? "Repairing" : "Applying") : canRetryFailedReview ? "Repair & Apply" : reviewed ? (reviewPresentation?.actionLabel ?? "Applied") : "Apply Selected"}</span>
+                              <span>{primaryActionLabel}</span>
                             </Button>
                             <Button
                               type="button"
@@ -2831,7 +2881,7 @@ export function ResearchPanel({
                               )}
                             >
                               <X size={15} />
-                              <span>{reviewPending ? "Applying" : reviewed ? "Reviewed" : "Reject"}</span>
+                              <span>{reviewPending ? (queueSubmission ? "Queueing" : "Applying") : reviewed ? "Reviewed" : "Reject"}</span>
                             </Button>
                           </div>
                         </div>

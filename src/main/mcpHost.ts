@@ -663,7 +663,7 @@ async function readResource(projectRoot: string, uri: string): Promise<{ content
   else if (uri === "archicode://runs") value = listRuns(bundle, undefined, 50, 50);
   else if (uri === "archicode://incidents") value = recentItems(bundle.incidents, 100);
   else if (uri === "archicode://runtime-services") value = await runtimeServicesView(projectRoot, 50);
-  else if (uri === "archicode://artifacts") value = recentItems(bundle.artifacts, 500).map(compactArtifact);
+  else if (uri === "archicode://artifacts") value = recentItems(externallyVisibleArtifacts(bundle), 500).map(compactArtifact);
   else if (uri.startsWith("archicode://flow/")) {
     const flowId = decodeURIComponent(uri.slice("archicode://flow/".length));
     value = requiredFlow(bundle, flowId);
@@ -828,7 +828,7 @@ function searchGraph(bundle: ProjectBundle, query: string, maxResults: number): 
   }
   for (const run of bundle.runs) push({ kind: "run", id: run.id, flowId: run.flowId, nodeId: run.nodeId, status: run.status, phase: run.phase, promptSummary: run.promptSummary }, `${run.id} ${run.status} ${run.phase} ${run.promptSummary} ${run.logs.map((log) => log.text).join(" ")}`);
   for (const incident of bundle.incidents) push({ kind: "incident", ...incident }, `${incident.id} ${incident.title} ${incident.description} ${incident.status} ${incident.priority}`);
-  for (const artifact of bundle.artifacts) push({ kind: "artifact", ...compactArtifact(artifact) }, `${artifact.id} ${artifact.title} ${artifact.summary ?? ""} ${artifact.path} ${artifact.type}`);
+  for (const artifact of externallyVisibleArtifacts(bundle)) push({ kind: "artifact", ...compactArtifact(artifact) }, `${artifact.id} ${artifact.title} ${artifact.summary ?? ""} ${artifact.path} ${artifact.type}`);
   for (const change of bundle.graphChanges) push({ recordType: "graph-change", ...change }, `${change.id} ${change.kind} ${change.summary} ${change.status} ${change.fieldPaths.join(" ")}`);
   return results;
 }
@@ -843,7 +843,7 @@ function listRuns(bundle: ProjectBundle, status: string | undefined, maxResults:
     ...run,
     logs: run.logs.slice(-maxLogs),
     logsOmitted: Math.max(0, run.logs.length - maxLogs),
-    artifacts: bundle.artifacts.filter((artifact) => artifact.runId === run.id).map(compactArtifact)
+    artifacts: externallyVisibleArtifacts(bundle).filter((artifact) => artifact.runId === run.id).map(compactArtifact)
   }));
 }
 
@@ -852,10 +852,11 @@ function artifactPathStem(artifactPath: string): string {
 }
 
 function resolveArtifactReference(bundle: ProjectBundle, artifactId?: string, artifactPath?: string): Artifact | undefined {
+  const artifacts = externallyVisibleArtifacts(bundle);
   if (artifactId) {
-    const exact = bundle.artifacts.find((item) => item.id === artifactId);
+    const exact = artifacts.find((item) => item.id === artifactId);
     if (exact) return exact;
-    const byPath = bundle.artifacts.find((item) =>
+    const byPath = artifacts.find((item) =>
       item.path === artifactId ||
       path.basename(item.path) === artifactId ||
       artifactPathStem(item.path) === artifactId
@@ -864,7 +865,7 @@ function resolveArtifactReference(bundle: ProjectBundle, artifactId?: string, ar
   }
   if (artifactPath) {
     const normalizedPath = artifactPath.replace(/^\.\//, "");
-    return bundle.artifacts.find((item) =>
+    return artifacts.find((item) =>
       item.path === artifactPath ||
       item.path === normalizedPath ||
       path.basename(item.path) === artifactPath ||
@@ -906,8 +907,12 @@ function compactArtifact(artifact: Artifact): Record<string, unknown> {
   };
 }
 
+function externallyVisibleArtifacts(bundle: ProjectBundle): Artifact[] {
+  return bundle.artifacts.filter((artifact) => artifact.type !== "chat-artifact");
+}
+
 function notesWithAttachments(bundle: ProjectBundle, notes: Note[]): Array<Note & { attachments: Array<Record<string, unknown>> }> {
-  const artifactsById = new Map(bundle.artifacts.map((artifact) => [artifact.id, artifact]));
+  const artifactsById = new Map(externallyVisibleArtifacts(bundle).map((artifact) => [artifact.id, artifact]));
   return notes.map((note) => ({
     ...note,
     attachments: note.attachmentIds.flatMap((attachmentId) => {
@@ -927,7 +932,7 @@ function getNode(bundle: ProjectBundle, flowId: string, nodeId: string): unknown
     node,
     attachedRules: resolveNodeRules(bundle, node.ruleIds ?? []),
     notes: notesWithAttachments(bundle, notes),
-    artifacts: bundle.artifacts.filter((artifact) => artifact.nodeId === nodeId).map(compactArtifact)
+    artifacts: externallyVisibleArtifacts(bundle).filter((artifact) => artifact.nodeId === nodeId).map(compactArtifact)
   };
 }
 
@@ -1033,7 +1038,7 @@ function aboutPayload(bundle: ProjectBundle): Record<string, unknown> {
       nodeCount: bundle.flows.reduce((count, flow) => count + flow.nodes.length, 0),
       edgeCount: bundle.flows.reduce((count, flow) => count + flow.edges.length, 0),
       runCount: bundle.runs.length,
-      artifactCount: bundle.artifacts.length,
+      artifactCount: externallyVisibleArtifacts(bundle).length,
       pendingGraphChangeCount: bundle.graphChanges.filter((change) => change.status === "pending").length
     }
   };
@@ -1091,12 +1096,13 @@ function projectView(
   bundle: ProjectBundle,
   limits: { maxFlows: number; maxNodesPerFlow: number; maxNotes: number; maxRuns: number; maxArtifacts: number; maxGraphChanges: number; maxIncidents: number }
 ): Record<string, unknown> {
+  const artifacts = externallyVisibleArtifacts(bundle);
   return {
     project: bundle.project,
     flows: boundedFlows(bundle, limits.maxFlows, limits.maxNodesPerFlow),
     notes: recentItems(bundle.notes, limits.maxNotes),
     runs: listRuns(bundle, undefined, limits.maxRuns, 30),
-    artifacts: recentItems(bundle.artifacts, limits.maxArtifacts).map(compactArtifact),
+    artifacts: recentItems(artifacts, limits.maxArtifacts).map(compactArtifact),
     graphChanges: recentItems(bundle.graphChanges, limits.maxGraphChanges),
     incidents: recentItems(bundle.incidents, limits.maxIncidents),
     omitted: {
@@ -1104,7 +1110,7 @@ function projectView(
       flows: Math.max(0, bundle.flows.length - limits.maxFlows),
       nodesByFlow: Object.fromEntries(bundle.flows.slice(0, limits.maxFlows).map((flow) => [flow.id, Math.max(0, flow.nodes.length - limits.maxNodesPerFlow)])),
       runs: Math.max(0, bundle.runs.length - limits.maxRuns),
-      artifacts: Math.max(0, bundle.artifacts.length - limits.maxArtifacts),
+      artifacts: Math.max(0, artifacts.length - limits.maxArtifacts),
       graphChanges: Math.max(0, bundle.graphChanges.length - limits.maxGraphChanges),
       incidents: Math.max(0, bundle.incidents.length - limits.maxIncidents)
     }

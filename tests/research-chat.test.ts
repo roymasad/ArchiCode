@@ -2523,6 +2523,132 @@ describe("research chat workflow", () => {
     expect(loaded.flows[0]?.nodes.some((node) => node.id === "node-auto-mixed")).toBe(false);
   });
 
+  it("repairs a flow id copied into the optional AI Implement node anchor", async () => {
+    const output = JSON.stringify({
+      archicodeResearch: {
+        answer: "I can queue implementation for the main flow.",
+        summary: "Prepared a flow-wide implementation handoff.",
+        changeSet: {
+          summary: "Queue main-flow implementation",
+          operations: [{
+            kind: "start-agent-run",
+            flowId: "flow-main",
+            nodeId: "flow-main",
+            scope: {
+              kind: "flow",
+              flowId: "flow-main",
+              nodeIds: [],
+              label: "Main flow"
+            },
+            promptSummary: "Implement the main flow.",
+            allowShell: false,
+            reusableApproval: false
+          }]
+        }
+      }
+    });
+    const { projectRoot } = await setupProject(output);
+    const session = await createResearchChat({
+      projectRoot,
+      scope: { type: "flow", flowId: "flow-main" }
+    });
+    const answered = await sendResearchChatMessage({
+      projectRoot,
+      sessionId: session.id,
+      content: "Queue implementation for the main flow."
+    });
+    const assistant = answered.messages.find((message) => message.role === "assistant" && message.changeSet);
+    const operation = assistant?.changeSet?.operations[0];
+
+    expect(operation).toMatchObject({
+      kind: "start-agent-run",
+      flowId: "flow-main",
+      scope: { kind: "flow", flowId: "flow-main", nodeIds: [] }
+    });
+    expect(operation && "nodeId" in operation ? operation.nodeId : undefined).toBeUndefined();
+
+    const reviewed = await applyResearchGraphChangeSet({
+      projectRoot,
+      sessionId: answered.id,
+      messageId: assistant!.id,
+      changeSetId: assistant!.changeSet!.id,
+      decisions: [{ operationIndex: 0, decision: "accepted" }]
+    });
+    const queued = reviewed.bundle.runs.find((run) => run.promptSummary === "Implement the main flow.");
+
+    expect(reviewed.results[0]?.status).toBe("applied");
+    expect(queued?.nodeId).toBeUndefined();
+    expect(queued?.scope).toMatchObject({ kind: "flow", flowId: "flow-main", nodeIds: [] });
+    expect(reviewed.session.messages.some((message) => message.role === "system" && message.content === "Queue submission reviewed: 1 queued, 0 rejected, 0 failed.")).toBe(true);
+    const queueReport = [...reviewed.session.messages].reverse().find((message) => message.role === "assistant" && message.content.startsWith("Queue submission complete for"));
+    expect(queueReport?.content).toContain("1 queued, 0 rejected, 0 failed.");
+    expect(queueReport?.content).toContain("Queued: AI Implement for flow-main.");
+    expect(queueReport?.content).not.toContain("Graph review");
+  });
+
+  it("rechecks a copied flow id against fresh graph state when reviewing a retained card", async () => {
+    const output = JSON.stringify({
+      archicodeResearch: {
+        answer: "I can queue implementation for the retained flow card.",
+        changeSet: {
+          summary: "Queue retained flow implementation",
+          operations: [{
+            kind: "start-agent-run",
+            flowId: "flow-main",
+            nodeId: "flow-main",
+            scope: { kind: "flow", flowId: "flow-main", nodeIds: [] },
+            promptSummary: "Implement the retained main-flow card.",
+            allowShell: false,
+            reusableApproval: false
+          }]
+        }
+      }
+    });
+    const { projectRoot } = await setupProject(output);
+    const initialBundle = await loadProject(projectRoot);
+    const initialFlow = initialBundle.flows.find((flow) => flow.id === "flow-main")!;
+    const template = initialFlow.nodes[0]!;
+    await saveFlow(projectRoot, {
+      ...initialFlow,
+      nodes: [...initialFlow.nodes, {
+        ...template,
+        id: "flow-main",
+        title: "Temporary Colliding Node",
+        position: { x: template.position.x + 360, y: template.position.y }
+      }]
+    });
+
+    const session = await createResearchChat({ projectRoot, scope: { type: "flow", flowId: "flow-main" } });
+    const answered = await sendResearchChatMessage({
+      projectRoot,
+      sessionId: session.id,
+      content: "Prepare the retained flow implementation card."
+    });
+    const assistant = answered.messages.find((message) => message.role === "assistant" && message.changeSet);
+    const capturedOperation = assistant?.changeSet?.operations[0];
+    expect(capturedOperation && "nodeId" in capturedOperation ? capturedOperation.nodeId : undefined).toBe("flow-main");
+
+    const beforeReview = await loadProject(projectRoot);
+    const flowBeforeReview = beforeReview.flows.find((flow) => flow.id === "flow-main")!;
+    await saveFlow(projectRoot, {
+      ...flowBeforeReview,
+      nodes: flowBeforeReview.nodes.filter((node) => node.id !== "flow-main")
+    });
+
+    const reviewed = await applyResearchGraphChangeSet({
+      projectRoot,
+      sessionId: answered.id,
+      messageId: assistant!.id,
+      changeSetId: assistant!.changeSet!.id,
+      decisions: [{ operationIndex: 0, decision: "accepted" }]
+    });
+    const queued = reviewed.bundle.runs.find((run) => run.promptSummary === "Implement the retained main-flow card.");
+
+    expect(reviewed.results[0]?.status).toBe("applied");
+    expect(queued?.nodeId).toBeUndefined();
+    expect(queued?.scope?.kind).toBe("flow");
+  });
+
   it("passes research-authored guidance to queued AI Implement runs", async () => {
     const output = JSON.stringify({
       archicodeResearch: {
@@ -4107,6 +4233,9 @@ describe("research chat workflow", () => {
     expect(prompt).toContain("Do not infer fixed semantics from an edge label alone");
     expect(prompt).toContain("Graph relationship semantics are carried by edges");
     expect(prompt).toContain("Do not include providerId in queue action operations.");
+    expect(prompt).toContain("nodeId is optional");
+    expect(prompt).toContain("Never copy flowId into nodeId");
+    expect(prompt).toContain("never put a flow ID in nodeId");
     expect(prompt).not.toContain("\"providerId\": \"openai-compatible\"");
     expect(prompt).toContain("ask every clarification you need in the same scope-confirmation response");
     expect(prompt).toContain("affected nodes, edges, descriptions, acceptance criteria, and adjacent responsibilities");

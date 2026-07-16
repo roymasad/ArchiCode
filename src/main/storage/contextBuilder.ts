@@ -265,8 +265,10 @@ export async function buildContext(
     : [];
   const artifacts = contextSettings.includeArtifacts
     ? bundle.artifacts.filter((artifact) =>
-      (!artifact.nodeId || includedNodeIds.has(artifact.nodeId)) ||
-      (artifact.runId && relatedRuns.some((run) => run.id === artifact.runId))
+      artifact.type !== "chat-artifact" && (
+        (!artifact.nodeId || includedNodeIds.has(artifact.nodeId)) ||
+        (artifact.runId && relatedRuns.some((run) => run.id === artifact.runId))
+      )
     ).slice(-budgetPlan.artifactLimit)
     : [];
   const pendingGraphChanges = graphChangesForContext(bundle, flow, includedNodeIds, workingNodeIds, selectedNodeIds);
@@ -817,7 +819,7 @@ export async function writeContextMemory(
     ],
     decisions: activeNotes.filter((note) => note.author === "user").slice(-8).map((note) => note.body),
     openQuestions: activeNotes.filter((note) => note.kind === "llm-question").map((note) => note.body),
-    artifactIds: bundle.artifacts.slice(-10).map((artifact) => artifact.id),
+    artifactIds: bundle.artifacts.filter((artifact) => artifact.type !== "chat-artifact").slice(-10).map((artifact) => artifact.id),
     runIds: bundle.runs.slice(-8).map((run) => run.id),
     updatedAt: iso()
   });
@@ -837,7 +839,7 @@ export async function writeContextMemory(
     ],
     decisions: [],
     openQuestions: activeNotes.filter((note) => note.flowId === flow.id && note.kind === "llm-question").map((note) => note.body),
-    artifactIds: bundle.artifacts.filter((artifact) => !artifact.nodeId).slice(-8).map((artifact) => artifact.id),
+    artifactIds: bundle.artifacts.filter((artifact) => artifact.type !== "chat-artifact" && !artifact.nodeId).slice(-8).map((artifact) => artifact.id),
     runIds: bundle.runs.filter((run) => run.flowId === flow.id).slice(-8).map((run) => run.id),
     updatedAt: iso()
   });
@@ -869,7 +871,7 @@ export async function writeContextMemory(
       ],
       decisions: notes.filter((note) => note.author === "user").slice(-5).map((note) => note.body),
       openQuestions: notes.filter((note) => note.kind === "llm-question").map((note) => note.body),
-      artifactIds: bundle.artifacts.filter((artifact) => artifact.nodeId === node.id).slice(-8).map((artifact) => artifact.id),
+      artifactIds: bundle.artifacts.filter((artifact) => artifact.type !== "chat-artifact" && artifact.nodeId === node.id).slice(-8).map((artifact) => artifact.id),
       runIds: bundle.runs.filter((run) => run.nodeId === node.id).slice(-5).map((run) => run.id),
       updatedAt: iso()
     }));
