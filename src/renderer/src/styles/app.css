@@ -1871,6 +1871,26 @@ textarea {
   color: var(--success);
 }
 
+.help-footer-link {
+  display: flex;
+}
+
+.help-footer-link a {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  color: var(--accent-strong);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+}
+
+.help-footer-link a:hover,
+.help-footer-link a:focus-visible {
+  text-decoration: underline;
+}
+
 .help-shortcuts-live {
   display: grid;
   gap: 10px;

@@ -1,8 +1,11 @@
-import { BookOpen, CheckCircle2, FolderOpen, GitBranch, Keyboard, Lock, MessageSquare, Play, SlidersHorizontal, Sparkles } from "lucide-react";
+import { BookOpen, CheckCircle2, ExternalLink, FolderOpen, GitBranch, Keyboard, Lock, MessageSquare, Play, SlidersHorizontal, Sparkles } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { Button, DialogContent, DialogRoot, DialogTrigger, ScrollArea } from "./ui";
 import { useArchicodeStore } from "../store/useArchicodeStore";
 import { ACTION_DESCRIPTORS, formatChord, type ActionId } from "../utils/keybindings";
+import { openRuntimeUrl } from "./projectToolbarShared";
+
+const ARCHICODE_WEBSITE_URL = "https://archicode.pixel-hat.com";
 
 const helpLiveBindingOrder: ActionId[] = [
   "canvas.addNode",
@@ -195,6 +198,19 @@ export function HelpPage({ trigger }: { trigger?: ReactNode }) {
                 The intended rhythm is: model the system visually, clarify uncertainty on the relevant nodes, run focused agent work, verify the result, then keep the graph updated as the shared source of project intent.
                 If code changed outside ArchiCode, ask Archi to sync graph to code; it should first ask whether to compare uncommitted changes, changes since a commit you name, or the full codebase.
               </p>
+            </section>
+
+            <section className="help-footer-link" aria-label="ArchiCode website">
+              <a
+                href={ARCHICODE_WEBSITE_URL}
+                onClick={(event) => {
+                  event.preventDefault();
+                  openRuntimeUrl(ARCHICODE_WEBSITE_URL);
+                }}
+              >
+                <ExternalLink size={14} aria-hidden="true" />
+                <span>archicode.pixel-hat.com</span>
+              </a>
             </section>
           </div>
         </ScrollArea>

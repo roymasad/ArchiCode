@@ -194,6 +194,8 @@ function installAppBranding(): void {
     applicationName: APP_NAME,
     applicationVersion: app.getVersion(),
     version: app.getVersion(),
+    website: "https://archicode.pixel-hat.com",
+    credits: "https://archicode.pixel-hat.com",
     iconPath: appIconPath()
   });
 }
