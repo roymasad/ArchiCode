@@ -1,6 +1,6 @@
 import type { LlmPhase, PhaseModelPolicy, ProjectSettings } from "../../shared/schema";
 import type { ProviderMcpTool } from "../mcp";
-import { type Provider, type ProviderCallOptions, type ProviderImageAttachment, type RawLlmUsage, type ResearchProviderContinuation, type ResearchProviderOptions, appendTextAttachmentBlock, createConsecutiveToolCallLoopDetector, createUsageAccumulator, extractContextWindowFromModels, extractModelCapabilitiesFromModels, extractModelIdsFromModels, extractionSystemPrompt, imageAttachmentText, imageAttachmentsForPrompt, imageLabelText, inferModelCapabilityProfile, orchestratorSystemPrompt, phaseHandoffInstructions, phasePolicyText, reasoningEffort, researchCurrentMessageText, researchHistoryThread, researchStableContextText, researchSystemInstructions, resolveModelId } from "../providers";
+import { type Provider, type ProviderCallOptions, type ProviderImageAttachment, type RawLlmUsage, type ResearchProviderContinuation, type ResearchProviderOptions, appendTextAttachmentBlock, applyOpenRouterSessionId, createConsecutiveToolCallLoopDetector, createUsageAccumulator, extractContextWindowFromModels, extractModelCapabilitiesFromModels, extractModelIdsFromModels, extractionSystemPrompt, imageAttachmentsForPrompt, imageLabelText, inferModelCapabilityProfile, isOpenRouterProvider, orchestratorSystemPrompt, orchestratorUserPromptParts, orchestratorUserPromptText, phasePolicyText, reasoningEffort, researchCurrentMessageText, researchHistoryThread, researchStableContextText, researchSystemInstructions, resolveModelId } from "../providers";
 import { attachProviderContinuation } from "./anthropic";
 
 export const openAiHealthProbeMaxOutputTokens = 16;
@@ -185,17 +185,22 @@ export async function callOpenAIChatCompatible(
     const baseUrl = provider.baseUrl ?? "https://api.openai.com/v1";
     const profile = inferModelCapabilityProfile(provider, policy.modelOverride);
     const body = buildOpenAICompatibleBody(provider, contextText, promptSummary, webSearchEnabled, phase, policy, profile, options.selectedSkillsPrompt, options.imageAttachments, options.bareExtraction, options.structuredSourceHandoff);
+    applyOpenRouterSessionId(body, provider, options.cacheSessionId);
     const imageContent = profile.supportsImageInput ? await openAiImageContent(options.imageAttachments) : [];
-    if (imageContent.length) {
+    if (imageContent.length || options.textAttachments?.length) {
       const messages = body.messages as Array<Record<string, unknown>>;
       const userMessage = messages.find((message) => message.role === "user");
+      // Attachments land on the trailing (volatile) text block so a cached
+      // stable block stays byte-identical across the phases of a run.
       if (typeof userMessage?.content === "string") {
-        userMessage.content = [{ type: "text", text: await appendTextAttachmentBlock(userMessage.content, options.textAttachments) }, ...imageContent];
+        const withText = await appendTextAttachmentBlock(userMessage.content, options.textAttachments);
+        userMessage.content = imageContent.length ? [{ type: "text", text: withText }, ...imageContent] : withText;
+      } else if (Array.isArray(userMessage?.content)) {
+        const blocks = userMessage.content as Array<Record<string, unknown>>;
+        const lastText = [...blocks].reverse().find((block) => block.type === "text" && typeof block.text === "string");
+        if (lastText) lastText.text = await appendTextAttachmentBlock(lastText.text as string, options.textAttachments);
+        blocks.push(...imageContent);
       }
-    } else if (options.textAttachments?.length) {
-      const messages = body.messages as Array<Record<string, unknown>>;
-      const userMessage = messages.find((message) => message.role === "user");
-      if (typeof userMessage?.content === "string") userMessage.content = await appendTextAttachmentBlock(userMessage.content, options.textAttachments);
     }
     const modelId = resolveModelId(provider, policy);
     const acc = createUsageAccumulator();
@@ -263,7 +268,7 @@ export async function callOpenAIChatCompatible(
         const providerToolName = toolCall.function?.name;
         if (!providerToolName) continue;
         const argumentsJson = toolCall.function?.arguments ?? "{}";
-        toolLoopDetector.record(providerToolName, argumentsJson);
+        const loopWarning = toolLoopDetector.record(providerToolName, argumentsJson);
         const result = await options.callMcpTool({
           providerToolName,
           argumentsJson
@@ -272,7 +277,7 @@ export async function callOpenAIChatCompatible(
         messages.push({
           role: "tool",
           tool_call_id: toolCall.id,
-          content: result
+          content: loopWarning ? `${result}\n\n${loopWarning}` : result
         });
       }
       if (options.shouldCompleteToolBatch?.(executedToolCalls)) {
@@ -301,6 +306,7 @@ export async function callOpenAIResponsesCompatible(
   const baseUrl = provider.baseUrl ?? "https://api.openai.com/v1";
   const profile = inferModelCapabilityProfile(provider, policy.modelOverride);
   const body = buildOpenAIResponsesBody(provider, contextText, promptSummary, webSearchEnabled, phase, policy, profile, options.selectedSkillsPrompt, options.imageAttachments, options.bareExtraction, options.structuredSourceHandoff);
+  applyOpenRouterSessionId(body, provider, options.cacheSessionId);
   const imageContent = profile.supportsImageInput ? await openAiResponsesImageContent(options.imageAttachments) : [];
   if (imageContent.length && typeof body.input === "string") {
     body.input = [{
@@ -335,6 +341,7 @@ export async function callOpenAIResearch(
   }
   const baseUrl = provider.baseUrl ?? "https://api.openai.com/v1";
   const body = await buildOpenAIResearchResponsesBody(provider, userMessage, options, policy);
+  applyOpenRouterSessionId(body, provider, options.cacheSessionId);
   const resume = options.resumeContinuation;
   if (resume?.transport === "openai-responses") {
     // Resume from the server-side response instead of re-generating: resend the
@@ -400,6 +407,7 @@ export async function callOpenAIResearchChatCompatible(
     const baseUrl = provider.baseUrl ?? "https://api.openai.com/v1";
     const profile = inferModelCapabilityProfile(provider, policy.modelOverride);
     const body = await buildOpenAIResearchChatCompletionsBody(provider, userMessage, options, policy);
+    applyOpenRouterSessionId(body, provider, options.cacheSessionId);
     const imageContent = profile.supportsImageInput ? await openAiImageContent(options.imageAttachments) : [];
     const messages = body.messages as Array<Record<string, unknown>>;
     // Attach image bytes to the current (last) user turn. Text attachments are
@@ -438,7 +446,7 @@ export async function callOpenAIResearchChatCompatible(
           function: { name: toolCall.name, arguments: toolCall.arguments }
         }))
       };
-      result.toolCalls.forEach((toolCall) => toolLoopDetector.record(toolCall.name, toolCall.arguments || "{}"));
+      const loopWarnings = result.toolCalls.map((toolCall) => toolLoopDetector.record(toolCall.name, toolCall.arguments || "{}"));
       // Execute all tool calls concurrently, settling so an approval-required
       // tool does not discard results of tools that already completed.
       const settled = await Promise.allSettled(result.toolCalls.map((toolCall) =>
@@ -448,8 +456,9 @@ export async function callOpenAIResearchChatCompatible(
       let firstError: unknown;
       settled.forEach((outcome, index) => {
         const toolCall = result.toolCalls[index]!;
+        const loopWarning = loopWarnings[index];
         if (outcome.status === "fulfilled") {
-          toolMessages.push({ role: "tool", tool_call_id: toolCall.id, content: outcome.value });
+          toolMessages.push({ role: "tool", tool_call_id: toolCall.id, content: loopWarning ? `${outcome.value}\n\n${loopWarning}` : outcome.value });
         } else if (options.isApprovalError?.(outcome.reason) && !pendingApproval) {
           pendingApproval = { toolCall, error: outcome.reason };
         } else if (firstError === undefined) {
@@ -599,7 +608,7 @@ export async function callOpenAIResponsesToolLoop(
       providerToolName: toolCall.name as string,
       argumentsJson: toolCall.arguments ?? "{}"
     })));
-    functionCalls.forEach((toolCall) => toolLoopDetector.record(toolCall.name!, toolCall.arguments ?? "{}"));
+    const loopWarnings = functionCalls.map((toolCall) => toolLoopDetector.record(toolCall.name!, toolCall.arguments ?? "{}"));
     // Capture/execute every tool call, settling so an approval-required tool
     // does not discard results of tools that already completed.
     const settled = await Promise.allSettled(functionCalls.map((toolCall) => options.callMcpTool!({
@@ -611,8 +620,9 @@ export async function callOpenAIResponsesToolLoop(
     let firstError: unknown;
     settled.forEach((outcome, index) => {
       const toolCall = functionCalls[index]!;
+      const loopWarning = loopWarnings[index];
       if (outcome.status === "fulfilled") {
-        toolOutputs.push({ type: "function_call_output", call_id: toolCall.call_id, output: outcome.value });
+        toolOutputs.push({ type: "function_call_output", call_id: toolCall.call_id, output: loopWarning ? `${outcome.value}\n\n${loopWarning}` : outcome.value });
       } else if (options.isApprovalError?.(outcome.reason) && !pendingApproval) {
         pendingApproval = { callId: toolCall.call_id as string, name: toolCall.name as string, args: toolCall.arguments ?? "{}", error: outcome.reason };
       } else if (firstError === undefined) {
@@ -1071,12 +1081,18 @@ export async function buildOpenAIResearchChatCompletionsBody(
   const currentText = await researchCurrentMessageText(userMessage, options);
   // Stable system first (instructions + policy + scoped context) for automatic
   // prefix caching, then prior turns as real messages, then the current turn.
+  const systemText = [researchSystemInstructions(options), phasePolicyText("brainstorming", policy, profile), researchStableContextText(options)]
+    .filter((part) => part.trim())
+    .join("\n\n");
   const messages: Array<Record<string, unknown>> = [
     {
       role: "system",
-      content: [researchSystemInstructions(options), phasePolicyText("brainstorming", policy, profile), researchStableContextText(options)]
-        .filter((part) => part.trim())
-        .join("\n\n")
+      // OpenRouter forwards the cache_control marker to explicit-caching
+      // upstreams (Anthropic, Alibaba-served Qwen); other servers may reject
+      // the field, so they keep the plain string.
+      content: isOpenRouterProvider(provider)
+        ? [{ type: "text", text: systemText, cache_control: { type: "ephemeral" } }]
+        : systemText
     },
     ...researchHistoryThread(userMessage, options).map((turn) => ({ role: turn.role, content: turn.text as unknown }))
   ];
@@ -1150,29 +1166,41 @@ export function buildOpenAICompatibleBody(
           { role: "system", content: extractionSystemPrompt },
           { role: "user", content: contextText }
         ]
-      : [
-      {
-        role: "system",
-        content: orchestratorSystemPrompt
-      },
-      {
-        role: "user",
-        content: [
-          `Prompt summary: ${promptSummary}`,
-          `ArchiCode phase: ${phase}.`,
-          phaseHandoffInstructions(phase, structuredSourceHandoff),
-          phasePolicyText(phase, policy, profile),
-          selectedSkillsPrompt.trim(),
-          imageAttachmentText(imageAttachments),
-          webSearchEnabled
-            ? "Web access is enabled. Use any Harness-Fed Web Context in the prompt as source material. If current external information is still required during planning, ask a focused llm-question naming the missing source or URL; during coding/debugging, fail with a clear run-level reason."
-            : "Web search is disabled for this run.",
-          "",
-          "Project JSON context:",
-          contextText
-        ].join("\n")
+      : ((): Array<Record<string, unknown>> => {
+      const parts = orchestratorUserPromptParts(
+        contextText,
+        promptSummary,
+        webSearchEnabled
+          ? "Web access is enabled. Use any Harness-Fed Web Context in the prompt as source material. If current external information is still required during planning, ask a focused llm-question naming the missing source or URL; during coding/debugging, fail with a clear run-level reason."
+          : "Web search is disabled for this run.",
+        phase,
+        policy,
+        profile,
+        selectedSkillsPrompt,
+        imageAttachments,
+        structuredSourceHandoff
+      );
+      // OpenRouter forwards Anthropic-style cache_control markers to upstreams
+      // that only cache explicitly (Anthropic, Alibaba-served Qwen). Other
+      // OpenAI-compatible servers may reject the field, so they get the plain
+      // joined string (implicit prefix caching needs no markers).
+      if (!isOpenRouterProvider(provider)) {
+        return [
+          { role: "system", content: orchestratorSystemPrompt },
+          { role: "user", content: `${parts.stable}\n${parts.volatile}` }
+        ];
       }
-    ]
+      return [
+        { role: "system", content: [{ type: "text", text: orchestratorSystemPrompt, cache_control: { type: "ephemeral" } }] },
+        {
+          role: "user",
+          content: [
+            { type: "text", text: parts.stable, cache_control: { type: "ephemeral" } },
+            { type: "text", text: parts.volatile }
+          ]
+        }
+      ];
+    })()
   };
   if (profile.supportsTemperature && policy.temperature !== undefined) body.temperature = policy.temperature;
   addOpenAiTokenLimit(body, String(body.model ?? ""), profile.supportsMaxOutputTokens ? policy.maxOutputTokens : undefined);
@@ -1198,20 +1226,19 @@ export function buildOpenAIResponsesBody(
   const body: Record<string, unknown> = {
     model,
     instructions: bareExtraction ? extractionSystemPrompt : orchestratorSystemPrompt,
-    input: bareExtraction ? contextText : [
-      `Prompt summary: ${promptSummary}`,
-      `ArchiCode phase: ${phase}.`,
-      phaseHandoffInstructions(phase, structuredSourceHandoff),
-      phasePolicyText(phase, policy, profile),
-      selectedSkillsPrompt.trim(),
-      imageAttachmentText(imageAttachments),
+    input: bareExtraction ? contextText : orchestratorUserPromptText(
+      contextText,
+      promptSummary,
       webSearchEnabled
         ? "Web access is enabled. Use available web search tooling when current external information is required."
         : "Web search is disabled for this run.",
-      "",
-      "Project JSON context:",
-      contextText
-    ].join("\n")
+      phase,
+      policy,
+      profile,
+      selectedSkillsPrompt,
+      imageAttachments,
+      structuredSourceHandoff
+    )
   };
   addOpenAiResponsesVerbosity(body, provider, model);
   if (webSearchEnabled) body.tools = [{ type: "web_search" }];

@@ -1104,6 +1104,24 @@ export const legacyPhaseModelPolicies = [
     verifying: { temperature: 0.0, reasoningMode: "low", maxOutputTokens: 3000, enabledTools: [] },
     summarizing: { temperature: 0.1, reasoningMode: "low", maxOutputTokens: 4000, enabledTools: [] },
     brainstorming: { temperature: 0.6, reasoningMode: "medium", maxOutputTokens: 8000, enabledTools: [] }
+  },
+  {
+    planning: { temperature: 0.2, reasoningMode: "high", maxOutputTokens: 16000, enabledTools: [] },
+    coding: { temperature: 0.1, reasoningMode: "medium", maxOutputTokens: 64000, enabledTools: [] },
+    debugging: { temperature: 0.0, reasoningMode: "high", maxOutputTokens: 32000, enabledTools: [] },
+    review: { temperature: 0.1, reasoningMode: "medium", maxOutputTokens: 12000, enabledTools: [] },
+    verifying: { temperature: 0.0, reasoningMode: "low", maxOutputTokens: 4000, enabledTools: [] },
+    summarizing: { temperature: 0.1, reasoningMode: "low", maxOutputTokens: 4000, enabledTools: [] },
+    brainstorming: { temperature: 0.6, reasoningMode: "medium", maxOutputTokens: 12000, enabledTools: [] }
+  },
+  {
+    planning: { temperature: 0.2, reasoningMode: "high", maxOutputTokens: 16000, enabledTools: [] },
+    coding: { temperature: 0.1, reasoningMode: "medium", maxOutputTokens: 64000, enabledTools: [] },
+    debugging: { temperature: 0.0, reasoningMode: "high", maxOutputTokens: 32000, enabledTools: [] },
+    review: { temperature: 0.1, reasoningMode: "medium", maxOutputTokens: 12000, enabledTools: [] },
+    verifying: { temperature: 0.0, reasoningMode: "low", maxOutputTokens: 4000, enabledTools: [] },
+    summarizing: { temperature: 0.1, reasoningMode: "low", maxOutputTokens: 4000, enabledTools: [] },
+    brainstorming: { temperature: 0.6, reasoningMode: "medium", maxOutputTokens: 24000, enabledTools: [] }
   }
 ] as const;
 

@@ -43,10 +43,10 @@ import {
   X
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type WheelEvent } from "react";
-import { defaultPhaseModelPolicies, runTargetProfileSchema, type DebugIncident, type LlmPhase, type ProjectSettings, type RunEffort, type RunScope, type RuntimeService, type SpeechSettings, type TtsSettings } from "@shared/schema";
+import { defaultPhaseModelPolicies, defaultSubagentModelPolicies, runTargetProfileSchema, type DebugIncident, type LlmPhase, type PhaseModelPolicy, type ProjectSettings, type RunEffort, type RunScope, type RuntimeService, type SpeechSettings, type SubagentModelProfile, type TtsSettings } from "@shared/schema";
 import { deriveContextBudgetPlan } from "@shared/contextBudget";
 import { isSubflowIgnored } from "@shared/graph";
-import { providerHasCompletedCapabilityCheck, providerImageInputSupportStatus } from "@shared/providerCapabilities";
+import { providerHasCompletedCapabilityCheck, providerImageInputSupportStatus, providerModelOutputTokenLimit } from "@shared/providerCapabilities";
 import { researchPersonalities, type GlobalResearchPersonality, type GlobalResearchVerbosity } from "@shared/researchPersonality";
 import { runtimeInsight } from "@shared/runtimeInsights";
 import { stripAnsiEscapes } from "@shared/terminalText";
@@ -63,12 +63,14 @@ import {
   duplicateProviderProfile,
   isSeedProvider,
   mergeProviderCapabilityMetadata,
+  normalizeProviderModelSelections,
   outputVerbosityOptions,
   providerApiKeyValue,
   providersNeedingAutoCheckOnSave,
   providerKindOptions,
   type ProviderKind
 } from "../utils/providerProfiles";
+import { PROVIDER_DEFAULT_MODEL_VALUE } from "../utils/researchModels";
 import { PatchReviewPanel } from "./PatchReviewPanel";
 import { HelpPage } from "./HelpPage";
 import { GitPanel } from "./GitPanel";
@@ -105,6 +107,27 @@ import {
 
 
 import { RuntimeUrlLinks, contextBudgetSourceLabel, contextLabel, defaultSpeechSettings, defaultTtsSettings, encodeWav, formatBytes, formatTokenCount, isMacRuntime, mcpRegistryCategoryLabel, mcpRegistryCategoryOptions, mcpRegistryInitials, mcpRegistrySortOptions, modelHint, modelOptionLabel, modelOptionsForProvider, normalizeSpeechLanguage, openAiEndpointHint, openAiEndpointLabel, openRuntimeUrl, phaseLabels, policyPhases, projectSettingsTabs, providerCheckHint, providerDescription, providerSupportsImages, renderRuntimeInsightDetail, renderRuntimeTextWithLinks, runtimeCwdLabel, runtimeUrls, selectedModelImageHint, speechLanguageOptions, mergeAudioChunks } from "./projectToolbarShared";
+
+const subagentProfiles: SubagentModelProfile[] = ["picasso", "sherlock", "solomon"];
+const subagentProfileLabels: Record<SubagentModelProfile, string> = {
+  picasso: "Picasso",
+  sherlock: "Sherlock",
+  solomon: "Solomon"
+};
+const subagentProfileDescriptions: Record<SubagentModelProfile, string> = {
+  picasso: "Used for substantial graph design, graph assessment, and reconciliation proposals. Picasso never applies graph changes directly.",
+  sherlock: "Used for isolated, read-only project, codebase, topic, and web investigations that return a compact evidence dossier.",
+  solomon: "Used to investigate and resolve Git merge conflicts in an isolated merge-resolution run."
+};
+const phaseProfileDescriptions: Record<LlmPhase, string> = {
+  planning: "Used to understand implementation scope and prepare the plan before coding begins.",
+  coding: "Used by implementation runs while creating and updating project source files.",
+  debugging: "Used to investigate failures and prepare focused source repairs.",
+  review: "Used to review build and runtime results, logs, and implementation outcomes.",
+  verifying: "Used for final verification decisions after implementation or debugging work.",
+  summarizing: "Used to compact long run and chat context into a smaller durable summary.",
+  brainstorming: "Used by the main Archi Research chat. A chat-specific model selection overrides this model choice for that chat."
+};
 
 export function ProjectToolbar({
   onResetLayout,
@@ -302,6 +325,7 @@ export function ProjectToolbar({
 
   useEffect(() => {
     if (!settingsOpen) return;
+    if (!window.archicode?.getGlobalResearchPersonality || !window.archicode?.getGlobalResearchVerbosity) return;
     let cancelled = false;
     void (async () => {
       const [nextPersonality, nextVerbosity] = await Promise.all([
@@ -1122,15 +1146,7 @@ export function ProjectToolbar({
 
   useEffect(() => {
     if (!draft) return;
-    const nextProviders = draft.providers.map((provider) => {
-      if (!provider.detectedAvailableModels.length) return provider;
-      const options = modelOptionsForProvider(provider);
-      if (provider.model && options.includes(provider.model)) return provider;
-      return {
-        ...provider,
-        model: options[0]
-      };
-    });
+    const nextProviders = draft.providers.map(normalizeProviderModelSelections);
     if (JSON.stringify(nextProviders) !== JSON.stringify(draft.providers)) {
       updateDraft({ providers: nextProviders });
     }
@@ -1269,6 +1285,137 @@ export function ProjectToolbar({
       }
     });
   };
+
+  const updateProviderSubagentPolicy = (
+    providerId: string,
+    profile: SubagentModelProfile,
+    patch: Partial<PhaseModelPolicy>
+  ) => {
+    const provider = draft?.providers.find((item) => item.id === providerId);
+    if (!provider) return;
+    updateProvider(providerId, {
+      subagentModelPolicies: {
+        ...(provider.subagentModelPolicies ?? defaultSubagentModelPolicies),
+        [profile]: {
+          ...(provider.subagentModelPolicies?.[profile] ?? defaultSubagentModelPolicies[profile]),
+          ...patch
+        }
+      }
+    });
+  };
+
+  const profileModelOptions = (
+    provider: ProjectSettings["providers"][number],
+    policy: PhaseModelPolicy
+  ) => {
+    const providerModel = provider.model?.trim();
+    const values = [policy.modelOverride?.trim(), providerModel, ...modelOptionsForProvider(provider)].filter(Boolean) as string[];
+    return [
+      {
+        value: PROVIDER_DEFAULT_MODEL_VALUE,
+        label: providerModel ? `Default · ${providerModel}` : "Default"
+      },
+      ...Array.from(new Set(values)).map((model) => ({
+        value: model,
+        label: modelOptionLabel(provider, model)
+      }))
+    ];
+  };
+
+  const profileOutputLimitHint = (
+    provider: ProjectSettings["providers"][number],
+    policy: PhaseModelPolicy
+  ): string => {
+    const phaseCeiling = policy.maxOutputTokens;
+    if (provider.kind === "codex-local" || provider.kind === "claude-local") {
+      return phaseCeiling
+        ? `Advisory ceiling: ${formatTokenCount(phaseCeiling)}. The local CLI controls its effective output limit.`
+        : "The local CLI controls its effective output limit.";
+    }
+    if (provider.kind === "offline-manual") return "No model output is generated by this provider.";
+    const modelMaximum = providerModelOutputTokenLimit(provider, policy.modelOverride);
+    if (!modelMaximum) {
+      return phaseCeiling
+        ? `Effective ceiling: up to ${formatTokenCount(phaseCeiling)}. Model maximum unknown.`
+        : "Provider default. Model maximum unknown.";
+    }
+    const effective = phaseCeiling ? Math.min(phaseCeiling, modelMaximum) : modelMaximum;
+    return `Effective ceiling: ${formatTokenCount(effective)} · Model maximum: ${formatTokenCount(modelMaximum)} (provider metadata).`;
+  };
+
+  const renderModelPolicyCard = (
+    key: string,
+    title: string,
+    description: string,
+    policy: PhaseModelPolicy,
+    onChange: (patch: Partial<PhaseModelPolicy>) => void
+  ) => enabledProvider ? (
+    <article key={key} className="provider-card" data-llm-profile={key}>
+      <div className="provider-card-head">
+        <span className="llm-profile-card-title">
+          <span className="llm-profile-card-heading">
+            <strong>{title}</strong>
+            <Tooltip content={description}>
+              <span className="llm-profile-card-help" role="img" tabIndex={0} aria-label={`About ${title}`}>
+                <HelpCircle size={14} />
+              </span>
+            </Tooltip>
+          </span>
+        </span>
+        <Badge tone={policy.reasoningMode === "high" ? "accent" : "neutral"}>{policy.reasoningMode} reasoning</Badge>
+      </div>
+      <div className="settings-two-col">
+        <Field label="Temperature">
+          <TextInput
+            type="number"
+            min={0}
+            max={2}
+            step={0.1}
+            value={policy.temperature ?? ""}
+            onChange={(event) => onChange({
+              temperature: event.target.value === "" ? undefined : Number(event.target.value)
+            })}
+          />
+        </Field>
+        <Field label="Reasoning">
+          <Select
+            value={policy.reasoningMode}
+            onValueChange={(value) => onChange({ reasoningMode: value as PhaseModelPolicy["reasoningMode"] })}
+            options={[
+              { value: "off", label: "off" },
+              { value: "low", label: "low" },
+              { value: "medium", label: "medium" },
+              { value: "high", label: "high" }
+            ]}
+          />
+        </Field>
+        <Field label="Max output" hint={profileOutputLimitHint(enabledProvider, policy)}>
+          <TextInput
+            type="number"
+            min={256}
+            value={policy.maxOutputTokens ?? ""}
+            onChange={(event) => onChange({
+              maxOutputTokens: event.target.value === "" ? undefined : Number(event.target.value)
+            })}
+          />
+        </Field>
+        <Field
+          label="Model override"
+          hint={`Stored for ${enabledProvider.label}. Provider default inherits its current model${enabledProvider.model?.trim() ? ` (${enabledProvider.model.trim()})` : ""}.`}
+        >
+          <ModelCombobox
+            value={policy.modelOverride?.trim() || PROVIDER_DEFAULT_MODEL_VALUE}
+            placeholder="Provider default"
+            options={profileModelOptions(enabledProvider, policy)}
+            catalogMode
+            onValueChange={(value) => onChange({
+              modelOverride: value === PROVIDER_DEFAULT_MODEL_VALUE ? undefined : value
+            })}
+          />
+        </Field>
+      </div>
+    </article>
+  ) : null;
 
   const toggleSkill = (skillId: string, enabled: boolean) => {
     if (!draft) return;
@@ -3129,66 +3276,31 @@ export function ProjectToolbar({
 
               <TabsContent value="policy" className="settings-tab-content">
                 {enabledProvider ? (
-                  <div className="provider-editor-list">
-                    {policyPhases.map((phase) => {
-                      const policy = enabledProvider.phaseModelPolicies?.[phase] ?? defaultPhaseModelPolicies[phase];
-                      return (
-                        <article key={phase} className="provider-card">
-                          <div className="provider-card-head">
-                            <strong>{phaseLabels[phase]}</strong>
-                            <Badge tone={policy.reasoningMode === "high" ? "accent" : "neutral"}>{policy.reasoningMode} reasoning</Badge>
-                          </div>
-                          <div className="settings-two-col">
-                            <Field label="Temperature">
-                              <TextInput
-                                type="number"
-                                min={0}
-                                max={2}
-                                step={0.1}
-                                value={policy.temperature ?? ""}
-                                onChange={(event) => updateProviderPhasePolicy(enabledProvider.id, phase, {
-                                  temperature: event.target.value === "" ? undefined : Number(event.target.value)
-                                })}
-                              />
-                            </Field>
-                            <Field label="Reasoning">
-                              <Select
-                                value={policy.reasoningMode}
-                                onValueChange={(value) => updateProviderPhasePolicy(enabledProvider.id, phase, {
-                                  reasoningMode: value as ProjectSettings["providers"][number]["phaseModelPolicies"][LlmPhase]["reasoningMode"]
-                                })}
-                                options={[
-                                  { value: "off", label: "off" },
-                                  { value: "low", label: "low" },
-                                  { value: "medium", label: "medium" },
-                                  { value: "high", label: "high" }
-                                ]}
-                              />
-                            </Field>
-                            <Field label="Max output">
-                              <TextInput
-                                type="number"
-                                min={256}
-                                value={policy.maxOutputTokens ?? ""}
-                                onChange={(event) => updateProviderPhasePolicy(enabledProvider.id, phase, {
-                                  maxOutputTokens: event.target.value === "" ? undefined : Number(event.target.value)
-                                })}
-                              />
-                            </Field>
-                            <Field label="Model override">
-                              <TextInput
-                                value={policy.modelOverride ?? ""}
-                                placeholder="Use provider model"
-                                onChange={(event) => updateProviderPhasePolicy(enabledProvider.id, phase, {
-                                  modelOverride: event.target.value || undefined
-                                })}
-                              />
-                            </Field>
-                          </div>
-                        </article>
-                      );
-                    })}
-                  </div>
+                  <>
+                    <p className="settings-note llm-profile-provider-note">
+                      Editing profiles for <strong>{enabledProvider.label}</strong>. Model choices are remembered separately for each provider card.
+                    </p>
+                    <div className="provider-editor-list llm-profile-list">
+                      {policyPhases.map((phase) => renderModelPolicyCard(
+                        phase,
+                        phaseLabels[phase],
+                        phaseProfileDescriptions[phase],
+                        enabledProvider.phaseModelPolicies?.[phase] ?? defaultPhaseModelPolicies[phase],
+                        (patch) => updateProviderPhasePolicy(enabledProvider.id, phase, patch)
+                      ))}
+                      <div className="llm-profile-section-heading">
+                        <strong>Subagents</strong>
+                        <small>Independent profiles; Default inherits the selected provider model, including a chat-specific model when spawned from that chat.</small>
+                      </div>
+                      {subagentProfiles.map((profile) => renderModelPolicyCard(
+                        `subagent-${profile}`,
+                        subagentProfileLabels[profile],
+                        subagentProfileDescriptions[profile],
+                        enabledProvider.subagentModelPolicies?.[profile] ?? defaultSubagentModelPolicies[profile],
+                        (patch) => updateProviderSubagentPolicy(enabledProvider.id, profile, patch)
+                      ))}
+                    </div>
+                  </>
                 ) : (
                   <small>Select an LLM provider to edit phase policies.</small>
                 )}

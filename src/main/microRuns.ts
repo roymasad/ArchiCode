@@ -1,9 +1,8 @@
 import { exec, execFile } from "child_process";
 import { promisify } from "util";
 import type { ProviderMcpTool } from "./mcp";
-import { callResearchProvider, type ResearchProviderOptions } from "./providers";
-import type { ProjectBundle, ProjectSettings, LlmUsage } from "@shared/schema";
-import { MicroRunKind, MicroRunStatus } from "@shared/schema";
+import { availableProviderModelOverride, callResearchProvider, type ResearchProviderOptions } from "./providers";
+import { defaultSubagentModelPolicies, type LlmUsage, type MicroRunKind, type MicroRunStatus, type ProjectBundle, type ProjectSettings, type SubagentModelProfile } from "../shared/schema";
 import { redactSensitiveText } from "../shared/redaction";
 
 const execAsync = promisify(exec);
@@ -104,6 +103,31 @@ export type MicroRunContext = {
 
 const microRunRegistry = new Map<MicroRunKind, MicroRunAgent>();
 
+const microRunSubagentProfiles: Partial<Record<MicroRunKind, SubagentModelProfile>> = {
+  "graph-reconciliation": "picasso",
+  "sherlock-research": "sherlock",
+  "merge-resolution": "solomon"
+};
+
+export function resolveMicroRunProvider(provider: Provider, kind: MicroRunKind): Provider {
+  const profile = microRunSubagentProfiles[kind];
+  if (!profile) return provider;
+  const configuredPolicy = {
+    ...defaultSubagentModelPolicies[profile],
+    ...(provider.subagentModelPolicies?.[profile] ?? {})
+  };
+  return {
+    ...provider,
+    phaseModelPolicies: {
+      ...provider.phaseModelPolicies,
+      brainstorming: {
+        ...configuredPolicy,
+        modelOverride: availableProviderModelOverride(provider, configuredPolicy.modelOverride)
+      }
+    }
+  };
+}
+
 export function registerMicroRunAgent(agent: MicroRunAgent): void {
   microRunRegistry.set(agent.kind, agent);
 }
@@ -170,6 +194,7 @@ export async function executeMicroRun(
       createdAt: new Date().toISOString()
     };
   }
+  const microRunProvider = resolveMicroRunProvider(provider, kind);
 
   const unresolvedClarifications: string[] = [];
   const onClarification: MicroRunClarificationHandler = options?.onClarification
@@ -181,7 +206,7 @@ export async function executeMicroRun(
   const context: MicroRunContext = {
     projectRoot,
     bundle,
-    provider,
+    provider: microRunProvider,
     onClarification,
     onProgress: options?.onProgress,
     signal: options?.signal
@@ -280,7 +305,7 @@ export async function executeMicroRun(
     const runProvider = async (message: string): Promise<string> => {
       for (let attempt = 0; attempt < 2; attempt += 1) {
         try {
-          return await callResearchProvider(provider, message, providerOptions);
+          return await callResearchProvider(microRunProvider, message, providerOptions);
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           if (attempt === 0 && isTransientMicroRunFailure(message)) {

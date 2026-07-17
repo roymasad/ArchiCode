@@ -394,6 +394,95 @@ describe("source file proposal workflow", () => {
     }));
   });
 
+  it("pauses an API run on a high-risk console command and resumes it after user approval", async () => {
+    process.env.ARCHICODE_TEST_OPENAI_KEY = "test-key";
+    let codingCalls = 0;
+    const codingBodies: string[] = [];
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
+      const bodyText = String(init?.body ?? "{}");
+      if (bodyText.includes("ArchiCode phase: coding")) {
+        codingCalls += 1;
+        codingBodies.push(bodyText);
+        if (codingCalls === 1) {
+          // First coding turn asks for a high-risk (interpreter) console command.
+          return new Response(JSON.stringify({
+            choices: [{
+              message: {
+                content: null,
+                tool_calls: [{
+                  id: "chat-risky-command",
+                  type: "function",
+                  function: { name: "archicode_console_run_command", arguments: JSON.stringify({ command: "node -e \"console.log('sentinel-approved')\"" }) }
+                }]
+              }
+            }]
+          }), { status: 200, headers: { "Content-Type": "application/json" } });
+        }
+        // The resumed coding turn completes the work.
+        return new Response(JSON.stringify({
+          choices: [{
+            message: {
+              content: null,
+              tool_calls: [
+                {
+                  id: "chat-source",
+                  type: "function",
+                  function: {
+                    name: "archicode_submit_source_file",
+                    arguments: JSON.stringify({ path: "src/approved.ts", action: "create", content: "export const approved = true;\n", nodeIds: ["node-orchestrator"] })
+                  }
+                },
+                {
+                  id: "chat-finish",
+                  type: "function",
+                  function: {
+                    name: "archicode_finish_source_batch",
+                    arguments: JSON.stringify({ implementationStatus: "complete", summary: "Created the approved entrypoint." })
+                  }
+                }
+              ]
+            }
+          }]
+        }), { status: 200, headers: { "Content-Type": "application/json" } });
+      }
+      return new Response(JSON.stringify({
+        choices: [{ message: { content: "Planning complete." } }]
+      }), { status: 200, headers: { "Content-Type": "application/json" } });
+    }));
+    const root = await mkdtemp(path.join(tmpdir(), "archicode-console-approval-pause-"));
+    const bundle = await ensureProject(root);
+    await updateProjectSettings(root, {
+      ...bundle.project.settings,
+      stopOnUnansweredQuestions: false,
+      providers: bundle.project.settings.providers.map((provider) => provider.id === "openai-compatible"
+        ? { ...provider, enabled: true, apiKeyEnv: "ARCHICODE_TEST_OPENAI_KEY", openAiEndpointMode: "chat-completions" as const }
+        : { ...provider, enabled: false })
+    });
+
+    const { runId } = await startAgentRun({
+      projectRoot: root,
+      flowId: "flow-main",
+      providerId: "openai-compatible",
+      promptSummary: "Pause for console approval then finish"
+    });
+
+    // The run pauses for the user instead of failing or dead-ending the model.
+    const paused = await waitForRun(root, runId, (item) => item.status === "needs-permission");
+    expect(paused.run.mcp?.pendingToolCall?.toolName).toBe("run_command");
+    expect(paused.run.permission.decision).toBe("pending");
+    expect(paused.run.permission.reason).toContain("sentinel-approved");
+
+    await approveRun({ projectRoot: root, runId });
+    const { run } = await waitForRun(root, runId, (item) => item.status === "succeeded");
+
+    // The approved command actually executed and its output fed the resumed phase.
+    const commandCall = run.mcpToolCalls.find((call) => call.toolName === "run_command" && call.status === "succeeded");
+    expect(commandCall?.resultSummary).toContain("sentinel-approved");
+    expect(codingCalls).toBe(2);
+    expect(codingBodies[1]).toContain("Approved MCP tool call: ArchiCode Tools / run_command");
+    await expect(readFile(path.join(root, "src/approved.ts"), "utf8")).resolves.toBe("export const approved = true;\n");
+  });
+
   it("keeps accepted files staged while asking the provider to resend only a rejected file", async () => {
     process.env.ARCHICODE_TEST_OPENAI_KEY = "test-key";
     let codingCalls = 0;
@@ -621,7 +710,9 @@ describe("source file proposal workflow", () => {
           }]
         }), { status: 200, headers: { "Content-Type": "application/json" } });
       }
-      if (Array.isArray(body.input)) {
+      // After the user's approval the resumed turn carries the executed tool
+      // result; a well-behaved model continues instead of re-requesting it.
+      if (Array.isArray(body.input) || content.includes("Approved MCP tool call: ArchiCode Tools / run_command")) {
         return new Response(JSON.stringify({
           status: "completed",
           output: [{ type: "message", content: [{ type: "output_text", text: "Planning complete after the finite console check." }] }]
@@ -655,6 +746,9 @@ describe("source file proposal workflow", () => {
       providerId: "openai-compatible",
       promptSummary: "Continue after an absolute console cwd is normalized"
     });
+    // The high-risk interpreter command pauses for user approval first.
+    await waitForRun(root, runId, (item) => item.status === "needs-permission");
+    await approveRun({ projectRoot: root, runId });
     const { run } = await waitForRun(root, runId, (item) => item.status === "succeeded");
 
     expect(run.mcpToolCalls).toContainEqual(expect.objectContaining({

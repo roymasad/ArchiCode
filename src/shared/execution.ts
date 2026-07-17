@@ -320,11 +320,29 @@ function classifyGitCommand(args: string[]): ShellCommandRisk {
   return "medium";
 }
 
+// Registry/metadata queries that read but never install, execute, or publish.
+// Checked against the subcommand position only, so a package named like one of
+// these (e.g. `npm install view`) never matches.
+const READ_ONLY_PACKAGE_SUBCOMMANDS = [
+  "info",
+  "list",
+  "ls",
+  "outdated",
+  "ping",
+  "prefix",
+  "root",
+  "search",
+  "show",
+  "view",
+  "why"
+];
+
 function classifyPackageManagerCommand(base: string, args: string[]): ShellCommandRisk {
   if (args.length === 0 || isVersionOrHelpCommand(args)) return "low";
 
   if (base === "npx" || base === "bunx") return "medium";
   if ((base === "pnpm" || base === "yarn") && args[0] === "dlx") return "medium";
+  if (READ_ONLY_PACKAGE_SUBCOMMANDS.includes(args[0] ?? "")) return "low";
 
   if (hasAnyValue(args, HIGH_RISK_PUBLISH_SUBCOMMANDS)) return "high";
   if ((base === "npm" || base === "pnpm") && args[0] === "exec") return "medium";
@@ -367,12 +385,111 @@ function isLowRiskBaseCommand(base: string, args: string[]): boolean {
   return true;
 }
 
+type CompoundSegment = { text: string; viaPipe: boolean };
+
+/**
+ * Splits a compound command on its top-level separators (&&, ||, |, ;,
+ * newlines) so each simple segment can be risk-classified on its own. Returns
+ * null — keeping the blanket "high" classification — whenever any other shell
+ * machinery is present: substitution (`, $(), redirection (<, >), background
+ * jobs (lone &), or an unterminated quote.
+ */
+function splitCompoundShellSegments(command: string): CompoundSegment[] | null {
+  const segments: CompoundSegment[] = [];
+  let current = "";
+  let quote: "'" | "\"" | null = null;
+  let escaping = false;
+  let viaPipe = false;
+  const pushSegment = (nextViaPipe: boolean): void => {
+    if (current.trim()) segments.push({ text: current.trim(), viaPipe });
+    current = "";
+    viaPipe = nextViaPipe;
+  };
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index] as string;
+    const next = command[index + 1];
+    if (escaping) {
+      current += char;
+      escaping = false;
+      continue;
+    }
+    if (quote === "'") {
+      current += char;
+      if (char === "'") quote = null;
+      continue;
+    }
+    if (quote === "\"") {
+      current += char;
+      if (char === "\"") quote = null;
+      else if (char === "\\") escaping = true;
+      continue;
+    }
+    if (char === "'" || char === "\"") {
+      quote = char;
+      current += char;
+      continue;
+    }
+    if (char === "\\") {
+      escaping = true;
+      current += char;
+      continue;
+    }
+    if (char === "$" && next === "(") return null;
+    if (char === "`" || char === "<" || char === ">") return null;
+    if (char === "&") {
+      if (next !== "&") return null;
+      pushSegment(false);
+      index += 1;
+      continue;
+    }
+    if (char === "|") {
+      if (next === "|") {
+        pushSegment(false);
+        index += 1;
+      } else {
+        pushSegment(true);
+      }
+      continue;
+    }
+    if (char === ";" || char === "\n" || char === "\r") {
+      pushSegment(false);
+      continue;
+    }
+    current += char;
+  }
+  if (quote || escaping) return null;
+  pushSegment(false);
+  return segments;
+}
+
+const RISK_SEVERITY: Record<ShellCommandRisk, number> = { low: 0, medium: 1, high: 2 };
+
+/**
+ * A compound command is as risky as its riskiest segment. Piping into an
+ * interpreter stays high regardless (`curl … | sh` executes the piped stream
+ * even though each segment looks tame on its own).
+ */
+function classifyCompoundCommandRisk(command: string): ShellCommandRisk {
+  const segments = splitCompoundShellSegments(command);
+  if (!segments || segments.length === 0) return "high";
+  if (segments.length === 1 && segments[0]?.text === command) return "high";
+  let worst: ShellCommandRisk = "low";
+  for (const segment of segments) {
+    const segmentBase = normalizeCommandToken(parseShellCommand(segment.text).tokens[0] ?? "");
+    if (segment.viaPipe && HIGH_RISK_INLINE_SCRIPT_COMMANDS.includes(segmentBase)) return "high";
+    const risk = classifyCommandRisk(segment.text);
+    if (RISK_SEVERITY[risk] > RISK_SEVERITY[worst]) worst = risk;
+  }
+  return worst;
+}
+
 export function classifyCommandRisk(command: string): ShellCommandRisk {
   const normalized = command.trim();
   if (!normalized) return "low";
 
   const parsed = parseShellCommand(normalized);
-  if (parsed.sawControlSyntax || parsed.unterminatedQuote) return "high";
+  if (parsed.unterminatedQuote) return "high";
+  if (parsed.sawControlSyntax) return classifyCompoundCommandRisk(normalized);
   if (parsed.tokens.length === 0) return "low";
 
   const [rawBase, ...rawArgs] = parsed.tokens;
@@ -409,8 +526,16 @@ const KNOWN_BASE_COMMANDS = new Set<string>([
 ]);
 
 export function isKnownBinary(command: string): boolean {
-  const parsed = parseShellCommand(command.trim());
-  if (parsed.sawControlSyntax || parsed.unterminatedQuote) return false;
+  const normalized = command.trim();
+  const parsed = parseShellCommand(normalized);
+  if (parsed.unterminatedQuote) return false;
+  if (parsed.sawControlSyntax) {
+    // A compound command is "known" only when every segment's binary is known.
+    const segments = splitCompoundShellSegments(normalized);
+    if (!segments || segments.length === 0) return false;
+    if (segments.length === 1 && segments[0]?.text === normalized) return false;
+    return segments.every((segment) => isKnownBinary(segment.text));
+  }
   if (parsed.tokens.length === 0) return false;
   return KNOWN_BASE_COMMANDS.has(normalizeCommandToken(parsed.tokens[0]));
 }
@@ -428,7 +553,9 @@ export function embeddedClassifyCommandRiskSource(functionName = "classify"): st
     ["HIGH_RISK_GIT_FLAGS", HIGH_RISK_GIT_FLAGS],
     ["HIGH_RISK_DOCKER_SUBCOMMANDS", HIGH_RISK_DOCKER_SUBCOMMANDS],
     ["HIGH_RISK_KUBECTL_SUBCOMMANDS", HIGH_RISK_KUBECTL_SUBCOMMANDS],
-    ["HIGH_RISK_PUBLISH_SUBCOMMANDS", HIGH_RISK_PUBLISH_SUBCOMMANDS]
+    ["HIGH_RISK_PUBLISH_SUBCOMMANDS", HIGH_RISK_PUBLISH_SUBCOMMANDS],
+    ["READ_ONLY_PACKAGE_SUBCOMMANDS", READ_ONLY_PACKAGE_SUBCOMMANDS],
+    ["RISK_SEVERITY", RISK_SEVERITY]
   ].map(([name, values]) => `const ${name} = ${JSON.stringify(values)};`);
 
   return [
@@ -445,6 +572,8 @@ export function embeddedClassifyCommandRiskSource(functionName = "classify"): st
     classifyDockerCommand.toString(),
     classifyKubectlCommand.toString(),
     isLowRiskBaseCommand.toString(),
+    splitCompoundShellSegments.toString(),
+    classifyCompoundCommandRisk.toString(),
     classifyCommandRisk.toString(),
     functionName === "classifyCommandRisk" ? "" : `const ${functionName} = classifyCommandRisk;`
   ].filter(Boolean).join("\n\n");

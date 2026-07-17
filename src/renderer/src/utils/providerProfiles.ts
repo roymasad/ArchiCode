@@ -1,4 +1,9 @@
-import { defaultPhaseModelPolicies, type ProjectSettings } from "../../../shared/schema";
+import {
+  defaultPhaseModelPolicies,
+  defaultSubagentModelPolicies,
+  type PhaseModelPolicy,
+  type ProjectSettings
+} from "../../../shared/schema";
 
 export type ProviderSettings = ProjectSettings["providers"][number];
 export type ProviderKind = ProviderSettings["kind"];
@@ -81,14 +86,55 @@ export function mergeProviderCapabilityMetadata(
   checkedProvider: ProviderSettings
 ): ProviderSettings[] {
   return providers.map((provider) => provider.id === checkedProvider.id
-    ? {
+    ? normalizeProviderModelSelections({
         ...provider,
         detectedAvailableModels: checkedProvider.detectedAvailableModels,
         detectedModelCapabilities: checkedProvider.detectedModelCapabilities,
         detectedContextWindowTokens: checkedProvider.detectedContextWindowTokens,
         detectedOpenAiEndpointMode: checkedProvider.detectedOpenAiEndpointMode
-      }
+      })
     : provider);
+}
+
+const phasePolicyKeys = Object.keys(defaultPhaseModelPolicies) as Array<keyof typeof defaultPhaseModelPolicies>;
+const subagentPolicyKeys = Object.keys(defaultSubagentModelPolicies) as Array<keyof typeof defaultSubagentModelPolicies>;
+
+function clearPolicyModelOverrides<T extends Record<string, PhaseModelPolicy>>(policies: T): T {
+  return Object.fromEntries(Object.entries(policies).map(([key, policy]) => [
+    key,
+    { ...policy, modelOverride: undefined }
+  ])) as T;
+}
+
+/**
+ * Treat a checked provider catalog as authoritative. Stale provider and
+ * profile selections fall back to the provider default instead of continuing
+ * to send a model ID the provider no longer exposes.
+ */
+export function normalizeProviderModelSelections(provider: ProviderSettings): ProviderSettings {
+  if (!provider.detectedAvailableModels.length) return provider;
+  const availableModels = new Set(provider.detectedAvailableModels);
+  let changed = false;
+  const normalizePolicy = (policy: PhaseModelPolicy): PhaseModelPolicy => {
+    const override = policy.modelOverride?.trim();
+    if (!override || availableModels.has(override)) return policy;
+    changed = true;
+    return { ...policy, modelOverride: undefined };
+  };
+  const phaseModelPolicies = { ...(provider.phaseModelPolicies ?? defaultPhaseModelPolicies) };
+  for (const phase of phasePolicyKeys) {
+    phaseModelPolicies[phase] = normalizePolicy(phaseModelPolicies[phase]);
+  }
+  const subagentModelPolicies = { ...(provider.subagentModelPolicies ?? defaultSubagentModelPolicies) };
+  for (const profile of subagentPolicyKeys) {
+    subagentModelPolicies[profile] = normalizePolicy(subagentModelPolicies[profile]);
+  }
+  const currentModel = provider.model?.trim();
+  const model = currentModel && availableModels.has(currentModel)
+    ? provider.model
+    : provider.detectedAvailableModels[0];
+  if (model !== provider.model) changed = true;
+  return changed ? { ...provider, model, phaseModelPolicies, subagentModelPolicies } : provider;
 }
 
 export function isSeedProvider(provider: ProviderSettings): boolean {
@@ -126,6 +172,7 @@ export function createProviderProfile(
     label,
     ...providerDefaultsForKind(kind),
     phaseModelPolicies: defaultPhaseModelPolicies,
+    subagentModelPolicies: defaultSubagentModelPolicies,
     enabled: providers.length === 0
   };
 }
@@ -154,7 +201,8 @@ export function changeProviderCompatibility(provider: ProviderSettings, kind: Pr
     label: provider.label,
     id: provider.id,
     enabled: provider.enabled,
-    phaseModelPolicies: provider.phaseModelPolicies ?? defaultPhaseModelPolicies
+    phaseModelPolicies: clearPolicyModelOverrides(provider.phaseModelPolicies ?? defaultPhaseModelPolicies),
+    subagentModelPolicies: clearPolicyModelOverrides(provider.subagentModelPolicies ?? defaultSubagentModelPolicies)
   };
 }
 
@@ -165,7 +213,7 @@ export function defaultCodexLocalSandbox(): ProviderSettings["localSandbox"] {
   return "workspace-write";
 }
 
-function providerDefaultsForKind(kind: ProviderKind): Omit<ProviderSettings, "id" | "label" | "phaseModelPolicies" | "enabled"> {
+function providerDefaultsForKind(kind: ProviderKind): Omit<ProviderSettings, "id" | "label" | "phaseModelPolicies" | "subagentModelPolicies" | "enabled"> {
   const common = {
     kind,
     detectedAvailableModels: [],

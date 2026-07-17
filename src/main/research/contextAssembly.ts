@@ -32,6 +32,7 @@ import {
   RESEARCH_CHAT_HISTORY_MAX_MESSAGES,
   RESEARCH_CHAT_HISTORY_TOOL,
   RESEARCH_CONTEXT_EXPANSION_TOOL,
+  RESEARCH_GRAPH_LAYOUT_TOOL,
   researchProjectFileAccessContext
 } from "./inspectionTools";
 
@@ -599,6 +600,7 @@ export function buildMinimalResumableResearchContext(
       reusableTools: reusableToolNames,
       reloadTools: [
         RESEARCH_CONTEXT_EXPANSION_TOOL,
+        RESEARCH_GRAPH_LAYOUT_TOOL,
         RESEARCH_CHAT_HISTORY_TOOL,
         "archicode_project_list_files",
         "archicode_project_search_files",

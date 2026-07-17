@@ -53,6 +53,7 @@ export function ModelCombobox({
     }
     return filteredOptions.slice(0, limit);
   }, [filter, filteredOptions, value]);
+  const selectedLabel = availableOptions.find((option) => option.value === value)?.label ?? value;
 
   useEffect(() => {
     if (!open) return;
@@ -101,7 +102,7 @@ export function ModelCombobox({
         aria-controls={listId}
         aria-expanded={open}
         aria-activedescendant={open && activeIndex >= 0 ? `${listId}-option-${activeIndex}` : undefined}
-        value={catalogMode && open ? filter : value}
+        value={catalogMode && open ? filter : catalogMode ? selectedLabel : value}
         placeholder={catalogMode && open ? "Search models…" : placeholder}
         onFocus={showAllOptions}
         onChange={(event) => {

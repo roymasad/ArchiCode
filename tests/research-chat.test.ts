@@ -12,7 +12,7 @@ import { researchGraphOperationKinds, runSchema, type ProjectSettings } from "..
 import { isResearchThinkingPhrase } from "../src/shared/researchPersonality";
 import { applyResearchGraphChangeSet, mapExistingCodebase, sendResearchChatMessage, setGlobalResearchPersonalityResolver, setGlobalResearchVerbosityResolver } from "../src/main/research";
 import { createResearchChat, listResearchChats, renameResearchChat, setResearchStorageRoot, updateResearchChatAutoApproval } from "../src/main/research/chatStore";
-import { researchToolInspectCli } from "../src/main/research/inspectionTools";
+import { buildResearchGraphLayoutToolResult, researchToolInspectCli } from "../src/main/research/inspectionTools";
 import { ARCHICODE_RESEARCH_RULES_SERVER_ID, ARCHICODE_RESEARCH_RULES_TOOL_NAME } from "../src/main/internalTools";
 
 async function createFakeResearchCodex(
@@ -3199,7 +3199,10 @@ describe("research chat workflow", () => {
     });
     const prompts = (await readFile(promptPath!, "utf8")).split("--- prompt boundary ---").map((part) => part.trim()).filter(Boolean);
 
-    expect(answered.memory.lastCompactedMessageId).toBe("old-196");
+    // The compaction boundary tracks the batched-eviction prompt window: with
+    // 261 tiny messages and a 64-message limit the window starts at old-204,
+    // so everything through old-203 must be folded into memory.
+    expect(answered.memory.lastCompactedMessageId).toBe("old-203");
     expect(answered.memory.facts.some((fact) => fact.text.includes("auth constraint"))).toBe(true);
     expect(prompts[0]).toContain("Research memory delta JSON contract");
     expect(prompts[0]).toContain("top-level shape: { \"researchMemoryDelta\": { ... } }");
@@ -3208,8 +3211,8 @@ describe("research chat workflow", () => {
     expect(prompts[1]).toContain("top-level shape: { \"archicodeResearch\": { ... } }");
     expect(prompts[1]).not.toMatch(/^User: Old message 0$/m);
     expect(prompts[1]).not.toMatch(/^Assistant: Old message 1$/m);
-    expect(prompts[1]).not.toMatch(/^User: Old message 196$/m);
-    expect(prompts[1]).toContain("Old message 197");
+    expect(prompts[1]).not.toContain("Old message 203");
+    expect(prompts[1]).toContain("Old message 204");
   });
 
   it("applies approved research note lifecycle changes", async () => {
@@ -4010,6 +4013,7 @@ describe("research chat workflow", () => {
     expect(prompt).toContain("reload tools remain available so the agent can rebuild detail on demand");
     expect(prompt).toContain("\"reloadTools\"");
     expect(prompt).toContain("archicode_read_research_context");
+    expect(prompt).toContain("archicode_read_graph_layout");
     expect(prompt).toContain("archicode_read_chat_history");
     expect(prompt).toContain("\"reusableTools\"");
     expect(prompt).toContain("archicode_project_inspect_cli");
@@ -4518,7 +4522,40 @@ describe("research chat workflow", () => {
     expect(answered.memory.summary).toBe("");
   });
 
-  it("lets direct research providers list, search, and read project files through built-in tools", async () => {
+  it("reads bounded planning-graph geometry from the current project bundle", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-layout-tool-"));
+    const bundle = await ensureProject(projectRoot);
+    const flow = bundle.flows.find((item) => item.id === "flow-main")!;
+    const target = flow.nodes.find((node) => !node.subflowId)!;
+    target.position = { x: 123, y: 456 };
+    target.size = { width: 300, height: 180 };
+
+    const result = JSON.parse(buildResearchGraphLayoutToolResult(bundle, JSON.stringify({
+      nodeIds: [target.id, "missing-node"]
+    }), {
+      activeFlowId: flow.id,
+      activeSubflowId: null,
+      sessionScope: { type: "project", projectId: bundle.project.id }
+    })) as {
+      source: string;
+      layer: { mode: string; subflowId: string | null };
+      nodes: Array<{ id: string; position: { x: number; y: number }; size: { width: number; height: number }; bounds: { left: number; top: number; right: number; bottom: number } }>;
+      missingNodeIds: string[];
+    };
+
+    expect(result.source).toBe("current-project-bundle");
+    expect(result.layer).toEqual(expect.objectContaining({ mode: "root", subflowId: null }));
+    expect(result.nodes).toContainEqual(expect.objectContaining({
+      id: target.id,
+      position: { x: 123, y: 456 },
+      size: { width: 300, height: 180 },
+      bounds: { left: 123, top: 456, right: 423, bottom: 636 }
+    }));
+    expect(result.missingNodeIds).toEqual(["missing-node"]);
+    expect(() => buildResearchGraphLayoutToolResult(bundle, JSON.stringify({ allLayers: true, subflowId: null }))).toThrow(/cannot be combined/);
+  });
+
+  it("lets direct research providers inspect graph layout and project files through built-in tools", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-tools-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
     const bundle = await ensureProject(projectRoot);
@@ -4537,7 +4574,8 @@ describe("research chat workflow", () => {
         { id: "call-list", name: "archicode_project_list_files", arguments: "{\"directory\":\"src\"}" },
         { id: "call-search", name: "archicode_project_search_files", arguments: "{\"query\":\"visibleSourceMarker\"}" },
         { id: "call-read", name: "archicode_project_read_file", arguments: "{\"path\":\".env\"}" },
-        { id: "call-read-lines", name: "archicode_project_read_file", arguments: "{\"path\":\"src/main.ts\",\"startLine\":1,\"endLine\":1}" }
+        { id: "call-read-lines", name: "archicode_project_read_file", arguments: "{\"path\":\"src/main.ts\",\"startLine\":1,\"endLine\":1}" },
+        { id: "call-layout", name: "archicode_read_graph_layout", arguments: "{\"flowId\":\"flow-main\",\"subflowId\":null,\"maxResults\":5}" }
       ]))
       .mockResolvedValueOnce(streamingChatCompletionResponse("I listed, searched, and read project files."));
     vi.stubGlobal("fetch", fetchMock);
@@ -4552,12 +4590,15 @@ describe("research chat workflow", () => {
       content: "Can you inspect project files?"
     });
     const firstBody = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string);
+    const allToolSchemas = new Map(firstBody.tools
+      .map((tool: { function: { name: string; parameters: Record<string, unknown> } }) => [tool.function.name, tool.function.parameters]));
     const projectToolSchemas = new Map(firstBody.tools
       .filter((tool: { function?: { name?: string } }) => tool.function?.name?.startsWith("archicode_project_"))
       .map((tool: { function: { name: string; parameters: Record<string, unknown> } }) => [tool.function.name, tool.function.parameters]));
     const readArtifactSchema = projectToolSchemas.get("archicode_project_read_artifact") as Record<string, unknown>;
     const listRunsSchema = projectToolSchemas.get("archicode_project_list_runs") as Record<string, unknown>;
     const inspectCliSchema = projectToolSchemas.get("archicode_project_inspect_cli") as Record<string, unknown>;
+    const graphLayoutSchema = allToolSchemas.get("archicode_read_graph_layout") as Record<string, unknown>;
     expect([...projectToolSchemas.values()].every((schema) => (schema as Record<string, unknown>).additionalProperties === false)).toBe(true);
     expect(readArtifactSchema.type).toBe("object");
     expect((readArtifactSchema.properties as Record<string, unknown>).artifactId).toBeTruthy();
@@ -4567,6 +4608,10 @@ describe("research chat workflow", () => {
     expect(inspectCliSchema.required).toEqual(["command"]);
     expect((inspectCliSchema.properties as Record<string, Record<string, unknown>>).command.enum).toContain("git");
     expect((inspectCliSchema.properties as Record<string, Record<string, unknown>>).command.enum).toContain("rg");
+    expect(graphLayoutSchema.type).toBe("object");
+    expect(graphLayoutSchema.additionalProperties).toBe(false);
+    expect((graphLayoutSchema.properties as Record<string, Record<string, unknown>>).subflowId.type).toEqual(["string", "null"]);
+    expect((graphLayoutSchema.properties as Record<string, Record<string, unknown>>).maxResults.maximum).toBe(250);
 
     const secondBody = JSON.parse(fetchMock.mock.calls[1]![1]!.body as string);
     const toolMessages = secondBody.messages.filter((message: { role?: string }) => message.role === "tool");
@@ -4578,6 +4623,220 @@ describe("research chat workflow", () => {
     expect(toolText).toContain("endLine");
     expect(toolText).toContain("OPENAI_API_KEY=[redacted]");
     expect(toolText).not.toContain("secret-value");
+    expect(toolText).toContain("current-project-bundle");
+    expect(toolText).toContain("node-project");
+    expect(toolText).toContain("positionMeaning");
+  });
+
+  it("recovers an unknown tool name with the exact allowlist after switching chat models", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-tool-recovery-"));
+    setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
+    const bundle = await ensureProject(projectRoot);
+    process.env.OPENAI_RESEARCH_TEST_KEY = "test";
+    await updateProjectSettings(projectRoot, {
+      ...bundle.project.settings,
+      providers: bundle.project.settings.providers.map((provider) => provider.kind === "openai-compatible"
+        ? { ...provider, enabled: true, apiKeyEnv: "OPENAI_RESEARCH_TEST_KEY", openAiEndpointMode: "chat-completions" as const }
+        : { ...provider, enabled: false })
+    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([{
+        id: "call-first-memory",
+        name: "archicode_leave_memory_unchanged",
+        arguments: JSON.stringify({ reason: "No durable state changed." })
+      }], "First model answered."))
+      .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([{
+        id: "call-guessed-layout",
+        name: "archicode_project_read_graph_layout",
+        arguments: JSON.stringify({ flowId: "flow-main" })
+      }]))
+      .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([{
+        id: "call-exact-layout",
+        name: "archicode_read_graph_layout",
+        arguments: JSON.stringify({ flowId: "flow-main", maxResults: 5 })
+      }]))
+      .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([{
+        id: "call-second-memory",
+        name: "archicode_leave_memory_unchanged",
+        arguments: JSON.stringify({ reason: "The layout inspection added no durable state." })
+      }], "Recovered after exact tool-name feedback."));
+    vi.stubGlobal("fetch", fetchMock);
+    const session = await createResearchChat({
+      projectRoot,
+      scope: { type: "project", projectId: bundle.project.id }
+    });
+
+    await sendResearchChatMessage({
+      projectRoot,
+      sessionId: session.id,
+      content: "Answer this first turn.",
+      modelId: "x-ai/grok-4.5"
+    });
+    const answered = await sendResearchChatMessage({
+      projectRoot,
+      sessionId: session.id,
+      content: "Now inspect the graph layout.",
+      modelId: "google/gemini-3.5-flash"
+    });
+
+    const recoveryBody = JSON.parse(fetchMock.mock.calls[2]![1]!.body as string);
+    const recoveryToolResults = JSON.stringify(recoveryBody.messages.filter((message: { role?: string }) => message.role === "tool"));
+    const assistant = answered.messages.at(-1)!;
+    expect(answered.modelId).toBe("google/gemini-3.5-flash");
+    expect(assistant.content).toContain("Recovered after exact tool-name feedback");
+    expect(assistant.mcpToolCalls).toContainEqual(expect.objectContaining({
+      toolName: "archicode_project_read_graph_layout",
+      status: "failed"
+    }));
+    expect(assistant.mcpToolCalls).toContainEqual(expect.objectContaining({
+      toolName: "read_graph_layout",
+      status: "succeeded"
+    }));
+    expect(recoveryToolResults).toContain("invalid-tool-name");
+    expect(recoveryToolResults).toContain("archicode_read_graph_layout");
+    expect(recoveryToolResults).toContain("No tool ran");
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+  });
+
+  it("stops repeated unknown Research tool calls with a precise non-provider error", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-tool-limit-"));
+    setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
+    const bundle = await ensureProject(projectRoot);
+    process.env.OPENAI_RESEARCH_TEST_KEY = "test";
+    await updateProjectSettings(projectRoot, {
+      ...bundle.project.settings,
+      providers: bundle.project.settings.providers.map((provider) => provider.kind === "openai-compatible"
+        ? { ...provider, enabled: true, apiKeyEnv: "OPENAI_RESEARCH_TEST_KEY", openAiEndpointMode: "chat-completions" as const }
+        : { ...provider, enabled: false })
+    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([{
+        id: "call-invalid-one",
+        name: "archicode_project_read_graph_layout",
+        arguments: "{}"
+      }]))
+      .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([{
+        id: "call-invalid-two",
+        name: "archicode_graph_layout_read",
+        arguments: "{}"
+      }]));
+    vi.stubGlobal("fetch", fetchMock);
+    const session = await createResearchChat({
+      projectRoot,
+      scope: { type: "project", projectId: bundle.project.id }
+    });
+
+    const answered = await sendResearchChatMessage({
+      projectRoot,
+      sessionId: session.id,
+      content: "Inspect the graph layout."
+    });
+
+    const assistant = answered.messages.at(-1)!;
+    expect(assistant.content).toContain("repeatedly requested unavailable tools");
+    expect(assistant.content).toContain("No unavailable tool was executed");
+    expect(assistant.content).not.toContain("Research provider failed");
+    expect(assistant.error).toContain("stopped after 2 invalid tool calls");
+    expect(assistant.mcpToolCalls).toHaveLength(2);
+    expect(assistant.mcpToolCalls.every((call) => call.status === "failed")).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("repairs a claimed graph review card when the provider omitted its change-set tool call", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-card-repair-"));
+    setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
+    const bundle = await ensureProject(projectRoot);
+    process.env.OPENAI_RESEARCH_TEST_KEY = "test";
+    await updateProjectSettings(projectRoot, {
+      ...bundle.project.settings,
+      providers: bundle.project.settings.providers.map((provider) => provider.kind === "openai-compatible"
+        ? { ...provider, enabled: true, apiKeyEnv: "OPENAI_RESEARCH_TEST_KEY", openAiEndpointMode: "chat-completions" as const }
+        : { ...provider, enabled: false })
+    });
+    const proposedChangeSet = {
+      summary: "Add the confirmed review node",
+      operations: [{
+        kind: "create-node",
+        flowId: "flow-main",
+        node: {
+          id: "node-card-repair",
+          type: "task",
+          title: "Review card repair",
+          description: "Captured by the bounded repair pass."
+        }
+      }]
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([{
+        id: "call-initial-memory",
+        name: "archicode_leave_memory_unchanged",
+        arguments: JSON.stringify({ reason: "No durable state changed." })
+      }], "I have prepared the requested graph review card."))
+      .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([{
+        id: "call-repaired-card",
+        name: "archicode_propose_graph_change_set",
+        arguments: JSON.stringify(proposedChangeSet)
+      }]));
+    vi.stubGlobal("fetch", fetchMock);
+    const session = await createResearchChat({
+      projectRoot,
+      scope: { type: "project", projectId: bundle.project.id }
+    });
+
+    const answered = await sendResearchChatMessage({
+      projectRoot,
+      sessionId: session.id,
+      content: "Add the confirmed review node and prepare the review card."
+    });
+
+    const repairBody = JSON.parse(fetchMock.mock.calls[1]![1]!.body as string);
+    const repairToolNames = repairBody.tools.map((tool: { function?: { name?: string } }) => tool.function?.name);
+    const assistant = answered.messages.at(-1)!;
+    expect(repairToolNames).toEqual(["archicode_propose_graph_change_set"]);
+    expect(assistant.changeSet?.summary).toBe("Add the confirmed review node");
+    expect(assistant.changeSet?.operations).toHaveLength(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("replaces a false review-card completion with an honest answer when repair cannot build one", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-card-honesty-"));
+    setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
+    const bundle = await ensureProject(projectRoot);
+    process.env.OPENAI_RESEARCH_TEST_KEY = "test";
+    await updateProjectSettings(projectRoot, {
+      ...bundle.project.settings,
+      providers: bundle.project.settings.providers.map((provider) => provider.kind === "openai-compatible"
+        ? { ...provider, enabled: true, apiKeyEnv: "OPENAI_RESEARCH_TEST_KEY", openAiEndpointMode: "chat-completions" as const }
+        : { ...provider, enabled: false })
+    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([{
+        id: "call-false-card-memory",
+        name: "archicode_leave_memory_unchanged",
+        arguments: JSON.stringify({ reason: "No durable state changed." })
+      }], "I created the graph review card and it is ready."))
+      .mockResolvedValueOnce(streamingChatCompletionResponse("No review card was created because the requested operations are not yet clear."))
+      .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([{
+        id: "call-honest-memory",
+        name: "archicode_leave_memory_unchanged",
+        arguments: JSON.stringify({ reason: "No graph proposal was created." })
+      }]));
+    vi.stubGlobal("fetch", fetchMock);
+    const session = await createResearchChat({
+      projectRoot,
+      scope: { type: "project", projectId: bundle.project.id }
+    });
+
+    const answered = await sendResearchChatMessage({
+      projectRoot,
+      sessionId: session.id,
+      content: "Prepare whatever graph review card you can."
+    });
+
+    const assistant = answered.messages.at(-1)!;
+    expect(assistant.content).toBe("No review card was created because the requested operations are not yet clear.");
+    expect(assistant.changeSet).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it("lets Research read current flow violations without requesting mutation approval", async () => {

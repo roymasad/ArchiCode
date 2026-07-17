@@ -1,16 +1,26 @@
 import { access, chmod, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearNodeAcceptanceTests, recordAcceptanceCheckResults, runNodeAcceptanceChecks, verifyRunAcceptanceChecks } from "../src/main/storage/acceptanceChecks";
 import { addNote } from "../src/main/storage/notes";
 import { ensureProject, loadProject, setGlobalMcpSettingsStore, updateNode, updateProjectSettings } from "../src/main/storage/projectStore";
 import { approveRun, cancelRun, rejectRun, retryRun, startAgentRun, startDebuggingRun, startRunProfile } from "../src/main/storage/runEngine";
 import { runSchema, type ProjectBundle, type ProjectSettings, type Run } from "../src/shared/schema";
 
+// Generous deadline: healthy runs resolve in well under a second, but a fully
+// parallel suite starves the event loop enough that 7s produced regular
+// "Last status: succeeded" flakes (the run finished after the final poll).
+const RUN_WAIT_DEADLINE_MS = 25000;
+
+// These workflow tests spawn real subprocess chains (fake codex + npm
+// scripts); under full-suite parallel load they can exceed vitest's 5s
+// default even when healthy.
+vi.setConfig({ testTimeout: 30000 });
+
 async function waitForRun(root: string, runId: string, predicate: (run: Run) => boolean): Promise<{ bundle: ProjectBundle; run: Run }> {
   const started = Date.now();
-  while (Date.now() - started < 7000) {
+  while (Date.now() - started < RUN_WAIT_DEADLINE_MS) {
     const bundle = await loadProject(root);
     const run = bundle.runs.find((item) => item.id === runId);
     if (run && predicate(run)) return { bundle, run };
@@ -23,7 +33,7 @@ async function waitForRun(root: string, runId: string, predicate: (run: Run) => 
 
 async function waitForBundle(root: string, predicate: (bundle: ProjectBundle) => boolean): Promise<ProjectBundle> {
   const started = Date.now();
-  while (Date.now() - started < 7000) {
+  while (Date.now() - started < RUN_WAIT_DEADLINE_MS) {
     const bundle = await loadProject(root);
     if (predicate(bundle)) return bundle;
     await new Promise((resolve) => setTimeout(resolve, 40));
@@ -911,7 +921,7 @@ process.stdin.on("end", () => {
     await expect(readFile(path.join(root, ".gitignore"), "utf8")).resolves.toContain("dist/");
     await expect(readFile(path.join(root, "AGENTS.md"), "utf8")).resolves.toContain("ArchiCode graph");
     await expect(readFile(path.join(root, "README.md"), "utf8")).resolves.toContain("npm run test");
-  });
+  }, 30000);
 
   it("retries a transient verification failure once before escalating", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-transient-verify-"));
@@ -955,7 +965,7 @@ process.stdin.on("end", () => {
     expect(run.logs.some((line) => /transient\/environmental error; retrying/.test(line.text))).toBe(true);
     expect(run.logs.some((line) => line.text.includes("Automatic debug pass"))).toBe(false);
     await expect(readFile(path.join(root, "retry-marker.txt"), "utf8")).resolves.toContain("1");
-  }, 15_000);
+  }, 30000);
 
   it("retries a cancelled verification run as a verification resume with inherited context", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-verification-resume-"));

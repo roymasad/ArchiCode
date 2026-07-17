@@ -526,6 +526,24 @@ describe("ArchiCode internal provider tools", () => {
     expect(high.risk).toBe("high");
   });
 
+  it("executes a gated console command once the user grants approval", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-internal-console-approved-"));
+    const settings = (await ensureProject(projectRoot)).project.settings;
+
+    // High risk (interpreter with inline script): gated without approval...
+    const gated = await runInternalConsoleCommand(projectRoot, settings, {
+      command: "node -e \"console.log('approved-run-ok')\""
+    });
+    expect(gated.status).toBe("approval-required");
+
+    // ...and executed once the user's approval is threaded through.
+    const approved = await runInternalConsoleCommand(projectRoot, settings, {
+      command: "node -e \"console.log('approved-run-ok')\""
+    }, { approvalGranted: true });
+    expect(approved.status).toBe("succeeded");
+    expect(approved.stdout).toContain("approved-run-ok");
+  });
+
   it("lets agents query the local code graph through bounded results", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-code-graph-tool-"));
     const bundle = await ensureProject(projectRoot);

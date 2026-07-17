@@ -699,11 +699,23 @@ export const phaseModelPoliciesSchema = z.object({
   debugging: phaseModelPolicySchema.default({ temperature: 0.0, reasoningMode: "high", maxOutputTokens: 32000 }),
   review: phaseModelPolicySchema.default({ temperature: 0.1, reasoningMode: "medium", maxOutputTokens: 12000 }),
   verifying: phaseModelPolicySchema.default({ temperature: 0.0, reasoningMode: "low", maxOutputTokens: 4000 }),
-  summarizing: phaseModelPolicySchema.default({ temperature: 0.1, reasoningMode: "low", maxOutputTokens: 4000 }),
-  brainstorming: phaseModelPolicySchema.default({ temperature: 0.6, reasoningMode: "medium", maxOutputTokens: 12000 })
+  summarizing: phaseModelPolicySchema.default({ temperature: 0.1, reasoningMode: "low", maxOutputTokens: 8000 }),
+  brainstorming: phaseModelPolicySchema.default({ temperature: 0.6, reasoningMode: "medium", maxOutputTokens: 24000 })
 });
 
 export const defaultPhaseModelPolicies = phaseModelPoliciesSchema.parse({});
+
+export const subagentModelProfileSchema = z.enum(["picasso", "sherlock", "solomon"]);
+
+export const subagentModelPoliciesSchema = z.object({
+  // Match the previous shared Research policy by default. These become
+  // independent only when the user customizes a subagent card.
+  picasso: phaseModelPolicySchema.default({ temperature: 0.6, reasoningMode: "medium", maxOutputTokens: 32000 }),
+  sherlock: phaseModelPolicySchema.default({ temperature: 0.6, reasoningMode: "high", maxOutputTokens: 32000 }),
+  solomon: phaseModelPolicySchema.default({ temperature: 0.6, reasoningMode: "medium", maxOutputTokens: 32000 })
+});
+
+export const defaultSubagentModelPolicies = subagentModelPoliciesSchema.parse({});
 
 // Per-model USD pricing, in dollars per *million* tokens. Used to compute the
 // persisted `costUsd` on each LLM usage record. `input`/`output` are required;
@@ -773,7 +785,9 @@ export const modelCapabilityProfileSchema = z.object({
 });
 
 export const detectedProviderModelCapabilitySchema = z.object({
-  supportsImageInput: z.boolean().optional()
+  supportsImageInput: z.boolean().optional(),
+  contextWindowTokens: z.number().int().positive().optional(),
+  maxOutputTokens: z.number().int().positive().optional()
 });
 
 export const providerSettingsSchema = z.object({
@@ -796,6 +810,7 @@ export const providerSettingsSchema = z.object({
   localSandbox: z.enum(["read-only", "workspace-write", "danger-full-access"]).default("read-only"),
   ephemeral: z.boolean().default(true),
   phaseModelPolicies: phaseModelPoliciesSchema.default(defaultPhaseModelPolicies),
+  subagentModelPolicies: subagentModelPoliciesSchema.default(defaultSubagentModelPolicies),
   // Optional per-model USD/token pricing override (per million tokens). When
   // absent, the built-in default table in llmPricing.ts is used.
   pricing: modelPricingSchema.optional(),
@@ -1177,7 +1192,9 @@ export const runSchema = z.object({
       phase: runPhaseSchema.optional()
     }).optional(),
     continuation: z.object({
-      providerKind: z.enum(["codex-local", "claude-local"]),
+      // "api" marks a paused API-provider phase: the phase replays after the
+      // approval decision with the resume result injected into its prompt.
+      providerKind: z.enum(["codex-local", "claude-local", "api"]),
       originalOutput: z.string(),
       resume: z.object({
         decision: z.enum(["approved", "denied"]),
@@ -2337,6 +2354,8 @@ export type NoteCategory = z.infer<typeof noteCategorySchema>;
 export type LlmPhase = z.infer<typeof llmPhaseSchema>;
 export type ReasoningMode = z.infer<typeof reasoningModeSchema>;
 export type PhaseModelPolicy = z.infer<typeof phaseModelPolicySchema>;
+export type SubagentModelProfile = z.infer<typeof subagentModelProfileSchema>;
+export type SubagentModelPolicies = z.infer<typeof subagentModelPoliciesSchema>;
 export type ModelCapabilityProfile = z.infer<typeof modelCapabilityProfileSchema>;
 export type Note = z.infer<typeof noteSchema>;
 export type DebugIncident = z.infer<typeof debugIncidentSchema>;

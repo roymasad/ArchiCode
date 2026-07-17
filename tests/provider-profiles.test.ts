@@ -7,12 +7,25 @@ import {
   isSeedProvider,
   localProviderUsageUnavailableDetail,
   mergeProviderCapabilityMetadata,
+  normalizeProviderModelSelections,
   providerKindOptions,
   providersNeedingAutoCheckOnSave
 } from "../src/renderer/src/utils/providerProfiles";
 
 describe("provider profile helpers", () => {
   const expectedCodexDefaultSandbox = process.platform === "win32" ? "danger-full-access" : "workspace-write";
+
+  it("defaults Sherlock to high reasoning effort and all subagents to 32k output", () => {
+    const provider = createSeedProject("/tmp/archicode").project.settings.providers[0]!;
+
+    expect(provider.phaseModelPolicies.summarizing.maxOutputTokens).toBe(8000);
+    expect(provider.subagentModelPolicies.sherlock.reasoningMode).toBe("high");
+    expect(Object.values(provider.subagentModelPolicies).map((policy) => policy.maxOutputTokens)).toEqual([
+      32000,
+      32000,
+      32000
+    ]);
+  });
 
   it("only offers functional LLM provider adapters", () => {
     expect(providerKindOptions.map((option) => option.value)).toEqual([
@@ -67,6 +80,78 @@ describe("provider profile helpers", () => {
     expect(changed.localSandbox).toBe(expectedCodexDefaultSandbox);
     expect(changed.apiKey).toBeUndefined();
     expect(changed.detectedAvailableModels).toEqual([]);
+  });
+
+  it("resets model overrides when a provider profile changes compatibility", () => {
+    const seedProviders = createSeedProject("/tmp/archicode").project.settings.providers;
+    const source = seedProviders.find((provider) => provider.kind === "openai-compatible")!;
+    const changed = changeProviderCompatibility({
+      ...source,
+      phaseModelPolicies: {
+        ...source.phaseModelPolicies,
+        planning: { ...source.phaseModelPolicies.planning, modelOverride: "gpt-planning" }
+      },
+      subagentModelPolicies: {
+        ...source.subagentModelPolicies,
+        picasso: { ...source.subagentModelPolicies.picasso, modelOverride: "gpt-picasso" }
+      }
+    }, "anthropic-compatible");
+
+    expect(changed.phaseModelPolicies.planning.modelOverride).toBeUndefined();
+    expect(changed.subagentModelPolicies.picasso.modelOverride).toBeUndefined();
+    expect(changed.phaseModelPolicies.planning.reasoningMode).toBe(source.phaseModelPolicies.planning.reasoningMode);
+  });
+
+  it("falls stale checked-catalog profile models back to each provider's default", () => {
+    const provider = createSeedProject("/tmp/archicode").project.settings.providers
+      .find((item) => item.kind === "openai-compatible")!;
+    const normalized = normalizeProviderModelSelections({
+      ...provider,
+      model: "removed-provider-model",
+      detectedAvailableModels: ["gpt-current", "gpt-fast"],
+      phaseModelPolicies: {
+        ...provider.phaseModelPolicies,
+        planning: { ...provider.phaseModelPolicies.planning, modelOverride: "removed-profile-model" },
+        coding: { ...provider.phaseModelPolicies.coding, modelOverride: "gpt-fast" }
+      },
+      subagentModelPolicies: {
+        ...provider.subagentModelPolicies,
+        picasso: { ...provider.subagentModelPolicies.picasso, modelOverride: "removed-picasso-model" },
+        sherlock: { ...provider.subagentModelPolicies.sherlock, modelOverride: "gpt-fast" }
+      }
+    });
+
+    expect(normalized.model).toBe("gpt-current");
+    expect(normalized.phaseModelPolicies.planning.modelOverride).toBeUndefined();
+    expect(normalized.phaseModelPolicies.coding.modelOverride).toBe("gpt-fast");
+    expect(normalized.subagentModelPolicies.picasso.modelOverride).toBeUndefined();
+    expect(normalized.subagentModelPolicies.sherlock.modelOverride).toBe("gpt-fast");
+  });
+
+  it("keeps model profile choices isolated per provider card", () => {
+    const providers = createSeedProject("/tmp/archicode").project.settings.providers;
+    const openai = providers.find((provider) => provider.kind === "openai-compatible")!;
+    const anthropic = providers.find((provider) => provider.kind === "anthropic-compatible")!;
+    const configured = providers.map((provider) => provider.id === openai.id
+      ? {
+          ...provider,
+          subagentModelPolicies: {
+            ...provider.subagentModelPolicies,
+            sherlock: { ...provider.subagentModelPolicies.sherlock, modelOverride: "gpt-sherlock" }
+          }
+        }
+      : provider.id === anthropic.id
+        ? {
+            ...provider,
+            subagentModelPolicies: {
+              ...provider.subagentModelPolicies,
+              sherlock: { ...provider.subagentModelPolicies.sherlock, modelOverride: "claude-sherlock" }
+            }
+          }
+        : provider);
+
+    expect(configured.find((provider) => provider.id === openai.id)?.subagentModelPolicies.sherlock.modelOverride).toBe("gpt-sherlock");
+    expect(configured.find((provider) => provider.id === anthropic.id)?.subagentModelPolicies.sherlock.modelOverride).toBe("claude-sherlock");
   });
 
   it("can switch compatibility to Claude Code Local while preserving identity", () => {
@@ -151,7 +236,7 @@ describe("provider profile helpers", () => {
       ...original,
       detectedAvailableModels: ["qwen/qwen3.7-plus", "openai/gpt-5.4"],
       detectedModelCapabilities: {
-        "qwen/qwen3.7-plus": { supportsImageInput: true }
+        "qwen/qwen3.7-plus": { supportsImageInput: true, contextWindowTokens: 1_000_000, maxOutputTokens: 64_000 }
       },
       detectedContextWindowTokens: 1_000_000,
       detectedOpenAiEndpointMode: "responses" as const
@@ -168,6 +253,7 @@ describe("provider profile helpers", () => {
     expect(merged.model).toBe("qwen/qwen3.7-plus");
     expect(merged.detectedAvailableModels).toEqual(["qwen/qwen3.7-plus", "openai/gpt-5.4"]);
     expect(merged.detectedModelCapabilities["qwen/qwen3.7-plus"]?.supportsImageInput).toBe(true);
+    expect(merged.detectedModelCapabilities["qwen/qwen3.7-plus"]?.maxOutputTokens).toBe(64_000);
     expect(merged.detectedContextWindowTokens).toBe(1_000_000);
     expect(merged.detectedOpenAiEndpointMode).toBe("responses");
   });

@@ -15,8 +15,8 @@ const tabs = [
   { value: "agent-memory", label: "Agent Instructions", file: "settings-agent-instructions-dark.png" },
   { value: "security", label: "Security", file: "settings-security-dark.png" },
   { value: "context", label: "Context", file: "settings-context-dark.png" },
-  { value: "policy", label: "LLM Policy", file: "settings-llm-policy-dark.png" },
-  { value: "capabilities", label: "Capabilities", file: "settings-capabilities-dark.png" },
+  { value: "policy", label: "LLM Profiles", file: "settings-llm-policy-dark.png" },
+  { value: "capabilities", label: "MCP Skills", file: "settings-capabilities-dark.png" },
   { value: "advanced", label: "Advanced", file: "settings-advanced-dark.png" }
 ];
 
@@ -136,7 +136,20 @@ async function captureTab(win, tab) {
   if (info.size < 10_000) {
     throw new Error(`Screenshot for ${tab.label} was unexpectedly small.`);
   }
-  return { ...metrics, file: target };
+  let detailFile;
+  if (tab.value === "policy") {
+    await win.webContents.executeJavaScript(`
+      (() => {
+        const panel = document.querySelector('.settings-tab-content[data-state="active"]');
+        if (panel) panel.scrollTop = panel.scrollHeight;
+      })();
+    `);
+    await wait(250);
+    const detailImage = await withTimeout("capture LLM subagent profiles", win.webContents.capturePage());
+    detailFile = path.join(outputDir, "settings-llm-profiles-subagents-dark.png");
+    await writeFile(detailFile, detailImage.toPNG());
+  }
+  return { ...metrics, file: target, ...(detailFile ? { detailFile } : {}) };
 }
 
 function assertUnified(metrics) {
@@ -212,7 +225,10 @@ app.whenReady()
       assertUnified(metrics);
 
       console.log("Settings visual QA screenshots:");
-      for (const item of metrics) console.log(`- ${item.file}`);
+      for (const item of metrics) {
+        console.log(`- ${item.file}`);
+        if (item.detailFile) console.log(`- ${item.detailFile}`);
+      }
       console.log(`Report: ${reportFile}`);
       app.exit(0);
     } finally {

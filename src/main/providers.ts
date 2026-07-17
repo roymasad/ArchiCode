@@ -9,7 +9,7 @@ import { pathToFileURL } from "node:url";
 import { defaultPhaseModelPolicies, researchGraphOperationKinds, type LlmPhase, type LlmUsage, type McpServer, type ModelCapabilityProfile, type PhaseModelPolicy, type ProjectSettings, type ResearchChatMessage } from "../shared/schema";
 import { estimateTextTokens } from "../shared/contextBudget";
 import { computeUsageCostDetails } from "../shared/llmPricing";
-import { heuristicImageInputSupportStatus, providerSupportsImageInput } from "../shared/providerCapabilities";
+import { heuristicImageInputSupportStatus, providerModelOutputTokenLimit, providerSupportsImageInput } from "../shared/providerCapabilities";
 import type { GlobalResearchVerbosity } from "../shared/researchPersonality";
 import { extractTextDocument } from "./documentText";
 import type { ProviderMcpTool } from "./mcp";
@@ -140,6 +140,12 @@ export type ProviderCallOptions = {
   // Receives the aggregated LLM token usage + computed USD cost for this call
   // (one invocation per top-level callProvider, covering its tool loop/retries).
   onUsage?: (usage: LlmUsage) => void;
+  /**
+   * Stable id for the logical work unit (run id, research session id). Sent to
+   * OpenRouter as `session_id` so every request in the unit routes to the same
+   * upstream provider, keeping the prompt cache warm from the first request.
+   */
+  cacheSessionId?: string;
 };
 
 export type ProviderExecutedToolCall = {
@@ -193,8 +199,14 @@ function canonicalToolArguments(argumentsJson: string): string {
   }
 }
 
+/**
+ * Guards provider tool loops against a model repeating the exact same call.
+ * `record` returns a warning string on the second-to-last allowed repeat —
+ * callers append it to that call's tool result so the model gets one explicit
+ * chance to change course — and throws when the limit is reached.
+ */
 export function createConsecutiveToolCallLoopDetector(maxConsecutiveIdenticalCalls = 3): {
-  record: (providerToolName: string, argumentsJson: string) => void;
+  record: (providerToolName: string, argumentsJson: string) => string | undefined;
 } {
   let previousSignature: string | undefined;
   let consecutiveCount = 0;
@@ -209,6 +221,10 @@ export function createConsecutiveToolCallLoopDetector(maxConsecutiveIdenticalCal
       if (consecutiveCount >= maxConsecutiveIdenticalCalls) {
         throw new Error(`Consecutive identical tool-call loop detected for ${providerToolName}; stopped on attempt ${consecutiveCount}.`);
       }
+      if (consecutiveCount === maxConsecutiveIdenticalCalls - 1) {
+        return `ArchiCode loop guard: this ${providerToolName} call is identical to your previous one, which already executed — repeating it changes nothing. One more identical call aborts the run. Change the arguments or content, try a different approach, or state what is blocking you.`;
+      }
+      return undefined;
     }
   };
 }
@@ -271,6 +287,12 @@ export type ResearchProviderOptions = {
   // Receives the aggregated LLM token usage + computed USD cost for this turn
   // (one invocation per top-level callResearchProvider, covering its tool loop).
   onUsage?: (usage: LlmUsage) => void;
+  /**
+   * Stable id for the logical work unit (research session id). Sent to
+   * OpenRouter as `session_id` so every request in the unit routes to the same
+   * upstream provider, keeping the prompt cache warm from the first request.
+   */
+  cacheSessionId?: string;
 };
 
 export type ResearchProviderContinuation = {
@@ -310,6 +332,29 @@ export function resolveProviderApiKey(provider: Provider): string | undefined {
   if (!legacyValue) return undefined;
   if (!looksLikeEnvironmentVariableName(legacyValue)) return legacyValue;
   return process.env[legacyValue];
+}
+
+/**
+ * OpenRouter-only sticky routing: sending `session_id` makes OpenRouter route
+ * every request carrying the same id to the same upstream provider (with
+ * fallback still available), so prompt caches stay warm from the first request
+ * of a run/session. Gated on the OpenRouter host because other
+ * OpenAI-compatible servers may reject unknown body fields.
+ */
+export function isOpenRouterProvider(provider: Provider): boolean {
+  let host: string;
+  try {
+    host = new URL(provider.baseUrl ?? "").hostname;
+  } catch {
+    return false;
+  }
+  return host === "openrouter.ai" || host.endsWith(".openrouter.ai");
+}
+
+export function applyOpenRouterSessionId(body: Record<string, unknown>, provider: Provider, cacheSessionId: string | undefined): void {
+  const id = cacheSessionId?.trim();
+  if (!id || !isOpenRouterProvider(provider)) return;
+  body.session_id = id.slice(0, 256);
 }
 
 export async function callProvider(provider: Provider, contextText: string, promptSummary: string, options: ProviderCallOptions = {}): Promise<string> {
@@ -1265,10 +1310,26 @@ const researchSystemPrompt = [
 ].join(" ");
 
 export function resolvePhaseModelPolicy(provider: Provider, phase: LlmPhase): PhaseModelPolicy {
-  return {
+  const policy = {
     ...defaultPhaseModelPolicies[phase],
     ...(provider.phaseModelPolicies?.[phase] ?? {})
   };
+  const modelOverride = availableProviderModelOverride(provider, policy.modelOverride);
+  const modelOutputLimit = providerModelOutputTokenLimit(provider, modelOverride);
+  return {
+    ...policy,
+    maxOutputTokens: policy.maxOutputTokens && modelOutputLimit
+      ? Math.min(policy.maxOutputTokens, modelOutputLimit)
+      : policy.maxOutputTokens,
+    modelOverride
+  };
+}
+
+export function availableProviderModelOverride(provider: Provider, modelOverride?: string): string | undefined {
+  const model = modelOverride?.trim();
+  if (!model) return undefined;
+  if (provider.detectedAvailableModels.length && !provider.detectedAvailableModels.includes(model)) return undefined;
+  return model;
 }
 
 export function inferModelCapabilityProfile(provider: Provider, modelOverride?: string): ModelCapabilityProfile {
@@ -1345,6 +1406,61 @@ export function phasePolicyText(phase: LlmPhase, policy: PhaseModelPolicy, profi
     `- modelOverride: ${policy.modelOverride ?? "none"}`,
     `- providerCapability: temperature=${profile.supportsTemperature}, reasoning=${profile.supportsReasoning}, thinking=${profile.supportsThinking}, imageInput=${profile.supportsImageInput}`
   ].join("\n");
+}
+
+/**
+ * User prompt for single-shot orchestrator runs, ordered most-stable-first:
+ * skills prompt and project JSON lead, per-call state (phase, policy,
+ * attachments, prompt summary) trails. Providers with implicit prefix caching
+ * (OpenAI, DeepSeek, Qwen, ...) match on the exact serialized prefix, so the
+ * large project context is reusable across the phases of a run only while it
+ * sits ahead of everything that changes per call. Keep additions in
+ * stability order: new stable content before "ArchiCode phase", volatile
+ * content after it.
+ */
+export function orchestratorUserPromptParts(
+  contextText: string,
+  promptSummary: string,
+  webSearchLine: string,
+  phase: LlmPhase,
+  policy: PhaseModelPolicy,
+  profile: ModelCapabilityProfile,
+  selectedSkillsPrompt = "",
+  imageAttachments?: ProviderImageAttachment[],
+  structuredSourceHandoff = false
+): { stable: string; volatile: string } {
+  return {
+    stable: [
+      selectedSkillsPrompt.trim(),
+      "Project JSON context:",
+      contextText
+    ].join("\n"),
+    volatile: [
+      "",
+      `ArchiCode phase: ${phase}.`,
+      phaseHandoffInstructions(phase, structuredSourceHandoff),
+      phasePolicyText(phase, policy, profile),
+      imageAttachmentText(imageAttachments),
+      webSearchLine,
+      "",
+      `Prompt summary: ${promptSummary}`
+    ].join("\n")
+  };
+}
+
+export function orchestratorUserPromptText(
+  contextText: string,
+  promptSummary: string,
+  webSearchLine: string,
+  phase: LlmPhase,
+  policy: PhaseModelPolicy,
+  profile: ModelCapabilityProfile,
+  selectedSkillsPrompt = "",
+  imageAttachments?: ProviderImageAttachment[],
+  structuredSourceHandoff = false
+): string {
+  const parts = orchestratorUserPromptParts(contextText, promptSummary, webSearchLine, phase, policy, profile, selectedSkillsPrompt, imageAttachments, structuredSourceHandoff);
+  return `${parts.stable}\n${parts.volatile}`;
 }
 
 export async function imageAttachmentsForPrompt(images: ProviderImageAttachment[] | undefined): Promise<Array<ProviderImageAttachment & { data: string }>> {
@@ -1440,7 +1556,9 @@ export async function appendTextAttachmentBlock(text: string, attachments: Provi
 }
 
 const RESEARCH_PROMPT_MESSAGE_LIMIT = 64;
-const RESEARCH_PROMPT_HISTORY_TOKEN_BUDGET = 16000;
+const RESEARCH_PROMPT_HISTORY_TOKEN_BUDGET = 20000;
+/** After the window overflows, evict oldest messages down to this fill ratio. */
+const RESEARCH_HISTORY_RETAIN_RATIO = 0.75;
 
 /**
  * Selects the most recent messages that fit within the message-count and
@@ -1448,22 +1566,47 @@ const RESEARCH_PROMPT_HISTORY_TOKEN_BUDGET = 16000;
  * Shared by the flattened codex/offline prompt and the structured multi-turn
  * thread so both honour the same context budget.
  */
+/**
+ * Start index of the recent-history window, using batched eviction: dropping
+ * one old message every turn changes the prompt prefix every turn, defeating
+ * provider prompt caching for the whole history block. Here the window start
+ * only moves when the budget overflows, and then jumps far enough to free 25%
+ * of the budget in one step, so the prefix stays byte-identical for many turns
+ * between evictions. Replaying the eviction sequence from the start of the
+ * session keeps the window deterministic across turns without persisted state:
+ * appending new messages never changes where earlier evictions landed.
+ * Memory compaction uses this same computation so nothing leaves the prompt
+ * window without being folded into research memory first.
+ */
+export function researchHistoryWindowStart(
+  messages: ResearchChatMessage[],
+  messageLimit = RESEARCH_PROMPT_MESSAGE_LIMIT,
+  tokenBudget = RESEARCH_PROMPT_HISTORY_TOKEN_BUDGET
+): number {
+  const retainTokens = Math.max(1, Math.floor(tokenBudget * RESEARCH_HISTORY_RETAIN_RATIO));
+  const retainCount = Math.max(1, Math.floor(messageLimit * RESEARCH_HISTORY_RETAIN_RATIO));
+  const messageTokens = messages.map((message) => estimateTextTokens(message?.content ?? "") + 8);
+  let start = 0;
+  let usedTokens = 0;
+  for (let index = 0; index < messages.length; index += 1) {
+    usedTokens += messageTokens[index] ?? 0;
+    if (usedTokens <= tokenBudget && index - start + 1 <= messageLimit) continue;
+    while (start < index && (usedTokens > retainTokens || index - start + 1 > retainCount)) {
+      usedTokens -= messageTokens[start] ?? 0;
+      start += 1;
+    }
+  }
+  return start;
+}
+
 function selectResearchHistoryMessages(
   messages: ResearchChatMessage[],
   messageLimit = RESEARCH_PROMPT_MESSAGE_LIMIT,
   tokenBudget = RESEARCH_PROMPT_HISTORY_TOKEN_BUDGET
 ): ResearchChatMessage[] {
-  const selected: ResearchChatMessage[] = [];
-  let usedTokens = 0;
-  for (let index = messages.length - 1; index >= 0 && selected.length < messageLimit; index -= 1) {
-    const message = messages[index];
-    if (!message) continue;
-    const messageTokens = estimateTextTokens(message.content) + 8;
-    if (selected.length > 0 && usedTokens + messageTokens > tokenBudget) break;
-    selected.unshift(message);
-    usedTokens += messageTokens;
-  }
-  return selected;
+  return messages
+    .slice(researchHistoryWindowStart(messages, messageLimit, tokenBudget))
+    .filter((message): message is ResearchChatMessage => Boolean(message));
 }
 
 function formatResearchMessages(messages: ResearchChatMessage[], messageLimit = RESEARCH_PROMPT_MESSAGE_LIMIT, tokenBudget = RESEARCH_PROMPT_HISTORY_TOKEN_BUDGET): string {
@@ -1511,7 +1654,9 @@ export function extractModelCapabilitiesFromModels(
     const modelId = readModelId(record);
     if (!modelId || !isTextGenerationModelRecord(record)) continue;
     capabilities[modelId] = {
-      supportsImageInput: readImageSupportFromModelRecord(record, providerKind, modelId)
+      supportsImageInput: readImageSupportFromModelRecord(record, providerKind, modelId),
+      contextWindowTokens: readContextWindow(record),
+      maxOutputTokens: readMaxOutputTokens(record)
     };
   }
   return capabilities;
@@ -1700,6 +1845,8 @@ function collectModalityStrings(value: unknown, depth = 0): string[] {
 
 function readContextWindow(record: ModelMetadata): number | undefined {
   const keys = [
+    "max_input_tokens",
+    "maxInputTokens",
     "context_window",
     "contextWindow",
     "context_length",
@@ -1721,6 +1868,32 @@ function readContextWindow(record: ModelMetadata): number | undefined {
   for (const value of Object.values(record)) {
     if (value && typeof value === "object") {
       const nested = readContextWindow(value as ModelMetadata);
+      if (nested) return nested;
+    }
+  }
+  return undefined;
+}
+
+function readMaxOutputTokens(record: ModelMetadata): number | undefined {
+  const keys = [
+    "max_output_tokens",
+    "maxOutputTokens",
+    "max_completion_tokens",
+    "maxCompletionTokens",
+    "output_token_limit",
+    "outputTokenLimit",
+    "max_tokens"
+  ];
+
+  for (const key of keys) {
+    const value = record[key];
+    const numeric = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+    if (Number.isFinite(numeric) && numeric > 0) return Math.floor(numeric);
+  }
+
+  for (const value of Object.values(record)) {
+    if (value && typeof value === "object") {
+      const nested = readMaxOutputTokens(value as ModelMetadata);
       if (nested) return nested;
     }
   }

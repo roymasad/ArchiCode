@@ -1,4 +1,4 @@
-import { defaultPhaseModelPolicies, type Flow, type Project } from "./schema";
+import { defaultPhaseModelPolicies, defaultSubagentModelPolicies, type Flow, type Project } from "./schema";
 
 const now = new Date().toISOString();
 
@@ -100,6 +100,7 @@ export function createSeedProject(rootPath: string): { project: Project; flow: F
           localSandbox: "read-only",
           ephemeral: true,
           phaseModelPolicies: defaultPhaseModelPolicies,
+          subagentModelPolicies: defaultSubagentModelPolicies,
           enabled: true
         },
         {
@@ -113,6 +114,7 @@ export function createSeedProject(rootPath: string): { project: Project; flow: F
           ephemeral: true,
           model: "",
           phaseModelPolicies: defaultPhaseModelPolicies,
+          subagentModelPolicies: defaultSubagentModelPolicies,
           enabled: false
         },
         {
@@ -125,6 +127,7 @@ export function createSeedProject(rootPath: string): { project: Project; flow: F
           localSandbox: "read-only",
           ephemeral: true,
           phaseModelPolicies: defaultPhaseModelPolicies,
+          subagentModelPolicies: defaultSubagentModelPolicies,
           enabled: false
         },
         {
@@ -138,6 +141,7 @@ export function createSeedProject(rootPath: string): { project: Project; flow: F
           ephemeral: true,
           model: "",
           phaseModelPolicies: defaultPhaseModelPolicies,
+          subagentModelPolicies: defaultSubagentModelPolicies,
           enabled: false
         }
       ],

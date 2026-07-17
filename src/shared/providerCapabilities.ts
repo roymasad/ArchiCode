@@ -8,22 +8,43 @@ function normalizeModelId(value?: string): string {
   return value?.trim().toLowerCase() ?? "";
 }
 
+export function detectedProviderModelCapability(
+  provider: Pick<ProviderSettingsLike, "model" | "detectedModelCapabilities">,
+  modelOverride?: string
+): ProviderSettingsLike["detectedModelCapabilities"][string] | undefined {
+  const modelId = (modelOverride ?? provider.model ?? "").trim();
+  if (!modelId) return undefined;
+  const direct = provider.detectedModelCapabilities?.[modelId];
+  if (direct) return direct;
+  const normalized = normalizeModelId(modelId);
+  if (!normalized) return undefined;
+  for (const [key, capability] of Object.entries(provider.detectedModelCapabilities ?? {})) {
+    if (normalizeModelId(key) === normalized) return capability;
+  }
+  return undefined;
+}
+
 function detectedImageInputSupport(
   provider: Pick<ProviderSettingsLike, "model" | "detectedModelCapabilities">,
   modelOverride?: string
 ): boolean | undefined {
-  const modelId = (modelOverride ?? provider.model ?? "").trim();
-  if (!modelId) return undefined;
-  const direct = provider.detectedModelCapabilities?.[modelId];
-  if (typeof direct?.supportsImageInput === "boolean") return direct.supportsImageInput;
-  const normalized = normalizeModelId(modelId);
-  if (!normalized) return undefined;
-  for (const [key, capability] of Object.entries(provider.detectedModelCapabilities ?? {})) {
-    if (normalizeModelId(key) === normalized && typeof capability?.supportsImageInput === "boolean") {
-      return capability.supportsImageInput;
-    }
-  }
-  return undefined;
+  return detectedProviderModelCapability(provider, modelOverride)?.supportsImageInput;
+}
+
+export function providerModelOutputTokenLimit(
+  provider: Pick<ProviderSettingsLike, "model" | "detectedModelCapabilities">,
+  modelOverride?: string
+): number | undefined {
+  return detectedProviderModelCapability(provider, modelOverride)?.maxOutputTokens;
+}
+
+export function providerModelContextWindowTokens(
+  provider: Pick<ProviderSettingsLike, "model" | "detectedModelCapabilities" | "contextWindowTokens" | "detectedContextWindowTokens">,
+  modelOverride?: string
+): number | undefined {
+  return provider.contextWindowTokens
+    ?? detectedProviderModelCapability(provider, modelOverride)?.contextWindowTokens
+    ?? provider.detectedContextWindowTokens;
 }
 
 export function heuristicImageInputSupportStatus(

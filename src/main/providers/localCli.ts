@@ -184,7 +184,7 @@ export async function callLocalResearchProvider(
     if (!parsedTurn?.toolCalls.length || !options.callMcpTool) {
       return output;
     }
-    parsedTurn.toolCalls.forEach((toolCall) => toolLoopDetector.record(toolCall.providerToolName, toolCall.argumentsJson || "{}"));
+    const loopWarnings = parsedTurn.toolCalls.map((toolCall) => toolLoopDetector.record(toolCall.providerToolName, toolCall.argumentsJson || "{}"));
     const settled = await Promise.allSettled(parsedTurn.toolCalls.map((toolCall) => options.callMcpTool!({
       providerToolName: toolCall.providerToolName,
       argumentsJson: toolCall.argumentsJson || "{}"
@@ -194,12 +194,13 @@ export async function callLocalResearchProvider(
     const fulfilledToolResults: Array<{ role: "tool"; toolCallId: string; providerToolName: string; result: string }> = [];
     settled.forEach((outcome, index) => {
       const toolCall = parsedTurn.toolCalls[index]!;
+      const loopWarning = loopWarnings[index];
       if (outcome.status === "fulfilled") {
         fulfilledToolResults.push({
           role: "tool",
           toolCallId: toolCall.id,
           providerToolName: toolCall.providerToolName,
-          result: outcome.value
+          result: loopWarning ? `${outcome.value}\n\n${loopWarning}` : outcome.value
         });
       } else if (options.isApprovalError?.(outcome.reason) && !pendingApproval) {
         pendingApproval = { toolCall, error: outcome.reason };

@@ -143,10 +143,10 @@ const picassoGraphOperationInputSchema = {
           minLength: PICASSO_MIN_FLOW_DESCRIPTION_CHARS,
           description: "A multi-sentence boundary description covering primary actors/capabilities and relationships to neighboring flows."
         },
-        nodes: { type: "array" },
-        edges: { type: "array" },
-        subflows: { type: "array" },
-        groups: { type: "array" }
+        nodes: { type: "array", items: { type: "object", additionalProperties: true } },
+        edges: { type: "array", items: { type: "object", additionalProperties: true } },
+        subflows: { type: "array", items: { type: "object", additionalProperties: true } },
+        groups: { type: "array", items: { type: "object", additionalProperties: true } }
       },
       description: "Nested top-level flow object for create-flow. To use auto-layout, create the flow with empty collections and follow it with rich create-node and create-edge operations."
     },

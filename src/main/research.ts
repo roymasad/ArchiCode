@@ -134,11 +134,13 @@ import {
   RESEARCH_CHAT_HISTORY_TOOL,
   RESEARCH_CONTEXT_EXPANSION_TOOL,
   RESEARCH_CONTEXT_SERVER_ID,
+  buildResearchGraphLayoutToolResult,
   callResearchProjectFileTool,
   isResearchChangeSetTool,
   isResearchCanvasControlTool,
   isResearchChatHistoryTool,
   isResearchContextExpansionTool,
+  isResearchGraphLayoutTool,
   isResearchMemoryTool,
   isResearchMemoryUnchangedTool,
   isResearchProjectFileTool,
@@ -150,6 +152,7 @@ import {
   microRunResultText,
   researchChatHistoryTool,
   researchContextExpansionTool,
+  researchGraphLayoutTool,
   researchProjectFileAccessContext,
   researchProjectFileTools,
   researchSinkTools,
@@ -259,6 +262,19 @@ class ResearchMcpApprovalRequired extends Error {
     }
   ) {
     super(`MCP approval required: ${request.serverLabel} wants to run ${request.toolName}.`);
+  }
+}
+
+const MAX_RESEARCH_INVALID_TOOL_CALLS = 2;
+
+class ResearchInvalidToolCallLimit extends Error {
+  constructor(
+    readonly requestedToolNames: string[],
+    readonly availableToolNames: string[]
+  ) {
+    super(
+      `Research stopped after ${requestedToolNames.length} invalid tool calls: ${requestedToolNames.join(", ")}.`
+    );
   }
 }
 
@@ -415,6 +431,21 @@ export function visibleResearchAnswer(answer: string): string {
   const trimmed = answer.trim();
   const withoutTrailingSummary = trimmed.replace(/(?:\n+\s*|\s+)Summary:\s*[\s\S]*$/i, "").trim();
   return withoutTrailingSummary || trimmed;
+}
+
+function claimsPreparedGraphReviewCard(answer: string): boolean {
+  const normalized = answer.replace(/\s+/g, " ").trim().toLowerCase();
+  if (!normalized.includes("review card")) return false;
+  if (
+    /\bno (?:valid )?(?:graph )?review card\b/.test(normalized) ||
+    /\b(?:did not|didn't|could not|couldn't|cannot|can't|was not|wasn't|is not|isn't)\s+(?:prepare|create|submit|produce|generate)\b/.test(normalized) ||
+    /\b(?:graph )?review card (?:was|is|has) not\b/.test(normalized)
+  ) return false;
+  return (
+    /\b(?:prepared|created|submitted|produced|generated)\b.{0,100}\b(?:graph )?review card\b/.test(normalized) ||
+    /\b(?:graph )?review card\b.{0,100}\b(?:has been|was|is) (?:prepared|created|submitted|produced|generated|ready|available)\b/.test(normalized) ||
+    /\b(?:here is|here's)\b.{0,100}\b(?:graph )?review card\b/.test(normalized)
+  );
 }
 
 export function validateResearchCanvasAction(
@@ -797,6 +828,7 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
   const researchMcpTools = [
     ...researchProjectFileTools(),
     researchContextExpansionTool(),
+    researchGraphLayoutTool(),
     researchChatHistoryTool(),
     ...researchSubagentTools({ mergeResolutionToolEnabled, graphReconciliationToolEnabled, sherlockResearchToolEnabled }),
     ...internalResearchRuleTools,
@@ -817,6 +849,7 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
   let capturedCanvasAction: ResearchCanvasAction | undefined;
   let capturedMemoryDelta: unknown;
   let capturedMemoryDecision = false;
+  const invalidToolNames: string[] = [];
   let approvedRuleMutationConsumed = false;
   const consumeExactRuleMutationApproval = (toolInput: { providerToolName: string; argumentsJson: string }): boolean => {
     if (approvedRuleMutationConsumed || !approvalRequest || rulesApprovalRejected) return false;
@@ -1015,6 +1048,7 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
     "CURRENT TURN COMPLETION CHECKLIST — perform this semantic check before finalizing:",
     "1. MEMORY: Make exactly one explicit memory decision before finalizing. If this turn assigns or changes a task/goal/requirement, covers a key matter worth retaining, establishes a decision/direction, receives a durable result/fact/finding/failure, leaves anything pending/blocked/unclear/awaiting confirmation, or materially changes the cumulative summary, call archicode_update_memory now. Store a pending graph scope and its confirmation/review state. Otherwise call archicode_leave_memory_unchanged with a semantic reason. Never omit both tools.",
     "PROJECT KNOWLEDGE: Session research memory above keeps this chat coherent. Separately, use archicode_project_remember_note only for small important knowledge that should be available to future chats in this project. Use archicode_chat_create_artifact for large reports, raw research, detailed plans, comparisons, or working journals that belong to this chat. Do not duplicate ordinary conversation into either surface.",
+    "GRAPH LAYOUT: For exact planning-graph node positions, sizes, spacing, or collision checks, call archicode_read_graph_layout. It reads the current loaded project graph directly. Do not inspect, list, search, or read persisted .archicode flow JSON files to recover canvas geometry.",
     "JAVASCRIPT SCRATCHPAD: Use archicode_scratchpad_repl when arithmetic, statistics, data shaping, or a small helper function would make the answer more reliable. Write standard JavaScript. Each call uses a fresh isolated runtime with no Node.js globals, project files, packages, imports, network APIs, or persistent state.",
     graphLockRunsAtTurnStart.length
       ? `2. GRAPH PERSISTENCE LOCK: Active run${graphLockRunsAtTurnStart.length === 1 ? "" : "s"} ${graphLockRunsAtTurnStart.map((run) => `${run.id} (${run.status})`).join(", ")} currently own project graph truth. You may discuss, clarify, design, call Picasso, and prepare a pending review card normally, but the card cannot be auto-approved or applied until the lock clears. Never claim a graph edit was persisted during this run.`
@@ -1042,6 +1076,7 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
       ].filter(Boolean).join("\n\n"), {
         projectRoot: input.projectRoot,
         signal: input.signal,
+        cacheSessionId: nextSession.id,
         webSearchEnabled: false,
         scopeContext: "{}",
         systemInstructionsOverride: "You are ArchiCode's isolated memory arbiter. Judge meaning, never keywords. You must call exactly one supplied memory-decision tool and produce no user-facing answer.",
@@ -1080,10 +1115,64 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
       memoryDecisionRepairError = `Memory arbitration failed: ${error instanceof Error ? error.message : String(error)}`;
     }
   };
+  const repairMissingReviewCard = async (assistantOutput: string): Promise<{ output: string; capturedChangeSet?: unknown }> => {
+    const graphChangeTool = researchSinkTools().find((tool) => isResearchChangeSetTool(tool.providerToolName));
+    if (!graphChangeTool) return { output: "" };
+    let repairedChangeSet: unknown;
+    let invalidRepairToolCalls = 0;
+    try {
+      const repairOutput = await callResearchProvider(await hydrateProviderForUse(provider), [
+        "The visible assistant turn below claimed that a graph review card was prepared, but no valid graph change set was captured. Repair only that mismatch now.",
+        "If the exact operations are fully supported by the conversation and graph context, call archicode_propose_graph_change_set exactly once. Otherwise, answer honestly that no review card was created and briefly state what is still needed. Do not claim a card exists without the tool call. Do not perform or request any other tool action.",
+        `Recent conversation:\n${nextSession.messages.slice(-12).map((message) => `${message.role}: ${message.content}`).join("\n\n").slice(0, 20_000)}`,
+        `Current user turn:\n${content.slice(0, 12_000)}`,
+        `Assistant result to repair:\n${assistantOutput.slice(0, 16_000)}`
+      ].join("\n\n"), {
+        projectRoot: input.projectRoot,
+        signal: input.signal,
+        cacheSessionId: nextSession.id,
+        webSearchEnabled: false,
+        scopeContext: budgetedPrompt.scopeContext,
+        systemInstructionsOverride: "You are ArchiCode's isolated graph review-card verifier. You may only submit a valid graph proposal through the supplied tool or state truthfully that no card was created. Never invent a tool name or imply that a missing tool call succeeded.",
+        messages: [],
+        mcpTools: [graphChangeTool],
+        onToken: () => {},
+        isTerminalTool: (providerToolName) => isResearchChangeSetTool(providerToolName),
+        terminalToolCompletesTurn: (providerToolName) => isResearchChangeSetTool(providerToolName),
+        onUsage: (usage) => {
+          capturedUsage = mergeResearchUsage(capturedUsage, usage);
+        },
+        callMcpTool: async (toolInput) => {
+          if (isResearchChangeSetTool(toolInput.providerToolName)) {
+            try {
+              repairedChangeSet = JSON.parse(toolInput.argumentsJson || "{}");
+            } catch {
+              repairedChangeSet = undefined;
+            }
+            return "Graph change set captured for review.";
+          }
+          invalidRepairToolCalls += 1;
+          if (invalidRepairToolCalls >= MAX_RESEARCH_INVALID_TOOL_CALLS) {
+            throw new Error(`Review-card repair stopped after repeated unavailable tool calls: ${toolInput.providerToolName}.`);
+          }
+          return JSON.stringify({
+            status: "invalid-tool-name",
+            requestedToolName: toolInput.providerToolName,
+            message: "No tool ran. Retry using the exact available providerToolName.",
+            availableTools: [graphChangeTool.providerToolName]
+          });
+        }
+      });
+      return { output: repairOutput, capturedChangeSet: repairedChangeSet };
+    } catch {
+      return { output: "" };
+    }
+  };
   try {
-    const output = await callResearchProvider(await hydrateProviderForUse(provider), content, {
+    let output = await callResearchProvider(await hydrateProviderForUse(provider), content, {
       projectRoot: input.projectRoot,
       signal: input.signal,
+      cacheSessionId: nextSession.id,
       webSearchEnabled: nativeWebSearchEnabled(bundle.project.settings),
       scopeContext: budgetedPrompt.scopeContext,
       sessionSummary: nextSession.summary,
@@ -1117,6 +1206,31 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
       isApprovalError: (error) => error instanceof ResearchMcpApprovalRequired,
       resumeContinuation,
       callMcpTool: async (toolInput) => {
+        const tool = budgetedPrompt.tools.find((item) => item.providerToolName === toolInput.providerToolName);
+        if (!tool) {
+          invalidToolNames.push(toolInput.providerToolName);
+          const availableToolNames = budgetedPrompt.tools.map((item) => item.providerToolName).sort();
+          const message = `Unknown Research tool "${toolInput.providerToolName}". No tool was executed.`;
+          mcpToolCalls.push({
+            serverId: "unknown",
+            toolName: toolInput.providerToolName,
+            argumentsJson: toolInput.argumentsJson,
+            status: "failed",
+            error: message,
+            createdAt: iso()
+          });
+          if (invalidToolNames.length >= MAX_RESEARCH_INVALID_TOOL_CALLS) {
+            throw new ResearchInvalidToolCallLimit([...invalidToolNames], availableToolNames);
+          }
+          return JSON.stringify({
+            status: "invalid-tool-name",
+            requestedToolName: toolInput.providerToolName,
+            attempt: invalidToolNames.length,
+            remainingAttempts: MAX_RESEARCH_INVALID_TOOL_CALLS - invalidToolNames.length,
+            message: "No tool ran. Retry using one exact providerToolName from availableTools. Aliases and guessed names are not accepted.",
+            availableTools: availableToolNames
+          }, null, 2);
+        }
         // Internal sink tools carry structured output back to the caller; they
         // never execute, need no approval, and are not recorded as MCP calls.
         if (isResearchChangeSetTool(toolInput.providerToolName)) {
@@ -1188,6 +1302,38 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
             createdAt: iso()
           });
           return resultText;
+        }
+        if (isResearchGraphLayoutTool(toolInput.providerToolName)) {
+          input.onActivity?.("Reading current planning-graph layout.", "running");
+          try {
+            const resultText = buildResearchGraphLayoutToolResult(bundle, toolInput.argumentsJson, {
+              activeFlowId: input.activeFlowId,
+              activeSubflowId: input.activeSubflowId,
+              sessionScope: nextSession.scope
+            });
+            mcpToolCalls.push({
+              serverId: RESEARCH_CONTEXT_SERVER_ID,
+              serverLabel: "Research Context",
+              toolName: "read_graph_layout",
+              argumentsJson: toolInput.argumentsJson,
+              status: "succeeded",
+              resultSummary: resultText.slice(0, 1000),
+              createdAt: iso()
+            });
+            return resultText;
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            mcpToolCalls.push({
+              serverId: RESEARCH_CONTEXT_SERVER_ID,
+              serverLabel: "Research Context",
+              toolName: "read_graph_layout",
+              argumentsJson: toolInput.argumentsJson,
+              status: "failed",
+              error: message,
+              createdAt: iso()
+            });
+            return `Graph layout inspection failed: ${message} Correct the filters and call archicode_read_graph_layout again.`;
+          }
         }
         if (isResearchChatHistoryTool(toolInput.providerToolName)) {
           input.onActivity?.("Reviewing older chat history for continuity.", "running");
@@ -1298,7 +1444,6 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
             return `Sherlock failed: ${errorMessage}`;
           }
         }
-        const tool = budgetedPrompt.tools.find((item) => item.providerToolName === toolInput.providerToolName);
         try {
           let activityArgs: Record<string, unknown> = {};
           try {
@@ -1371,15 +1516,33 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
         }))
       ]
     });
+    let extracted = extractArchicodeResearch(output);
+    let parsed = extracted.response;
+    let changeSet = buildResearchTurnChangeSet(capturedChangeSet, parsed?.changeSet, bundle);
+    const failedPicasso = subagentRuns.find((run) => run.kind === "graph-reconciliation" && run.status === "failed");
+    if (!failedPicasso && !changeSet && claimsPreparedGraphReviewCard(parsed?.answer ?? output)) {
+      const repair = await repairMissingReviewCard(parsed?.answer ?? output);
+      const repairedChangeSet = buildResearchTurnChangeSet(repair.capturedChangeSet, undefined, bundle);
+      if (repairedChangeSet) {
+        capturedChangeSet = repair.capturedChangeSet;
+        changeSet = repairedChangeSet;
+      } else {
+        const honestRepairOutput = visibleResearchAnswer(repair.output);
+        output = honestRepairOutput && !claimsPreparedGraphReviewCard(honestRepairOutput)
+          ? honestRepairOutput
+          : "I didn’t create a valid graph review card, so nothing is awaiting review and nothing was changed. Please ask me to prepare it again.";
+        extracted = extractArchicodeResearch(output);
+        parsed = extracted.response;
+        capturedMemoryDecision = false;
+        capturedMemoryDelta = undefined;
+      }
+    }
     await repairMissingMemoryDecision(output);
-    const extracted = extractArchicodeResearch(output);
-    const parsed = extracted.response;
     if (subagentRuns.length || mcpToolCalls.length) {
       input.onActivity?.("Archi finished reviewing the collected evidence and is preparing the final answer.", "completed");
     }
     // Prefer structured output captured from native sink-tool calls; fall back
     // to the legacy text envelope for codex/offline providers.
-    let changeSet = buildResearchTurnChangeSet(capturedChangeSet, parsed?.changeSet, bundle);
     let canvasAction = capturedCanvasAction;
     if (!canvasAction && parsed?.canvasAction) {
       try {
@@ -1391,7 +1554,6 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
         canvasAction = undefined;
       }
     }
-    const failedPicasso = subagentRuns.find((run) => run.kind === "graph-reconciliation" && run.status === "failed");
     let visibleAnswer = failedPicasso && !changeSet
       ? [
           "Picasso could not prepare a valid graph change set, so no review card was created.",
@@ -1469,6 +1631,28 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
       }
     }
   } catch (error) {
+    if (error instanceof ResearchInvalidToolCallLimit) {
+      const requestedNames = [...new Set(error.requestedToolNames)].map((name) => `\`${name}\``).join(", ");
+      const assistantMessage: ResearchChatMessage = {
+        id: id("msg"),
+        role: "assistant",
+        content: `The selected model repeatedly requested unavailable tools (${requestedNames}), so I stopped after ${error.requestedToolNames.length} invalid attempts. No unavailable tool was executed. The exact available tool names were returned after the first invalid call; retry this message or switch models.`,
+        createdAt: iso(),
+        attachmentIds: [],
+        webUsed: bundle.project.settings.webSearch.enabled,
+        mcpToolCalls,
+        subagentRuns,
+        usage: capturedUsage,
+        error: error.message
+      };
+      nextSession = researchChatSessionSchema.parse({
+        ...nextSession,
+        messages: [...nextSession.messages, assistantMessage],
+        updatedAt: iso()
+      });
+      await persistResearchSession(input.projectRoot, nextSession);
+      return nextSession;
+    }
     if (error instanceof ResearchMcpApprovalRequired) {
       const assistantMessage: ResearchChatMessage = {
         id: id("msg"),
@@ -2755,16 +2939,20 @@ export async function resyncExistingCodebase(input: ResyncExistingCodebaseInput)
       ...(hydratedProvider?.model?.trim() ? { model: hydratedProvider.model.trim() } : {})
     } : null,
     ...(hydratedProvider ? {
-      callProvider: (prompt: string, callOptions?: { signal?: AbortSignal; onActivity?: () => void; stableContext?: string }) => callResearchProvider(hydratedProvider, prompt, {
-        projectRoot: input.projectRoot,
-        signal: callOptions?.signal,
-        onToken: () => callOptions?.onActivity?.(),
-        webSearchEnabled: false,
-        scopeContext: callOptions?.stableContext ?? "",
-        sessionSummary: "",
-        messages: [],
-        imageAttachments: []
-      })
+      callProvider: (() => {
+        const cacheSessionId = id("resync-session");
+        return (prompt: string, callOptions?: { signal?: AbortSignal; onActivity?: () => void; stableContext?: string }) => callResearchProvider(hydratedProvider, prompt, {
+          projectRoot: input.projectRoot,
+          signal: callOptions?.signal,
+          cacheSessionId,
+          onToken: () => callOptions?.onActivity?.(),
+          webSearchEnabled: false,
+          scopeContext: callOptions?.stableContext ?? "",
+          sessionSummary: "",
+          messages: [],
+          imageAttachments: []
+        });
+      })()
     } : {})
   });
 }
@@ -2904,9 +3092,11 @@ async function mapExistingCodebaseHybrid(input: CodebaseMappingInput): Promise<C
     if (!flow) throw new Error("The project does not have a flow to map.");
 
     const hydratedProvider = await hydrateProviderForUse(provider);
+    const importCacheSessionId = id("import-session");
     const callProvider: NonNullable<CodebaseImportInput["callProvider"]> = (prompt, callOptions) => callResearchProvider(hydratedProvider, prompt, {
       projectRoot: input.projectRoot,
       signal: callOptions?.signal,
+      cacheSessionId: importCacheSessionId,
       onToken: () => callOptions?.onActivity?.(),
       webSearchEnabled: false,
       scopeContext: callOptions?.stableContext ?? "",

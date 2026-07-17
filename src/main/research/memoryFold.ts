@@ -3,7 +3,7 @@ import type { ProjectBundle, ProjectSettings, ResearchChatMessage, ResearchChatS
 import { researchChatSessionSchema, researchGraphChangeSetSchema, researchMemoryDeltaSchema, researchMemorySchema } from "../../shared/schema";
 import { extractResearchMemoryDelta } from "../../shared/researchExtraction";
 import { researchChangeSetCategory } from "../../shared/researchChangeSetSemantics";
-import { callResearchProvider } from "../providers";
+import { callResearchProvider, researchHistoryWindowStart } from "../providers";
 import { hydrateProviderForUse } from "../storage/projectStore";
 import { id, iso } from "../research";
 import { type ResearchChangeSet, normalizeResearchAgentRunNodeIds, normalizeResearchQueueProviders, normalizeResearchSubflowFlowIds } from "./graphOps";
@@ -39,10 +39,13 @@ export async function compactResearchMemoryIfNeeded(
   projectRoot: string,
   provider: ResearchProvider,
   session: ResearchChatSession,
-  plan = { recentMessageLimit: RESEARCH_RECENT_MESSAGE_LIMIT, compactionTriggerLimit: RESEARCH_COMPACTION_TRIGGER_LIMIT }
+  plan: { recentMessageLimit: number; compactionTriggerLimit: number; historyTokenBudget?: number } =
+    { recentMessageLimit: RESEARCH_RECENT_MESSAGE_LIMIT, compactionTriggerLimit: RESEARCH_COMPACTION_TRIGGER_LIMIT }
 ): Promise<ResearchChatSession> {
   if (session.messages.length <= plan.compactionTriggerLimit) return session;
-  const recentStart = Math.max(0, session.messages.length - plan.recentMessageLimit);
+  // Same batched-eviction window the prompt uses, so every message that has
+  // left (or is about to leave) the prompt window is folded into memory.
+  const recentStart = researchHistoryWindowStart(session.messages, plan.recentMessageLimit, plan.historyTokenBudget);
   if (recentStart <= 0) return session;
   const lastOmitted = session.messages[recentStart - 1];
   if (!lastOmitted || session.memory.lastCompactedMessageId === lastOmitted.id) return session;

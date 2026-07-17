@@ -169,6 +169,10 @@ function automaticResearchCompactionTriggerLimit(recentMessageLimit: number): nu
 }
 
 function automaticResearchHistoryTokenBudget(modelContextTokens: number): number {
-  const proportionalBudget = Math.floor(modelContextTokens * 0.08);
-  return Math.max(12000, Math.min(64000, proportionalBudget));
+  // 25% above the old 8% budget: batched history eviction retains 75% of the
+  // window after each eviction, so the bigger budget keeps the effective
+  // retained history at least as large as before while the (mostly cached)
+  // extra tokens cost less than the old always-rebilled sliding window.
+  const proportionalBudget = Math.floor(modelContextTokens * 0.10);
+  return Math.max(15000, Math.min(80000, proportionalBudget));
 }

@@ -337,12 +337,12 @@ app.whenReady()
     files.push(await capture("settings-llm-policy-dark", {
       theme: "dark",
       query: { visualQa: "dense" },
-      script: settingsTabScript("policy", "LLM Policy")
+      script: settingsTabScript("policy", "LLM Profiles")
     }));
     files.push(await capture("settings-capabilities-dark", {
       theme: "dark",
       query: { visualQa: "dense" },
-      script: settingsTabScript("capabilities", "Capabilities")
+      script: settingsTabScript("capabilities", "MCP Skills")
     }));
     files.push(await capture("settings-advanced-dark", {
       theme: "dark",

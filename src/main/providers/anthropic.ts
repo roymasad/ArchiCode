@@ -16,12 +16,11 @@ import {
   extractModelCapabilitiesFromModels,
   extractModelIdsFromModels,
   extractionSystemPrompt,
-  imageAttachmentText,
   imageAttachmentsForPrompt,
   imageLabelText,
   inferModelCapabilityProfile,
   orchestratorSystemPrompt,
-  phaseHandoffInstructions,
+  orchestratorUserPromptParts,
   phasePolicyText,
   reasoningEffort,
   researchCurrentMessageText,
@@ -48,16 +47,6 @@ export function extractAnthropicUsage(usage: {
     cacheCreationTokens: usage.cache_creation_input_tokens
   };
 }
-
-export const anthropicAdaptiveDefaultMaxTokens: Record<LlmPhase, number> = {
-  planning: 64000,
-  coding: 128000,
-  debugging: 64000,
-  review: 32000,
-  verifying: 16000,
-  summarizing: 16000,
-  brainstorming: 32000
-};
 
 export const anthropicAdaptiveDefaultEffort: Record<LlmPhase, "low" | "medium" | "high"> = {
   planning: "medium",
@@ -89,11 +78,11 @@ export function isAnthropicAdaptiveModel(policy: PhaseModelPolicy, profile: Mode
 }
 
 export function anthropicMaxTokensForPhase(phase: LlmPhase, policy: PhaseModelPolicy, profile: ModelCapabilityProfile): number {
-  const configured = policy.maxOutputTokens ?? defaultPhaseModelPolicies[phase].maxOutputTokens ?? 1800;
-  if (!isAnthropicAdaptiveModel(policy, profile)) return configured;
-  const defaultMaxTokens = defaultPhaseModelPolicies[phase].maxOutputTokens;
-  if (configured !== defaultMaxTokens) return configured;
-  return anthropicAdaptiveDefaultMaxTokens[phase];
+  // The profile value is a strict user-facing ceiling. Adaptive thinking may
+  // change effort, but it must never silently increase max_tokens beyond the
+  // configured (and model-capability-clamped) policy.
+  void profile;
+  return policy.maxOutputTokens ?? defaultPhaseModelPolicies[phase].maxOutputTokens ?? 1800;
 }
 
 export function anthropicEffortForPhase(phase: LlmPhase, policy: PhaseModelPolicy, profile: ModelCapabilityProfile): "low" | "medium" | "high" | undefined {
@@ -368,16 +357,20 @@ export async function callAnthropicCompatible(
   const profile = inferModelCapabilityProfile(provider, policy.modelOverride);
   const body = buildAnthropicCompatibleBody(provider, contextText, promptSummary, webSearchEnabled, phase, policy, profile, options.selectedSkillsPrompt, options.imageAttachments, options.bareExtraction, options.structuredSourceHandoff);
   const imageContent = profile.supportsImageInput ? await anthropicImageContent(options.imageAttachments) : [];
-  if (imageContent.length) {
+  if (imageContent.length || options.textAttachments?.length) {
     const messages = body.messages as Array<Record<string, unknown>>;
     const userMessage = messages.find((message) => message.role === "user");
+    // Attachments land on the trailing (volatile) text block so the cached
+    // stable block stays byte-identical across the phases of a run.
     if (typeof userMessage?.content === "string") {
-      userMessage.content = [{ type: "text", text: await appendTextAttachmentBlock(userMessage.content, options.textAttachments) }, ...imageContent];
+      const withText = await appendTextAttachmentBlock(userMessage.content, options.textAttachments);
+      userMessage.content = imageContent.length ? [{ type: "text", text: withText }, ...imageContent] : withText;
+    } else if (Array.isArray(userMessage?.content)) {
+      const blocks = userMessage.content as Array<Record<string, unknown>>;
+      const lastText = [...blocks].reverse().find((block) => block.type === "text" && typeof block.text === "string");
+      if (lastText) lastText.text = await appendTextAttachmentBlock(lastText.text as string, options.textAttachments);
+      blocks.push(...imageContent);
     }
-  } else if (options.textAttachments?.length) {
-    const messages = body.messages as Array<Record<string, unknown>>;
-    const userMessage = messages.find((message) => message.role === "user");
-    if (typeof userMessage?.content === "string") userMessage.content = await appendTextAttachmentBlock(userMessage.content, options.textAttachments);
   }
   const modelId = resolveModelId(provider, policy);
   const acc = createUsageAccumulator();
@@ -461,7 +454,7 @@ export async function callAnthropicCompatible(
     for (const toolUse of toolUses) {
       const providerToolName = toolUse.name as string;
       const argumentsJson = JSON.stringify(toolUse.input ?? {});
-      toolLoopDetector.record(providerToolName, argumentsJson);
+      const loopWarning = toolLoopDetector.record(providerToolName, argumentsJson);
       const result = await options.callMcpTool({
         providerToolName,
         argumentsJson
@@ -470,7 +463,7 @@ export async function callAnthropicCompatible(
       toolResults.push({
         type: "tool_result",
         tool_use_id: toolUse.id,
-        content: result
+        content: loopWarning ? `${result}\n\n${loopWarning}` : result
       });
     }
     if (options.shouldCompleteToolBatch?.(executedToolCalls)) {
@@ -538,7 +531,7 @@ export async function callAnthropicResearch(
       ...(result.text ? [{ type: "text", text: result.text }] : []),
       ...result.toolUses.map((toolUse) => ({ type: "tool_use", id: toolUse.id, name: toolUse.name, input: toolUse.input ?? {} }))
     ];
-    result.toolUses.forEach((toolUse) => toolLoopDetector.record(toolUse.name, JSON.stringify(toolUse.input ?? {})));
+    const loopWarnings = result.toolUses.map((toolUse) => toolLoopDetector.record(toolUse.name, JSON.stringify(toolUse.input ?? {})));
     // Execute all tool calls concurrently (sink tools capture, external tools
     // produce results to feed back). Settle so one approval-required tool does
     // not discard the results of tools that already completed.
@@ -551,8 +544,9 @@ export async function callAnthropicResearch(
     let firstError: unknown;
     settled.forEach((outcome, index) => {
       const toolUse = result.toolUses[index]!;
+      const loopWarning = loopWarnings[index];
       if (outcome.status === "fulfilled") {
-        toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: outcome.value });
+        toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: loopWarning ? `${outcome.value}\n\n${loopWarning}` : outcome.value });
       } else if (options.isApprovalError?.(outcome.reason) && !pendingApproval) {
         pendingApproval = { toolUse, error: outcome.reason };
       } else if (firstError === undefined) {
@@ -605,7 +599,11 @@ export function attachProviderContinuation(error: unknown, continuation: Researc
  * minimum are silently ignored by the API, so marking short turns is harmless.
  */
 export function setRollingMessageCacheBreakpoint(messages: Array<Record<string, unknown>>): void {
-  for (const message of messages) {
+  // The first message keeps its breakpoints: the single-shot builder marks its
+  // stable block (skills + project JSON) so later phases of the run reuse it.
+  // Breakpoint budget stays within Anthropic's limit of 4: one on the system
+  // prefix, at most two on the first message, one rolling on the tail.
+  for (const message of messages.slice(1)) {
     const content = message.content;
     if (Array.isArray(content)) {
       for (const block of content) {
@@ -713,6 +711,19 @@ export function buildAnthropicCompatibleBody(
   structuredSourceHandoff = false
 ): Record<string, unknown> {
   const maxTokens = anthropicMaxTokensForPhase(phase, policy, profile);
+  const promptParts = bareExtraction ? null : orchestratorUserPromptParts(
+    contextText,
+    promptSummary,
+    webSearchEnabled
+      ? "Web access is enabled. Use any Harness-Fed Web Context in the prompt as source material. If current external information is still required during planning, ask a focused llm-question naming the missing source or URL; during coding/debugging, fail with a clear run-level reason."
+      : "Web search is disabled for this run.",
+    phase,
+    policy,
+    profile,
+    selectedSkillsPrompt,
+    imageAttachments,
+    structuredSourceHandoff
+  );
   const body: Record<string, unknown> = {
     model: policy.modelOverride?.trim() || provider.model || "claude-sonnet-4-6",
     max_tokens: maxTokens,
@@ -721,20 +732,13 @@ export function buildAnthropicCompatibleBody(
     messages: [
       {
         role: "user",
-        content: bareExtraction ? contextText : [
-          `Prompt summary: ${promptSummary}`,
-          `ArchiCode phase: ${phase}.`,
-          phaseHandoffInstructions(phase, structuredSourceHandoff),
-          phasePolicyText(phase, policy, profile),
-          selectedSkillsPrompt.trim(),
-          imageAttachmentText(imageAttachments),
-          webSearchEnabled
-            ? "Web access is enabled. Use any Harness-Fed Web Context in the prompt as source material. If current external information is still required during planning, ask a focused llm-question naming the missing source or URL; during coding/debugging, fail with a clear run-level reason."
-            : "Web search is disabled for this run.",
-          "",
-          "Project JSON context:",
-          contextText
-        ].join("\n")
+        // Second breakpoint after the stable block (skills + project JSON): the
+        // phases of one run share it, so extraction/planning/coding reuse the
+        // cached project context instead of re-billing it each phase.
+        content: !promptParts ? contextText : [
+          { type: "text", text: promptParts.stable, cache_control: { type: "ephemeral" } },
+          { type: "text", text: promptParts.volatile }
+        ]
       }
     ]
   };

@@ -83,6 +83,9 @@ export const RESEARCH_MEMORY_TOOL = "archicode_update_memory";
 export const RESEARCH_MEMORY_UNCHANGED_TOOL = "archicode_leave_memory_unchanged";
 export const RESEARCH_CONTEXT_SERVER_ID = "archicode-research-context";
 export const RESEARCH_CONTEXT_EXPANSION_TOOL = "archicode_read_research_context";
+export const RESEARCH_GRAPH_LAYOUT_TOOL = "archicode_read_graph_layout";
+export const RESEARCH_GRAPH_LAYOUT_MAX_RESULTS = 250;
+export const RESEARCH_GRAPH_LAYOUT_DEFAULT_NODE_SIZE = { width: 248, height: 154 } as const;
 export const RESEARCH_CHAT_HISTORY_SERVER_ID = "archicode-research-chat-history";
 export const RESEARCH_CHAT_HISTORY_TOOL = "archicode_read_chat_history";
 export const RESEARCH_CHAT_HISTORY_MAX_MESSAGES = 24;
@@ -232,6 +235,186 @@ export function researchContextExpansionTool(): ProviderMcpTool {
   };
 }
 
+export function researchGraphLayoutTool(): ProviderMcpTool {
+  return {
+    providerToolName: RESEARCH_GRAPH_LAYOUT_TOOL,
+    serverId: RESEARCH_CONTEXT_SERVER_ID,
+    serverLabel: "Research Context",
+    toolName: "read_graph_layout",
+    description: "Read bounded planning-graph canvas geometry directly from the current loaded project state. Use this for exact node placement, overlap, spacing, and collision checks instead of listing, searching, or reading persisted .archicode/flow JSON files. Defaults to the currently visible flow and detail-flow layer and returns positions, effective sizes, bounds, groups, and layer metadata.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        flowId: { type: "string", minLength: 1, description: "Flow to inspect. Defaults to the currently visible flow, then the current chat scope or project active flow." },
+        subflowId: { type: ["string", "null"], description: "Detail-flow layer to inspect; null selects the root layer. Defaults to the currently visible layer for the active flow, otherwise the scoped/root layer." },
+        allLayers: { type: "boolean", description: "Return nodes from every layer in the flow. Cannot be combined with subflowId. Defaults to false." },
+        nodeIds: { type: "array", items: { type: "string", minLength: 1 }, maxItems: RESEARCH_GRAPH_LAYOUT_MAX_RESULTS, description: "Optional node-id filter within the selected layer or flow." },
+        includeIgnored: { type: "boolean", description: "Include nodes ignored by agents. Defaults to false." },
+        maxResults: { type: "integer", minimum: 1, maximum: RESEARCH_GRAPH_LAYOUT_MAX_RESULTS, description: "Maximum nodes to return. Defaults to 200." }
+      }
+    }
+  };
+}
+
+export function buildResearchGraphLayoutToolResult(
+  bundle: ProjectBundle,
+  argumentsJson: string,
+  current: {
+    activeFlowId?: string | null;
+    activeSubflowId?: string | null;
+    sessionScope?: ResearchChatScope;
+  } = {}
+): string {
+  let args: Record<string, unknown> = {};
+  if (argumentsJson.trim()) {
+    const parsed = JSON.parse(argumentsJson) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      throw new Error("Graph layout arguments must be a JSON object.");
+    }
+    args = parsed as Record<string, unknown>;
+  }
+
+  if (args.flowId !== undefined && (typeof args.flowId !== "string" || !args.flowId.trim())) {
+    throw new Error("flowId must be a non-empty string when provided.");
+  }
+  if (args.allLayers !== undefined && typeof args.allLayers !== "boolean") {
+    throw new Error("allLayers must be a boolean when provided.");
+  }
+  if (args.includeIgnored !== undefined && typeof args.includeIgnored !== "boolean") {
+    throw new Error("includeIgnored must be a boolean when provided.");
+  }
+
+  const scopedFlowId = current.sessionScope && current.sessionScope.type !== "project"
+    ? current.sessionScope.flowId
+    : undefined;
+  const requestedFlowId = typeof args.flowId === "string" ? args.flowId.trim() : undefined;
+  const activeFlowId = current.activeFlowId?.trim() || undefined;
+  const flowId = requestedFlowId
+    ?? activeFlowId
+    ?? scopedFlowId
+    ?? bundle.project.activeFlowId
+    ?? bundle.flows.find((item) => !item.ignored)?.id
+    ?? bundle.flows[0]?.id;
+  if (!flowId) throw new Error("No graph flow is available to inspect.");
+  const flow = bundle.flows.find((item) => item.id === flowId);
+  if (!flow) throw new Error(`Graph layout flow ${flowId} was not found.`);
+
+  const allLayers = args.allLayers === true;
+  const hasSubflowFilter = Object.prototype.hasOwnProperty.call(args, "subflowId");
+  if (allLayers && hasSubflowFilter) {
+    throw new Error("allLayers cannot be combined with subflowId.");
+  }
+  let subflowId: string | null | undefined;
+  if (!allLayers && hasSubflowFilter) {
+    if (args.subflowId === null) subflowId = null;
+    else if (typeof args.subflowId === "string" && args.subflowId.trim()) subflowId = args.subflowId.trim();
+    else throw new Error("subflowId must be a non-empty string or null.");
+  } else if (!allLayers && current.activeFlowId === flow.id) {
+    subflowId = current.activeSubflowId ?? null;
+  } else if (!allLayers && current.sessionScope?.type === "subflow" && current.sessionScope.flowId === flow.id) {
+    subflowId = current.sessionScope.subflowId;
+  } else if (!allLayers) {
+    subflowId = null;
+  }
+  const subflow = typeof subflowId === "string"
+    ? flow.subflows.find((item) => item.id === subflowId)
+    : undefined;
+  if (typeof subflowId === "string" && !subflow) {
+    throw new Error(`Graph layout detail flow ${subflowId} was not found in flow ${flow.id}.`);
+  }
+
+  let requestedNodeIds: string[] | undefined;
+  if (args.nodeIds !== undefined) {
+    if (!Array.isArray(args.nodeIds) || args.nodeIds.some((item) => typeof item !== "string" || !item.trim())) {
+      throw new Error("nodeIds must be an array of non-empty strings.");
+    }
+    if (args.nodeIds.length > RESEARCH_GRAPH_LAYOUT_MAX_RESULTS) {
+      throw new Error(`nodeIds cannot contain more than ${RESEARCH_GRAPH_LAYOUT_MAX_RESULTS} entries.`);
+    }
+    requestedNodeIds = [...new Set(args.nodeIds.map((item) => (item as string).trim()))];
+  }
+  const requestedNodeIdSet = requestedNodeIds ? new Set(requestedNodeIds) : undefined;
+  const includeIgnored = args.includeIgnored === true;
+  const maxResults = clampInteger(args.maxResults, 200, 1, RESEARCH_GRAPH_LAYOUT_MAX_RESULTS);
+  const nodesById = new Map(flow.nodes.map((node) => [node.id, node]));
+  const missingNodeIds = requestedNodeIds?.filter((nodeId) => !nodesById.has(nodeId)) ?? [];
+
+  const matchesLayer = (node: ProjectBundle["flows"][number]["nodes"][number]): boolean =>
+    allLayers || (node.subflowId ?? null) === subflowId;
+  const matchingNodes = flow.nodes
+    .filter((node) => includeIgnored || !node.ignored)
+    .filter(matchesLayer)
+    .filter((node) => !requestedNodeIdSet || requestedNodeIdSet.has(node.id))
+    .sort((left, right) => left.position.y - right.position.y || left.position.x - right.position.x || left.id.localeCompare(right.id));
+  const excludedNodeIds = requestedNodeIds?.filter((nodeId) => {
+    const node = nodesById.get(nodeId);
+    return node ? (!includeIgnored && node.ignored) || !matchesLayer(node) : false;
+  }) ?? [];
+
+  const nodes = matchingNodes.slice(0, maxResults).map((node) => {
+    const size = node.size ?? RESEARCH_GRAPH_LAYOUT_DEFAULT_NODE_SIZE;
+    return {
+      id: node.id,
+      title: node.title,
+      type: node.type,
+      position: node.position,
+      size,
+      bounds: {
+        left: node.position.x,
+        top: node.position.y,
+        right: node.position.x + size.width,
+        bottom: node.position.y + size.height
+      },
+      subflowId: node.subflowId ?? null,
+      groupId: node.groupId ?? null,
+      ignored: node.ignored,
+      locked: node.locked
+    };
+  });
+  const returnedNodeIds = new Set(nodes.map((node) => node.id));
+  const returnedGroupIds = new Set(nodes.flatMap((node) => node.groupId ? [node.groupId] : []));
+  const layoutBounds = nodes.length
+    ? (() => {
+        const left = Math.min(...nodes.map((node) => node.bounds.left));
+        const top = Math.min(...nodes.map((node) => node.bounds.top));
+        const right = Math.max(...nodes.map((node) => node.bounds.right));
+        const bottom = Math.max(...nodes.map((node) => node.bounds.bottom));
+        return { left, top, right, bottom, width: right - left, height: bottom - top };
+      })()
+    : null;
+
+  return JSON.stringify({
+    source: "current-project-bundle",
+    flow: { id: flow.id, name: flow.name, updatedAt: flow.updatedAt },
+    layer: allLayers
+      ? { mode: "all" }
+      : subflowId === null
+        ? { mode: "root", subflowId: null, name: "Root" }
+        : { mode: "subflow", subflowId, name: subflow?.name },
+    coordinateSystem: {
+      origin: "top-left",
+      units: "flow-space pixels",
+      positionMeaning: "Each node position is its top-left corner.",
+      defaultNodeSize: RESEARCH_GRAPH_LAYOUT_DEFAULT_NODE_SIZE
+    },
+    bounds: layoutBounds,
+    groups: flow.groups
+      .filter((group) => returnedGroupIds.has(group.id))
+      .map((group) => ({
+        ...group,
+        nodeIds: nodes.filter((node) => node.groupId === group.id && returnedNodeIds.has(node.id)).map((node) => node.id)
+      })),
+    nodes,
+    resultCount: nodes.length,
+    totalMatching: matchingNodes.length,
+    omitted: Math.max(0, matchingNodes.length - nodes.length),
+    truncated: matchingNodes.length > nodes.length,
+    missingNodeIds,
+    excludedNodeIds
+  }, null, 2);
+}
+
 export function researchChatHistoryTool(): ProviderMcpTool {
   return {
     providerToolName: RESEARCH_CHAT_HISTORY_TOOL,
@@ -308,6 +491,10 @@ export function isResearchSinkTool(providerToolName: string): boolean {
 
 export function isResearchContextExpansionTool(providerToolName: string): boolean {
   return providerToolName === RESEARCH_CONTEXT_EXPANSION_TOOL;
+}
+
+export function isResearchGraphLayoutTool(providerToolName: string): boolean {
+  return providerToolName === RESEARCH_GRAPH_LAYOUT_TOOL;
 }
 
 export function isResearchChatHistoryTool(providerToolName: string): boolean {

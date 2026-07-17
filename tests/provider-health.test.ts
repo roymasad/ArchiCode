@@ -4,12 +4,12 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { callProvider, callResearchProvider, checkProviderHealth, extractModelCapabilitiesFromModels, extractContextWindowFromModels, extractModelIdsFromModels, inferModelCapabilityProfile, researchResponseStyleDirective, type ResearchProviderContinuation, resolveProviderApiKey, resolvePhaseModelPolicy } from "../src/main/providers";
+import { applyOpenRouterSessionId, callProvider, callResearchProvider, checkProviderHealth, createConsecutiveToolCallLoopDetector, researchHistoryThread, extractModelCapabilitiesFromModels, extractContextWindowFromModels, extractModelIdsFromModels, inferModelCapabilityProfile, researchResponseStyleDirective, type ResearchProviderContinuation, resolveProviderApiKey, resolvePhaseModelPolicy } from "../src/main/providers";
 import { buildAnthropicCompatibleBody, buildAnthropicResearchBody } from "../src/main/providers/anthropic";
 import { buildClaudeLocalArgs, buildClaudeLocalResearchArgs, buildCodexLocalArgs, buildCodexLocalResearchArgs, windowsBatchCommandLine, windowsExecutableCandidates } from "../src/main/providers/localCli";
 import { buildOpenAICompatibleBody, buildOpenAIResearchChatCompletionsBody, buildOpenAIResponsesBody, buildOpenAIResearchResponsesBody } from "../src/main/providers/openai";
 import { createSeedProject } from "../src/shared/fixtures";
-import { defaultPhaseModelPolicies } from "../src/shared/schema";
+import { defaultPhaseModelPolicies, defaultSubagentModelPolicies } from "../src/shared/schema";
 import type { ResearchChatMessage } from "../src/shared/schema";
 import { researchPersonalityPrompt } from "../src/shared/researchPersonality";
 
@@ -42,12 +42,114 @@ describe("provider health checks", () => {
       detectedAvailableModels: [],
       detectedModelCapabilities: {},
       phaseModelPolicies: defaultPhaseModelPolicies,
+      subagentModelPolicies: defaultSubagentModelPolicies,
       enabled: true
     };
     const result = await checkProviderHealth(provider);
 
     expect(result.ok).toBe(true);
     expect(result.status).toBe("ready");
+  });
+
+  it("sends the OpenRouter sticky-routing session id only to OpenRouter", () => {
+    const openRouterProvider = {
+      ...createSeedProject("/tmp/archicode").project.settings.providers.find((item) => item.kind === "openai-compatible")!,
+      baseUrl: "https://openrouter.ai/api/v1"
+    };
+    const otherProvider = { ...openRouterProvider, baseUrl: "https://api.openai.com/v1" };
+
+    const routedBody: Record<string, unknown> = {};
+    applyOpenRouterSessionId(routedBody, openRouterProvider, "run-abc123");
+    expect(routedBody.session_id).toBe("run-abc123");
+
+    const longId = "x".repeat(300);
+    const truncatedBody: Record<string, unknown> = {};
+    applyOpenRouterSessionId(truncatedBody, openRouterProvider, longId);
+    expect((truncatedBody.session_id as string).length).toBe(256);
+
+    const foreignBody: Record<string, unknown> = {};
+    applyOpenRouterSessionId(foreignBody, otherProvider, "run-abc123");
+    expect(foreignBody.session_id).toBeUndefined();
+
+    const emptyIdBody: Record<string, unknown> = {};
+    applyOpenRouterSessionId(emptyIdBody, openRouterProvider, "  ");
+    expect(emptyIdBody.session_id).toBeUndefined();
+  });
+
+  it("warns the model one identical tool call before aborting the loop", () => {
+    const detector = createConsecutiveToolCallLoopDetector();
+    expect(detector.record("submit_source_file", "{\"path\":\"a\"}")).toBeUndefined();
+    const warning = detector.record("submit_source_file", "{\"path\":\"a\"}");
+    expect(warning).toContain("loop guard");
+    expect(warning).toContain("submit_source_file");
+    expect(() => detector.record("submit_source_file", "{\"path\":\"a\"}")).toThrow(/Consecutive identical tool-call loop/);
+
+    const reset = createConsecutiveToolCallLoopDetector();
+    reset.record("submit_source_file", "{\"path\":\"a\"}");
+    reset.record("submit_source_file", "{\"path\":\"a\"}");
+    // Changing the arguments resets the streak instead of aborting.
+    expect(reset.record("submit_source_file", "{\"path\":\"b\"}")).toBeUndefined();
+  });
+
+  it("evicts research history in batches so the window start stays stable between turns", () => {
+    const makeMessage = (index: number): ResearchChatMessage => ({
+      id: `m${index}`,
+      role: index % 2 === 0 ? "user" : "assistant",
+      content: `m${index}`.padEnd(40, "x"),
+      createdAt: new Date().toISOString(),
+      attachmentIds: [],
+      webUsed: false,
+      mcpToolCalls: [],
+      subagentRuns: []
+    });
+    // Each message estimates to 18 tokens (40 chars / 4 + 8 overhead); with a
+    // 60-token budget the window overflows on the 4th message and must evict
+    // down to 45 tokens (75%) in one batch.
+    const thread = (count: number) => researchHistoryThread("__current__", {
+      scopeContext: "",
+      messages: Array.from({ length: count }, (_, index) => makeMessage(index)),
+      researchMessageLimit: 64,
+      researchHistoryTokenBudget: 60
+    });
+
+    expect(thread(4)[0]?.text.startsWith("m2")).toBe(true);
+    // Appending one more message must NOT slide the window start.
+    expect(thread(5)[0]?.text.startsWith("m2")).toBe(true);
+    // The next overflow evicts a batch of two, not one.
+    expect(thread(6)[0]?.text.startsWith("m4")).toBe(true);
+  });
+
+  it("marks the stable block of single-shot Anthropic prompts as a cache breakpoint", () => {
+    const provider = {
+      ...createSeedProject("/tmp/archicode").project.settings.providers.find((item) => item.kind === "openai-compatible")!,
+      kind: "anthropic-compatible" as const,
+      model: "claude-sonnet-4-6"
+    };
+    const body = buildAnthropicCompatibleBody(provider, "{\"project\":true}", "Code a feature", false, "coding", defaultPhaseModelPolicies.coding);
+    const content = (body.messages as Array<{ content: Array<Record<string, unknown>> }>)[0]!.content;
+    expect(content[0]!.cache_control).toEqual({ type: "ephemeral" });
+    expect(String(content[0]!.text)).toContain("Project JSON context:");
+    expect(content[1]!.cache_control).toBeUndefined();
+    expect(String(content[1]!.text)).toContain("Prompt summary: Code a feature");
+  });
+
+  it("adds explicit cache_control blocks only for OpenRouter chat-completions bodies", () => {
+    const provider = createSeedProject("/tmp/archicode").project.settings.providers.find((item) => item.kind === "openai-compatible")!;
+    const openRouterProvider = { ...provider, baseUrl: "https://openrouter.ai/api/v1" };
+
+    const routedBody = buildOpenAICompatibleBody(openRouterProvider, "{\"project\":true}", "Code a feature", false, "coding", defaultPhaseModelPolicies.coding);
+    const routedMessages = routedBody.messages as Array<{ role: string; content: Array<Record<string, unknown>> }>;
+    expect(routedMessages[0]!.content[0]!.cache_control).toEqual({ type: "ephemeral" });
+    const userBlocks = routedMessages[1]!.content;
+    expect(userBlocks[0]!.cache_control).toEqual({ type: "ephemeral" });
+    expect(String(userBlocks[0]!.text)).toContain("Project JSON context:");
+    expect(userBlocks[1]!.cache_control).toBeUndefined();
+
+    const plainBody = buildOpenAICompatibleBody({ ...provider, baseUrl: "https://api.openai.com/v1" }, "{\"project\":true}", "Code a feature", false, "coding", defaultPhaseModelPolicies.coding);
+    const plainMessages = plainBody.messages as Array<{ content: unknown }>;
+    expect(typeof plainMessages[0]!.content).toBe("string");
+    expect(typeof plainMessages[1]!.content).toBe("string");
+    expect(JSON.stringify(plainBody)).not.toContain("cache_control");
   });
 
   it("reports missing API key before network calls", async () => {
@@ -342,6 +444,49 @@ process.exit(2);
     expect(capabilities["qwen2.5-vl"]?.supportsImageInput).toBe(true);
   });
 
+  it("extracts authoritative per-model context and output limits when catalogs advertise them", () => {
+    const anthropic = extractModelCapabilitiesFromModels({
+      data: [
+        { id: "claude-sonnet-4-6", max_input_tokens: 1_000_000, max_tokens: 64_000 }
+      ]
+    }, "anthropic-compatible");
+    const openRouter = extractModelCapabilitiesFromModels({
+      data: [
+        {
+          id: "qwen/qwen3.7-plus",
+          context_length: 131_072,
+          top_provider: { max_completion_tokens: 32_768 }
+        }
+      ]
+    }, "openai-compatible");
+
+    expect(anthropic["claude-sonnet-4-6"]).toEqual(expect.objectContaining({
+      contextWindowTokens: 1_000_000,
+      maxOutputTokens: 64_000
+    }));
+    expect(openRouter["qwen/qwen3.7-plus"]).toEqual(expect.objectContaining({
+      contextWindowTokens: 131_072,
+      maxOutputTokens: 32_768
+    }));
+  });
+
+  it("clamps a phase ceiling only when the selected model advertises a lower output maximum", () => {
+    const seed = createSeedProject("/tmp/archicode").project.settings.providers.find((item) => item.kind === "openai-compatible")!;
+    const known = {
+      ...seed,
+      detectedModelCapabilities: {
+        [seed.model!]: { maxOutputTokens: 24_000 }
+      }
+    };
+
+    const policy = resolvePhaseModelPolicy(known, "coding");
+    const body = buildOpenAIResponsesBody(known, "{}", "Code a feature", false, "coding", policy);
+
+    expect(policy.maxOutputTokens).toBe(24_000);
+    expect(body.max_output_tokens).toBe(24_000);
+    expect(resolvePhaseModelPolicy(seed, "coding").maxOutputTokens).toBe(64_000);
+  });
+
   it("lets detected model capabilities override the fallback image heuristic", () => {
     const provider = {
       ...createSeedProject("/tmp/archicode").project.settings.providers.find((item) => item.kind === "openai-compatible")!,
@@ -381,6 +526,22 @@ process.exit(2);
     expect(JSON.stringify(body)).toContain("Do not return the bare patch object");
     expect(JSON.stringify(body)).toContain("runSummary.notes and runSummary.verificationNotes must be strings");
     expect(JSON.stringify(body)).toContain("smallest self-contained runnable slice");
+  });
+
+  it("ignores a phase model override that disappeared from a checked provider catalog", () => {
+    const seed = createSeedProject("/tmp/archicode").project.settings.providers.find((item) => item.kind === "openai-compatible")!;
+    const provider = {
+      ...seed,
+      detectedAvailableModels: ["gpt-current"],
+      phaseModelPolicies: {
+        ...seed.phaseModelPolicies,
+        planning: { ...seed.phaseModelPolicies.planning, modelOverride: "gpt-removed" },
+        coding: { ...seed.phaseModelPolicies.coding, modelOverride: "gpt-current" }
+      }
+    };
+
+    expect(resolvePhaseModelPolicy(provider, "planning").modelOverride).toBeUndefined();
+    expect(resolvePhaseModelPolicy(provider, "coding").modelOverride).toBe("gpt-current");
   });
 
   it("keeps legacy max_tokens for older OpenAI-compatible chat models", () => {
@@ -566,7 +727,7 @@ process.exit(2);
     expect(combined).toContain("Decision: proceed");
     expect(combined).toContain("materially change the files, UX, architecture");
     expect(combined).toContain("only add-note operations using kind llm-question");
-    expect(anthropicBody.max_tokens).toBe(64000);
+    expect(anthropicBody.max_tokens).toBe(16000);
     expect(anthropicBody.output_config).toEqual({ effort: "medium" });
   });
 
@@ -585,7 +746,7 @@ process.exit(2);
     const provider = createSeedProject("/tmp/archicode").project.settings.providers.find((item) => item.kind === "anthropic-compatible")!;
     const body = buildAnthropicCompatibleBody(provider, "{}", "Debug", false, "debugging", resolvePhaseModelPolicy(provider, "debugging"));
 
-    expect(body.max_tokens).toBe(64000);
+    expect(body.max_tokens).toBe(32000);
     expect(body.temperature).toBe(1);
     expect(body.thinking).toEqual({ type: "adaptive", display: "omitted" });
     expect(body.output_config).toEqual({ effort: "medium" });
@@ -628,7 +789,7 @@ process.exit(2);
     const secondBody = JSON.parse(String((fetchMock.mock.calls[1]?.[1] as RequestInit | undefined)?.body)) as Record<string, unknown>;
 
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(firstBody.max_tokens).toBe(64000);
+    expect(firstBody.max_tokens).toBe(16000);
     expect(firstBody.thinking).toEqual({ type: "adaptive", display: "omitted" });
     expect(firstBody.output_config).toEqual({ effort: "medium" });
     expect(secondBody.thinking).toBeUndefined();
@@ -654,6 +815,7 @@ process.exit(2);
 
     expect(body.thinking).toEqual({ type: "adaptive", display: "omitted" });
     expect(body.output_config).toEqual({ effort: "medium" });
+    expect(body.max_tokens).toBe(16000);
   });
 
   it("uses configured Anthropic temperature when thinking is disabled", () => {
@@ -1323,7 +1485,7 @@ process.stdin.on("end", () => {
     }, resolvePhaseModelPolicy(provider, "brainstorming"));
 
     expect(body.tools).toEqual([{ type: "web_search_20260318", name: "web_search" }]);
-    expect(body.max_tokens).toBe(32000);
+    expect(body.max_tokens).toBe(24000);
     expect(body.temperature).toBe(1);
     expect(body.thinking).toEqual({ type: "adaptive", display: "omitted" });
     expect(body.output_config).toEqual({ effort: "medium" });

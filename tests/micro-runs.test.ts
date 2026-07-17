@@ -8,6 +8,7 @@ import {
   executeMicroRun,
   getConflictedFiles,
   isFileConflicted,
+  resolveMicroRunProvider,
   runGitCommand,
   runVerificationCommand
 } from "../src/main/microRuns";
@@ -116,6 +117,20 @@ function richPicassoFlow(id: string, name: string) {
   };
 }
 
+function arraySchemasMissingItems(value: unknown, path = "$"): string[] {
+  if (Array.isArray(value)) {
+    return value.flatMap((item, index) => arraySchemasMissingItems(item, `${path}[${index}]`));
+  }
+  if (!value || typeof value !== "object") return [];
+
+  const schema = value as Record<string, unknown>;
+  const missing = schema.type === "array" && !("items" in schema) ? [path] : [];
+  return [
+    ...missing,
+    ...Object.entries(schema).flatMap(([key, item]) => arraySchemasMissingItems(item, `${path}.${key}`))
+  ];
+}
+
 async function tmpRepo(): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), "archicode-microruns-"));
   await execAsync("git init -q", { cwd: root });
@@ -151,6 +166,39 @@ describe("executeMicroRun", () => {
     );
     expect(result.status).toBe("failed");
     expect(result.error).toMatch(/No micro-run agent registered/);
+  });
+
+  it("resolves independent subagent models while Default inherits the invoking provider model", () => {
+    const seed = fakeAnthropicProvider();
+    const chatSelectedProvider = {
+      ...seed,
+      model: "claude-chat-selected",
+      detectedAvailableModels: ["claude-chat-selected", "claude-picasso"],
+      phaseModelPolicies: {
+        ...seed.phaseModelPolicies,
+        brainstorming: { ...seed.phaseModelPolicies.brainstorming, modelOverride: "claude-chat-selected" }
+      }
+    };
+    const inherited = resolveMicroRunProvider(chatSelectedProvider, "graph-reconciliation");
+    const overridden = resolveMicroRunProvider({
+      ...chatSelectedProvider,
+      subagentModelPolicies: {
+        ...chatSelectedProvider.subagentModelPolicies,
+        picasso: { ...chatSelectedProvider.subagentModelPolicies.picasso, modelOverride: "claude-picasso" }
+      }
+    }, "graph-reconciliation");
+    const stale = resolveMicroRunProvider({
+      ...chatSelectedProvider,
+      subagentModelPolicies: {
+        ...chatSelectedProvider.subagentModelPolicies,
+        picasso: { ...chatSelectedProvider.subagentModelPolicies.picasso, modelOverride: "claude-removed" }
+      }
+    }, "graph-reconciliation");
+
+    expect(inherited.model).toBe("claude-chat-selected");
+    expect(inherited.phaseModelPolicies.brainstorming.modelOverride).toBeUndefined();
+    expect(overridden.phaseModelPolicies.brainstorming.modelOverride).toBe("claude-picasso");
+    expect(stale.phaseModelPolicies.brainstorming.modelOverride).toBeUndefined();
   });
 
   it("retries once on a transient transport failure ('terminated') then succeeds", async () => {
@@ -209,15 +257,24 @@ describe("executeMicroRun", () => {
       }));
     vi.stubGlobal("fetch", fetchMock);
 
+    const provider = fakeAnthropicProvider();
     const result = await executeMicroRun(
       "/nonexistent",
       "graph-reconciliation",
       { objective: "Create a new top-level flow", mode: "design" },
-      fakeAnthropicProvider(),
+      {
+        ...provider,
+        detectedAvailableModels: [provider.model!, "claude-picasso"],
+        subagentModelPolicies: {
+          ...provider.subagentModelPolicies,
+          picasso: { ...provider.subagentModelPolicies.picasso, modelOverride: "claude-picasso" }
+        }
+      },
       fakeBundle()
     );
 
     const firstBody = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string) as {
+      model?: string;
       system?: Array<{ text?: string }>;
       messages?: Array<{ content?: Array<{ text?: string }> }>;
     };
@@ -229,6 +286,7 @@ describe("executeMicroRun", () => {
     expect(systemText).toContain("bounded, verifiable units");
     expect(systemText).not.toContain("Your name is Archi");
     expect(userText).not.toContain("You are Picasso");
+    expect(firstBody.model).toBe("claude-picasso");
   });
 
   it("carries Picasso's full tool transcript across stateless Responses requests", async () => {
@@ -793,6 +851,24 @@ describe("Sherlock and Picasso contracts", () => {
     expect(prompt).toContain("at least 160 characters");
     expect(prompt).toContain("Perform a semantic Open details audit");
     expect(prompt).toContain("detailFlowAssessments");
+  });
+
+  it("keeps every exposed Picasso array schema portable across strict providers", () => {
+    const context = {
+      projectRoot: "/tmp/project",
+      bundle: fakeBundle(),
+      provider: fakeOpenAIResponsesProvider()
+    };
+    const tools = picassoGraphAgent.tools(context, {
+      objective: "Create a trip-management flow",
+      mode: "design"
+    });
+
+    const missingItems = tools.flatMap((tool) =>
+      arraySchemasMissingItems(tool.inputSchema, tool.providerToolName)
+    );
+
+    expect(missingItems).toEqual([]);
   });
 
   it("accepts Picasso constraints serialized as text by a weak parent model", () => {

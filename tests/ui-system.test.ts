@@ -594,9 +594,12 @@ describe("renderer UI system", () => {
     expect(globalSetup).toContain("isOfficialOpenAiCompatibleProvider");
     expect(toolbar).toContain("Loaded ${provider.detectedAvailableModels.length} models from OpenAI's models endpoint.");
     expect(globalSetup).toContain("Loaded ${provider.detectedAvailableModels.length} models from OpenAI's models endpoint.");
-    expect(toolbar).toContain("if (provider.model && options.includes(provider.model)) return provider;");
+    expect(toolbar).toContain("draft.providers.map(normalizeProviderModelSelections)");
     expect(toolbar).toContain("await refreshCheckedProviderDraft(providerId)");
     expect(toolbar).toContain("mergeProviderCapabilityMetadata(current.providers, checkedProvider)");
+    expect(toolbar).toContain("Model maximum unknown");
+    expect(toolbar).toContain("Model maximum:");
+    expect(toolbar).toContain("providerModelOutputTokenLimit");
     expect(globalSetup).toContain("if (provider.model && options.includes(provider.model)) return provider;");
     expect(main).toContain("archicode:check-global-provider");
     expect(preload).toContain("checkGlobalProvider");
@@ -617,6 +620,26 @@ describe("renderer UI system", () => {
     expect(css).toContain(".provider-card-actions");
     expect(css).toContain(".settings-keychain-note");
     expect(main).toContain("if (!providerIds.has(providerId)) delete providerSecrets[providerId]");
+  });
+
+  it("uses provider-aware model dropdowns for phase and subagent LLM profiles", () => {
+    const toolbar = readFileSync(resolve(repoRoot, "src/renderer/src/components/ProjectToolbar.tsx"), "utf8");
+    const picker = readFileSync(resolve(repoRoot, "src/renderer/src/components/ModelCombobox.tsx"), "utf8");
+    const css = readFileSync(resolve(repoRoot, "src/renderer/src/styles/app.css"), "utf8");
+
+    expect(toolbar).toContain("PROVIDER_DEFAULT_MODEL_VALUE");
+    expect(toolbar).toContain("profileModelOptions(enabledProvider, policy)");
+    expect(toolbar).toContain("Model choices are remembered separately for each provider card");
+    expect(toolbar).toContain('picasso: "Picasso"');
+    expect(toolbar).toContain('sherlock: "Sherlock"');
+    expect(toolbar).toContain('solomon: "Solomon"');
+    expect(toolbar).toContain("enabledProvider.subagentModelPolicies?.[profile]");
+    expect(toolbar).toContain("phaseProfileDescriptions[phase]");
+    expect(toolbar).toContain("llm-profile-card-help");
+    expect(toolbar).toContain("<HelpCircle size={14}");
+    expect(picker).toContain("catalogMode ? selectedLabel : value");
+    expect(css).toContain(".llm-profile-section-heading");
+    expect(css).toContain(".llm-profile-card-help");
   });
 
   it("opens editable local model pickers with the full suggestion list", () => {

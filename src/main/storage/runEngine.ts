@@ -92,7 +92,7 @@ import type { TestAuthoringInput, TestAuthoringOutput } from "../microRunAgents/
 import { createProjectSkill as writeProjectSkill, listProjectSkills as readProjectSkills, selectedSkillsPrompt } from "../skills";
 import { callMcpTool, enabledMcpServers, importMcpServers, listMcpRegistryServers, mcpServerFromRegistryEntry, providerMcpTools, refreshMcpServerCapabilities, type ProviderMcpTool } from "../mcp";
 import { archicodeInternalTools, callArchicodeInternalTool, createArchicodeInternalMcpServer, isArchicodeInternalTool, type InternalConsoleCommandResult } from "../internalTools";
-import { buildSubprocessEnv, classifyCommandRisk, commandAllowedBySettings, isKnownBinary } from "../../shared/execution";
+import { type ShellCommandRisk, buildSubprocessEnv, classifyCommandRisk, commandAllowedBySettings, isKnownBinary } from "../../shared/execution";
 import { deriveContextBudgetPlan, estimateTextTokens } from "../../shared/contextBudget";
 import { sumLlmUsage, isAllUsageUnavailable } from "../../shared/llmPricing";
 import { isSubflowIgnored, workingNodesForFlow } from "../../shared/graph";
@@ -2980,7 +2980,7 @@ export async function approveRun(input: {
       approvedToolResult = await executeRunMcpTool(input.projectRoot, run.id, bundle.project.settings, mcpTools, {
         providerToolName: pendingToolCall.providerToolName,
         argumentsJson: pendingToolCall.argumentsJson ?? "{}"
-      });
+      }, { approvedByUser: true });
     } catch (error) {
       approvedToolResult = `Tool execution failed after approval: ${error instanceof Error ? error.message : String(error)}`;
     }
@@ -2988,8 +2988,11 @@ export async function approveRun(input: {
   const approvedMcpServerIds = run.mcp?.pendingServerIds.length
     ? [...new Set([...(run.mcp.approvedServerIds ?? []), ...run.mcp.pendingServerIds])]
     : run.mcp?.approvedServerIds ?? [];
+  // Re-read after executing the approved tool call so its call records and
+  // logs survive; building from the pre-execution snapshot would erase them.
+  const runAfterTool = pendingToolCall ? await readRun(input.projectRoot, input.runId).catch(() => run) : run;
   const approved = runSchema.parse({
-    ...run,
+    ...runAfterTool,
     status: nextStatus,
     phase: nextPhase,
     permission: {
@@ -3057,7 +3060,7 @@ export async function approveRun(input: {
         ? [{ kind: "debugging" as const, decision: "accepted" as const, decidedAt: iso(), reason: "Approved from run console." }]
         : [])
     ],
-    logs: [...run.logs, { at: iso(), stream: "system", text: pendingToolCall
+    logs: [...runAfterTool.logs, { at: iso(), stream: "system", text: pendingToolCall
       ? `MCP tool approval granted for ${pendingToolCall.serverLabel} / ${pendingToolCall.toolName}. Resuming the same run.`
       : run.status.startsWith("awaiting")
         ? "Review approved."
@@ -4827,24 +4830,32 @@ function localProviderMcpPrompt(run: Run, settings: ProjectSettings, provider: P
     lines.push("When you need an Ask-mode MCP tool, stop and return exactly one JSON object with this shape: { \"archicodeMcpRequest\": { \"serverId\": \"context7\", \"toolName\": \"resolve-library-id\", \"arguments\": { ... }, \"intent\": \"one short sentence explaining why the tool is needed now\" } }.");
     lines.push("Do not mix that JSON object with prose. Use only listed enabled server ids and tool names. After approval or denial, ArchiCode will resume you in the same run with the result or denial reason.");
   }
+  return lines.join("\n");
+}
+
+/**
+ * Continuation text for a run resuming after a tool approval decision. Shared
+ * by every provider kind: local CLI replays with its original output attached,
+ * API providers replay the phase with the decision and result in the prompt.
+ */
+function runMcpResumePrompt(run: Run): string {
   const resume = run.mcp?.continuation?.resume;
-  if (resume) {
-    lines.push("");
-    lines.push("Continuation state for this same run:");
-    if (resume.decision === "approved") {
-      lines.push(`- Approved MCP tool call: ${resume.serverLabel} / ${resume.toolName}`);
-      lines.push(`- Arguments JSON: ${resume.argumentsJson ?? "{}"}`);
-      if (resume.resultText?.trim()) lines.push(`- Tool result:\n${resume.resultText.trim().slice(0, 12000)}`);
-      lines.push("Continue from that exact point using the tool result. Do not re-request the same tool call.");
-    } else {
-      lines.push(`- Denied MCP tool call: ${resume.serverLabel} / ${resume.toolName}`);
-      lines.push(`- Denial reason: ${resume.deniedReason ?? "Denied for this run."}`);
-      lines.push("Continue the same run knowing that tool is unavailable. Do not re-request the same denied tool unless the user changes settings or explicitly tells you to retry.");
-    }
-    if (run.mcp?.continuation?.originalOutput.trim()) {
-      lines.push("Your previous approval-turn output was:");
-      lines.push(run.mcp.continuation.originalOutput.trim().slice(0, 12000));
-    }
+  if (!resume) return "";
+  const lines: string[] = [];
+  lines.push("Continuation state for this same run:");
+  if (resume.decision === "approved") {
+    lines.push(`- Approved MCP tool call: ${resume.serverLabel} / ${resume.toolName}`);
+    lines.push(`- Arguments JSON: ${resume.argumentsJson ?? "{}"}`);
+    if (resume.resultText?.trim()) lines.push(`- Tool result:\n${resume.resultText.trim().slice(0, 12000)}`);
+    lines.push("The user approved this call and it already executed. Continue from that exact point using the tool result. Do not re-request the same tool call.");
+  } else {
+    lines.push(`- Denied MCP tool call: ${resume.serverLabel} / ${resume.toolName}`);
+    lines.push(`- Denial reason: ${resume.deniedReason ?? "Denied for this run."}`);
+    lines.push("Continue the same run knowing that tool call is unavailable. Do not re-request the same denied call unless the user changes settings or explicitly tells you to retry.");
+  }
+  if (run.mcp?.continuation?.originalOutput.trim()) {
+    lines.push("Your previous approval-turn output was:");
+    lines.push(run.mcp.continuation.originalOutput.trim().slice(0, 12000));
   }
   return lines.join("\n");
 }
@@ -4867,12 +4878,80 @@ function localProviderSubagentPrompt(settings: ProjectSettings, provider: Projec
   ].join("\n");
 }
 
+/**
+ * Thrown when a console command needs the user's manual approval mid-phase.
+ * The run is already persisted as needs-permission with the pending tool call
+ * when this propagates; phase error handlers must return quietly instead of
+ * marking the run failed. Approve/Reject in the run console resumes the phase.
+ */
+export class RunConsoleApprovalPending extends Error {
+  constructor(command: string) {
+    super(`Waiting for user approval to run console command: ${command}`);
+    this.name = "RunConsoleApprovalPending";
+  }
+}
+
+function consoleCommandFromArguments(argumentsJson: string): string {
+  try {
+    const args = JSON.parse(argumentsJson || "{}") as Record<string, unknown>;
+    return typeof args.command === "string" ? args.command.trim() : "";
+  } catch {
+    return "";
+  }
+}
+
+async function pauseRunForConsoleApproval(
+  projectRoot: string,
+  runId: string,
+  callId: string,
+  input: { providerToolName: string; argumentsJson: string },
+  command: string,
+  risk: ShellCommandRisk
+): Promise<void> {
+  const latest = await readRun(projectRoot, runId);
+  const at = iso();
+  await writeRun(projectRoot, runSchema.parse({
+    ...latest,
+    status: "needs-permission",
+    permission: {
+      ...latest.permission,
+      decision: "pending",
+      reason: `The provider wants to run a ${risk}-risk console command: ${command}`
+    },
+    mcp: {
+      decision: "pending",
+      approvedServerIds: latest.mcp?.approvedServerIds ?? [],
+      deniedServerIds: latest.mcp?.deniedServerIds ?? [],
+      pendingServerIds: ["archicode-internal-tools"],
+      pendingToolCall: {
+        serverId: "archicode-internal-tools",
+        serverLabel: "ArchiCode Tools",
+        toolName: "run_command",
+        providerToolName: input.providerToolName,
+        argumentsJson: input.argumentsJson,
+        intent: `Execute console command (${risk} risk): ${command}`,
+        phase: latest.phase
+      },
+      continuation: {
+        providerKind: "api",
+        originalOutput: ""
+      },
+      reason: `Waiting for approval to run console command: ${command}`
+    },
+    mcpToolCalls: latest.mcpToolCalls.map((call) => call.id === callId
+      ? { ...call, status: "approval-required", resultSummary: `Waiting for user approval to run: ${command}`, completedAt: at }
+      : call),
+    logs: [...latest.logs, { at, stream: "system", text: `Waiting for console command approval: ${command}` }]
+  }));
+}
+
 async function executeRunMcpTool(
   projectRoot: string,
   runId: string,
   settings: ProjectSettings,
   mcpTools: ProviderMcpTool[],
-  input: { providerToolName: string; argumentsJson: string }
+  input: { providerToolName: string; argumentsJson: string },
+  execOptions?: { approvedByUser?: boolean }
 ): Promise<string> {
   const normalized = normalizeProjectToolArguments(projectRoot, input.providerToolName, input.argumentsJson);
   const effectiveInput = normalized.changed ? { ...input, argumentsJson: normalized.argumentsJson } : input;
@@ -4911,10 +4990,22 @@ async function executeRunMcpTool(
           settings,
           loadProject: () => loadProject(projectRoot),
           readArtifactText: (artifactPath) => readArtifactText(projectRoot, artifactPath),
-          runConsoleCommand: (args) => runInternalConsoleCommand(projectRoot, settings, args)
+          runConsoleCommand: (args) => runInternalConsoleCommand(projectRoot, settings, args, { approvalGranted: execOptions?.approvedByUser })
         }, effectiveInput)
       : await callMcpTool(settings, effectiveInput);
     const resultText = output.resultText;
+    // A gated console command pauses the run for the user's decision instead of
+    // handing the model a dead-end "approval-required" receipt. Local CLI
+    // providers keep the receipt: their transport cannot pause mid-invocation.
+    if (input.providerToolName === "archicode_console_run_command" && resultText.includes("\"approval-required\"")) {
+      const parsed = JSON.parse(resultText) as { status?: string; command?: string; risk?: string };
+      const providerKind = settings.providers.find((item) => item.id === started.providerId)?.kind;
+      if (parsed.status === "approval-required" && !isLocalProviderKind(providerKind)) {
+        const command = parsed.command ?? consoleCommandFromArguments(effectiveInput.argumentsJson);
+        await pauseRunForConsoleApproval(projectRoot, runId, callId, effectiveInput, command, (parsed.risk as ShellCommandRisk) ?? "high");
+        throw new RunConsoleApprovalPending(command);
+      }
+    }
     const latest = await readRun(projectRoot, runId);
     await writeRun(projectRoot, runSchema.parse({
       ...latest,
@@ -4933,6 +5024,8 @@ async function executeRunMcpTool(
     }));
     return resultText;
   } catch (error) {
+    // The pause path already persisted the run and its call record.
+    if (error instanceof RunConsoleApprovalPending) throw error;
     const latest = await readRun(projectRoot, runId);
     const message = error instanceof Error ? error.message : String(error);
     await writeRun(projectRoot, runSchema.parse({
@@ -5146,7 +5239,7 @@ export async function executeRunSubagentTool(
   };
 }
 
-export async function runInternalConsoleCommand(projectRoot: string, settings: ProjectSettings, args: Record<string, unknown>): Promise<InternalConsoleCommandResult> {
+export async function runInternalConsoleCommand(projectRoot: string, settings: ProjectSettings, args: Record<string, unknown>, options?: { approvalGranted?: boolean }): Promise<InternalConsoleCommandResult> {
   const command = typeof args.command === "string" ? args.command.trim() : "";
   if (!command) throw new Error("command is required.");
   const rawCwd = typeof args.cwd === "string" ? args.cwd.trim() : "";
@@ -5177,7 +5270,7 @@ export async function runInternalConsoleCommand(projectRoot: string, settings: P
     };
   }
   const reusablePolicy = commandAllowedBySettings(settings, command, cwd);
-  if (risk !== "low" && !reusablePolicy && !commandsAutoApproved(settings, risk, command)) {
+  if (!options?.approvalGranted && risk !== "low" && !reusablePolicy && !commandsAutoApproved(settings, risk, command)) {
     return {
       command,
       cwd: relativeCwd || ".",
@@ -5616,8 +5709,9 @@ async function providerOptionsForRun(projectRoot: string, run: Run, settings: Pr
     : "Built-in ArchiCode run tools are disabled in project settings.";
   const localMcpPrompt = localProviderMcpPrompt(run, settings, provider);
   const localSubagentPrompt = localProviderSubagentPrompt(settings, provider);
+  const mcpResumePrompt = runMcpResumePrompt(run);
   return {
-    selectedSkillsPrompt: [selectedSkills, internalToolPrompt, localMcpPrompt, localSubagentPrompt].filter((part) => part.trim()).join("\n\n"),
+    selectedSkillsPrompt: [selectedSkills, internalToolPrompt, localMcpPrompt, mcpResumePrompt, localSubagentPrompt].filter((part) => part.trim()).join("\n\n"),
     imageAttachments: runImageAttachments(projectRoot, bundle, run),
     mcpTools,
     mcpServers: internalServer ? [internalServer, ...allowedExternalServers] : allowedExternalServers,
@@ -5642,6 +5736,7 @@ export async function callProviderForRun(
   promptSummary: string,
   options: ProviderCallOptions
 ): Promise<string> {
+  options = { cacheSessionId: runId, ...options };
   if (!isLocalProviderKind(provider.kind)) {
     return callProvider(provider, contextText, promptSummary, options);
   }
@@ -5907,6 +6002,8 @@ async function completePlanningRun(projectRoot: string, run: Run, contextText?: 
     if (nextStatus === "coding") void scheduleNextQueuedJob(projectRoot);
   } catch (error) {
     await flushRunLogAppends(run.id);
+    // The run is already persisted as needs-permission; the approval decision resumes it.
+    if (error instanceof RunConsoleApprovalPending) return;
     if (await runWasCancelled(projectRoot, run.id)) return;
     const latestPlanningRun = await readRun(projectRoot, run.id).catch(() => planningRun);
     if (latestPlanningRun.status === "cancelled") return;
@@ -6512,6 +6609,8 @@ async function completeCodingRun(projectRoot: string, run: Run, contextText?: st
     if (!needsReplan && (!noSourceChangesFailure || verificationOnlyNoSourceChanges) && !reachedBatchLimitWithMoreWork && !codingStoppedWithOpenTasks && !shouldReviewCode && buildCommand) void scheduleNextQueuedJob(projectRoot);
   } catch (error) {
     await flushRunLogAppends(run.id);
+    // The run is already persisted as needs-permission; the approval decision resumes it.
+    if (error instanceof RunConsoleApprovalPending) return;
     if (await runWasCancelled(projectRoot, run.id)) return;
     const latestCodingRun = await readRun(projectRoot, run.id).catch(() => codingRun);
     if (latestCodingRun.status === "cancelled") return;
@@ -7141,6 +7240,8 @@ async function completeProviderRun(
     };
     await writeRun(projectRoot, await finalizeTerminalRun(projectRoot, runSchema.parse(completed), completed.runInstructions ?? "Provider run completed."));
   } catch (error) {
+    // The run is already persisted as needs-permission; the approval decision resumes it.
+    if (error instanceof RunConsoleApprovalPending) return;
     if (await runWasCancelled(projectRoot, run.id)) return;
     const failed: Run = {
       ...run,

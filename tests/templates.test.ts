@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { inferCommandSettings } from "../src/main/storage/commandInference";
-import { createProject, ensureEmptyCodebaseProject, ensureProject, loadProject, setGlobalMcpSettingsStore, setGlobalProviderSettingsStore, updateProjectSettings } from "../src/main/storage/projectStore";
+import { createProject, ensureEmptyCodebaseProject, ensureProject, loadProject, migrateDefaultPhaseModelPolicies, setGlobalMcpSettingsStore, setGlobalProviderSettingsStore, updateProjectSettings } from "../src/main/storage/projectStore";
 import { createSeedProject } from "../src/shared/fixtures";
 import { defaultPhaseModelPolicies, type ProjectSettings } from "../src/shared/schema";
 import { createProjectFromTemplate, projectTemplates } from "../src/shared/templates";
@@ -488,6 +488,53 @@ describe("project templates", () => {
 
     expect(provider?.phaseModelPolicies.coding.maxOutputTokens).toBe(defaultPhaseModelPolicies.coding.maxOutputTokens);
     expect(provider?.phaseModelPolicies.planning.maxOutputTokens).toBe(defaultPhaseModelPolicies.planning.maxOutputTokens);
+    expect(provider?.phaseModelPolicies.summarizing.maxOutputTokens).toBe(8000);
+    expect(provider?.phaseModelPolicies.brainstorming.maxOutputTokens).toBe(24000);
+  });
+
+  it("migrates the previous Chat Research default without replacing a custom output budget", () => {
+    const provider = createSeedProject("/tmp/archicode").project.settings.providers[0]!;
+    const previousPolicies = {
+      ...provider.phaseModelPolicies,
+      summarizing: {
+        ...provider.phaseModelPolicies.summarizing,
+        maxOutputTokens: 4000
+      },
+      brainstorming: {
+        ...provider.phaseModelPolicies.brainstorming,
+        maxOutputTokens: 12000
+      }
+    };
+
+    const migrated = migrateDefaultPhaseModelPolicies({
+      ...provider,
+      phaseModelPolicies: previousPolicies
+    });
+    const customized = migrateDefaultPhaseModelPolicies({
+      ...provider,
+      phaseModelPolicies: {
+        ...previousPolicies,
+        brainstorming: {
+          ...previousPolicies.brainstorming,
+          maxOutputTokens: 18000
+        }
+      }
+    });
+    const customSummary = migrateDefaultPhaseModelPolicies({
+      ...provider,
+      phaseModelPolicies: {
+        ...previousPolicies,
+        summarizing: {
+          ...previousPolicies.summarizing,
+          maxOutputTokens: 6000
+        }
+      }
+    });
+
+    expect(migrated.phaseModelPolicies.summarizing.maxOutputTokens).toBe(8000);
+    expect(migrated.phaseModelPolicies.brainstorming.maxOutputTokens).toBe(24000);
+    expect(customized.phaseModelPolicies.brainstorming.maxOutputTokens).toBe(18000);
+    expect(customSummary.phaseModelPolicies.summarizing.maxOutputTokens).toBe(6000);
   });
 
   it("infers npm commands from package scripts without preapproving them", async () => {
