@@ -19,6 +19,7 @@
     "dist": "npm run icons && npm run build && electron-builder",
     "dist:mac": "npm run icons && npm run build && electron-builder --mac",
     "dist:win": "npm run icons && npm run build && electron-builder --win",
+    "dist:store": "npm run icons && npm run build && electron-builder --win appx --x64",
     "preview": "electron-vite preview",
     "test": "vitest run",
     "benchmark:importer": "vite-node scripts/benchmark-importer.ts",
@@ -85,6 +86,13 @@
         "nsis",
         "zip"
       ]
+    },
+    "appx": {
+      "applicationId": "ArchiCode",
+      "identityName": "PixelHat.ArchiCode",
+      "publisher": "CN=2D6722E3-2524-4AD7-BF2A-9F7F35659FFC",
+      "publisherDisplayName": "Pixel Hat",
+      "displayName": "ArchiCode"
     },
     "linux": {
       "icon": "build/icon.png"
