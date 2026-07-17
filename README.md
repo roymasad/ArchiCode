@@ -88,6 +88,7 @@ The command writes review copies to `artifacts/visual-qa/` and publishes the sta
 npm run pack
 npm run dist:mac
 npm run dist:win
+npm run dist:store
 ```
 
 `pack` creates an unpacked application under `release/`. macOS notarization runs when the required Apple credentials are present; local builds otherwise skip it.
