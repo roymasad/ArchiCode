@@ -2156,7 +2156,7 @@ export function ProjectToolbar({
           <div className="confirm-summary">
             <div className="confirm-summary-grid">
               <span><b>Effect</b>Every node in this flow will be repositioned into a clean grid.</span>
-              <span><b>Warning</b>Existing node positions will be overwritten, and there is no undo.</span>
+              <span><b>Warning</b>Existing node positions will be overwritten. You can undo this layout change with Cmd/Ctrl+Z.</span>
             </div>
           </div>
           <div className="dialog-actions">

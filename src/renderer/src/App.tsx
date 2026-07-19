@@ -471,7 +471,8 @@ export function App() {
     closeResearchPanel,
     workbenchView,
     setWorkbenchView,
-    showDirectUndoNotice,
+    undoPresentationAction,
+    redoPresentationAction,
     dismissAppNotice,
     toggleTheme,
     reload,
@@ -500,7 +501,8 @@ export function App() {
     closeResearchPanel: state.closeResearchPanel,
     workbenchView: state.workbenchView,
     setWorkbenchView: state.setWorkbenchView,
-    showDirectUndoNotice: state.showDirectUndoNotice,
+    undoPresentationAction: state.undoPresentationAction,
+    redoPresentationAction: state.redoPresentationAction,
     dismissAppNotice: state.dismissAppNotice,
     toggleTheme: state.toggleTheme,
     reload: state.reload,
@@ -638,9 +640,16 @@ export function App() {
   useEffect(() => {
     if (!window.archicode?.onDirectUndoRequested) return;
     return window.archicode.onDirectUndoRequested(() => {
-      showDirectUndoNotice();
+      void undoPresentationAction();
     });
-  }, [showDirectUndoNotice]);
+  }, [undoPresentationAction]);
+
+  useEffect(() => {
+    if (!window.archicode?.onDirectRedoRequested) return;
+    return window.archicode.onDirectRedoRequested(() => {
+      void redoPresentationAction();
+    });
+  }, [redoPresentationAction]);
 
   useEffect(() => {
     if (!error) {

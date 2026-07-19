@@ -94,8 +94,8 @@ export function appendEdgeLabelHistory(history: string[] | undefined, label: str
 
 export const directUndoNotice: AppNotice = {
   tone: "warning",
-  title: "Undo unavailable",
-  message: "ArchiCode doesn't support realtime undo due to risk of graph/code desyncs. To undo changes, discard them with Git"
+  title: "No safe presentation change to undo",
+  message: "ArchiCode only undoes node movement, layout, size, shape, and color. Semantic graph and node-property changes remain protected from realtime undo; use Git when you need to revert them."
 };
 
 export async function offerGitAttributesSetup(projectRoot: string): Promise<AppNotice | null> {
@@ -668,6 +668,11 @@ export function projectScopedResetState(): Partial<ArchicodeState> {
     graphHistory: [],
     graphHistoryOpen: false,
     graphHistoryLoading: false,
+    graphHistoryCursor: null,
+    graphHistoryHasMore: false,
+    presentationUndoStack: [],
+    presentationRedoStack: [],
+    presentationHistoryBusy: false,
     historicalInspection: null,
     fileBrowser: null,
     selectedFilePath: null,

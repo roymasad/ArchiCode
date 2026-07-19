@@ -377,6 +377,16 @@ code {
   background: color-mix(in srgb, #8b5cf6 9%, var(--surface));
 }
 
+.graph-history-item.is-current {
+  margin-bottom: 4px;
+  border-bottom-color: var(--border);
+}
+
+.graph-history-item.is-current .graph-history-dot {
+  border-color: var(--accent);
+  background: var(--accent);
+}
+
 .graph-history-dot {
   width: 9px;
   height: 9px;
@@ -397,6 +407,16 @@ code {
   padding: 22px 14px;
   color: var(--text-muted);
   text-align: center;
+}
+
+.graph-history-loading-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 42px;
+  color: var(--text-muted);
+  font-size: 12px;
 }
 
 .sidebar-historical-label {

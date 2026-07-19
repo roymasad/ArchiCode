@@ -1,12 +1,14 @@
 import type { ArchicodeNode, Flow, Note, Project, ProjectBundle } from "../shared/schema";
 import { flowSchema, noteSchema, projectBundleSchema, projectSchema } from "../shared/schema";
-import type { GraphHistoryEntry, GraphHistoryVersion, GraphNodeHistory, GraphNodeHistoryChange, HistoricalGraphBundle } from "../shared/graphHistory";
+import type { GraphHistoryEntry, GraphHistoryPage, GraphHistoryPageOptions, GraphHistoryVersion, GraphNodeHistory, GraphNodeHistoryChange, HistoricalGraphBundle } from "../shared/graphHistory";
 import type { ProjectFileBrowserData, ProjectFileText, ProjectFileTreeNode } from "../shared/projectTools";
 import { flowFromDisk } from "./storage/persistence";
 import { canonicalSemanticNode, computeGraphVersion, semanticNodeChangedFields, semanticNodeValue } from "./storage/graphVersion";
 import { runGit } from "./projectTools";
 
 const MAX_NODE_HISTORY_COMMITS = 500;
+const DEFAULT_GRAPH_HISTORY_PAGE_SIZE = 20;
+const MAX_GRAPH_HISTORY_PAGE_SIZE = 100;
 const MAX_FILE_BYTES = 300_000;
 const MAX_TREE_ENTRIES = 1800;
 const MAX_NODE_HISTORY_CACHE_ENTRIES = 500;
@@ -121,13 +123,32 @@ export async function loadHistoricalGraphBundle(projectRoot: string, revision: s
   return { entry, bundle };
 }
 
-export async function listGraphHistory(projectRoot: string): Promise<GraphHistoryVersion[]> {
+async function countStoredGraphVersions(projectRoot: string): Promise<number | null> {
+  const result = await runGit(projectRoot, [
+    "log",
+    "--first-parent",
+    "-G\"graphVersion\"[[:space:]]*:",
+    "--format=%H",
+    "--",
+    ".archicode/project.json"
+  ]);
+  if (!result.ok) return null;
+  return result.stdout.split(/\r?\n/).filter(Boolean).length;
+}
+
+export async function listGraphHistory(projectRoot: string, options: GraphHistoryPageOptions = {}): Promise<GraphHistoryPage> {
+  const limit = Math.max(1, Math.min(MAX_GRAPH_HISTORY_PAGE_SIZE, Math.floor(options.limit ?? DEFAULT_GRAPH_HISTORY_PAGE_SIZE)));
   const format = "%H%x1f%h%x1f%s%x1f%an%x1f%aI%x1e";
-  const log = await runGit(projectRoot, ["log", "--first-parent", `--format=${format}`]);
-  if (!log.ok) return [];
+  const cursor = options.cursor?.trim() || null;
+  const revisionArgs = cursor ? ["--skip=1", cursor] : [];
+  const log = await runGit(projectRoot, ["log", "--first-parent", `--max-count=${limit + 1}`, `--format=${format}`, ...revisionArgs]);
+  if (!log.ok) return { versions: [], nextCursor: null, hasMore: false, newestVersionNumber: null };
+  const records = log.stdout.split("\u001e").map((record) => record.trim()).filter(Boolean);
+  const pageRecords = records.slice(0, limit);
+  const hasMore = records.length > limit;
   const entries: GraphHistoryEntry[] = [];
   const countsByVersion = new Map<string, Pick<GraphHistoryEntry, "flowCount" | "nodeCount" | "edgeCount">>();
-  for (const record of log.stdout.split("\u001e")) {
+  for (const record of pageRecords) {
     const [commit, shortCommit, subject, author, committedAt] = record.trim().split("\u001f");
     if (!commit) continue;
     try {
@@ -163,7 +184,18 @@ export async function listGraphHistory(projectRoot: string): Promise<GraphHistor
     if (current?.graphVersion === entry.graphVersion) current.commits.push(entry);
     else versions.push({ graphVersion: entry.graphVersion, commits: [entry], latest: entry });
   }
-  return versions;
+  const newestVersionNumber = cursor ? null : await countStoredGraphVersions(projectRoot);
+  if (newestVersionNumber !== null) {
+    versions.forEach((version, index) => {
+      version.versionNumber = newestVersionNumber - index;
+    });
+  }
+  return {
+    versions,
+    nextCursor: hasMore ? pageRecords.at(-1)?.split("\u001f")[0] ?? null : null,
+    hasMore,
+    newestVersionNumber
+  };
 }
 
 export async function readHistoricalProjectFile(projectRoot: string, revision: string, relativePath: string): Promise<ProjectFileText> {

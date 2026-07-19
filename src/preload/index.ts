@@ -1,5 +1,5 @@
 import { clipboard, contextBridge, ipcRenderer, webFrame } from "electron";
-import type { Note, DebugIncident, Flow, LlmPatchProposal, NodePatch, PatchOperationDecision, Project, ProjectBundle, ProjectSettings, ProjectMemoryNote, Artifact, PatchReviewRecord, Run, RunEffort, RunGuidance, RunScope, RuntimeService, ResearchChatScope, ResearchChatSession, ResearchGraphChangeDecision, ResearchGraphChangeResult, ResearchMessageNodeReference } from "../shared/schema";
+import type { Note, DebugIncident, Flow, LlmPatchProposal, NodePatch, PatchOperationDecision, PresentationPatchRequest, PresentationPatchResult, Project, ProjectBundle, ProjectSettings, ProjectMemoryNote, Artifact, PatchReviewRecord, Run, RunEffort, RunGuidance, RunScope, RuntimeService, ResearchChatScope, ResearchChatSession, ResearchGraphChangeDecision, ResearchGraphChangeResult, ResearchMessageNodeReference } from "../shared/schema";
 import type { SpeechModelId, SpeechSettings, TtsModelId, TtsSettings, TtsVoiceId } from "../shared/schema";
 import type { TtsModelDownloadProgress, TtsModelStatus, TtsRuntimeStatus, TtsSpeechStreamChunk, TtsSpeechStreamResult, TtsSynthesisResult } from "../main/tts";
 import type {
@@ -14,7 +14,7 @@ import type {
   ProjectSkill
 } from "../shared/capabilities";
 import type { GitOperationResult, GitStatus, ProjectFileBrowserData, ProjectFileDiff, ProjectFileText } from "../shared/projectTools";
-import type { GraphHistoryVersion, GraphNodeHistory, HistoricalGraphBundle } from "../shared/graphHistory";
+import type { GraphHistoryPage, GraphHistoryPageOptions, GraphNodeHistory, HistoricalGraphBundle } from "../shared/graphHistory";
 import type { GlobalResearchPersonality, GlobalResearchVerbosity } from "../shared/researchPersonality";
 import type { AppUpdateStatus } from "../main/updater";
 import type { ExternalMcpHostStatus } from "../main/mcpHost";
@@ -301,6 +301,8 @@ const api = {
   pickReferenceFiles: (): Promise<string[]> => ipcRenderer.invoke("archicode:pick-reference-files"),
   createProject: (templateId: string): Promise<ProjectBundle | null> => ipcRenderer.invoke("archicode:create-project", templateId),
   saveFlow: (projectRoot: string, flow: Flow): Promise<ProjectBundle> => ipcRenderer.invoke("archicode:save-flow", projectRoot, flow),
+  applyPresentationPatch: (projectRoot: string, request: PresentationPatchRequest): Promise<PresentationPatchResult> =>
+    ipcRenderer.invoke("archicode:apply-presentation-patch", projectRoot, request),
   importFlow: (projectRoot: string): Promise<ProjectBundle | null> => ipcRenderer.invoke("archicode:import-flow", projectRoot),
   importDrawioFlow: (projectRoot: string, options: DrawioImportRequest): Promise<ProjectBundle | null> =>
     ipcRenderer.invoke("archicode:import-drawio-flow", projectRoot, options),
@@ -484,8 +486,8 @@ const api = {
     ipcRenderer.invoke("archicode:read-chat-artifact", projectRoot, chatId, artifactId),
   getGitStatus: (projectRoot: string): Promise<GitStatus> =>
     ipcRenderer.invoke("archicode:get-git-status", projectRoot),
-  listGraphHistory: (projectRoot: string): Promise<GraphHistoryVersion[]> =>
-    ipcRenderer.invoke("archicode:list-graph-history", projectRoot),
+  listGraphHistory: (projectRoot: string, options?: GraphHistoryPageOptions): Promise<GraphHistoryPage> =>
+    ipcRenderer.invoke("archicode:list-graph-history", projectRoot, options),
   loadHistoricalGraph: (projectRoot: string, commit: string): Promise<HistoricalGraphBundle> =>
     ipcRenderer.invoke("archicode:load-historical-graph", projectRoot, commit),
   listHistoricalProjectFiles: (projectRoot: string, commit: string): Promise<ProjectFileBrowserData> =>
@@ -723,6 +725,11 @@ const api = {
     const listener = () => handler();
     ipcRenderer.on("archicode:direct-undo-requested", listener);
     return () => ipcRenderer.removeListener("archicode:direct-undo-requested", listener);
+  },
+  onDirectRedoRequested: (handler: () => void): (() => void) => {
+    const listener = () => handler();
+    ipcRenderer.on("archicode:direct-redo-requested", listener);
+    return () => ipcRenderer.removeListener("archicode:direct-redo-requested", listener);
   },
   onCodebaseMappingProgress: (handler: (payload: CodebaseMappingProgress) => void): (() => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: CodebaseMappingProgress) => handler(payload);

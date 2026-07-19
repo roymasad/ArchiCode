@@ -356,20 +356,23 @@ describe("renderer UI system", () => {
     expect(gitPanel).toContain("resizable");
   });
 
-  it("routes unsupported direct undo into a warning banner instead of undoing", () => {
+  it("routes direct undo through guarded presentation history", () => {
     const app = readFileSync(resolve(repoRoot, "src/renderer/src/App.tsx"), "utf8");
     const canvas = readFileSync(resolve(repoRoot, "src/renderer/src/components/FlowCanvas.tsx"), "utf8");
     const store = readStoreSource();
+    const historySlice = readFileSync(resolve(repoRoot, "src/renderer/src/store/historySlice.ts"), "utf8");
     const preload = readFileSync(resolve(repoRoot, "src/preload/index.ts"), "utf8");
     const main = readFileSync(resolve(repoRoot, "src/main/index.ts"), "utf8");
     const css = readFileSync(resolve(repoRoot, "src/renderer/src/styles/app.css"), "utf8");
 
     expect(store).toContain("showDirectUndoNotice");
-    expect(store).toContain("Undo unavailable");
-    expect(store).toContain("ArchiCode doesn't support realtime undo due to risk of graph/code desyncs.");
-    expect(store).toContain("discard them with Git");
+    expect(store).toContain("No safe presentation change to undo");
+    expect(store).toContain("ArchiCode only undoes node movement, layout, size, shape, and color.");
+    expect(historySlice).toContain("applyPresentationPatch");
+    expect(historySlice).toContain("reversePresentationMutation");
     expect(canvas).toContain('event.key.toLowerCase() === "z"');
-    expect(canvas).toContain("showDirectUndoNotice();");
+    expect(canvas).toContain("undoPresentationAction();");
+    expect(canvas).toContain("redoPresentationAction();");
     expect(canvas).toContain("event.stopPropagation();");
     expect(app).toContain("window.archicode?.onDirectUndoRequested");
     expect(app).toContain("function ExpandableBanner");
@@ -380,7 +383,28 @@ describe("renderer UI system", () => {
     expect(main).toContain('label: "Undo"');
     expect(main).toContain('accelerator: "CmdOrCtrl+Z"');
     expect(main).toContain('webContents.send("archicode:direct-undo-requested")');
+    expect(main).toContain('webContents.send("archicode:direct-redo-requested")');
     expect(css).toContain(".validation-bar.warning");
+  });
+
+  it("shows committed component history only during historical inspection", () => {
+    const inspector = readNodeInspectorSource();
+
+    expect(inspector).toContain('if (!historicalInspection || !rootPath || !flow || !node');
+    expect(inspector).toContain("const revision = historicalInspection.entry.commit;");
+    expect(inspector).toContain('{historicalInspection ? <section className="node-git-attribution"');
+  });
+
+  it("represents an uncommitted graph version as a selectable current history row", () => {
+    const history = readFileSync(resolve(repoRoot, "src/renderer/src/components/GraphHistoryBar.tsx"), "utf8");
+
+    expect(history).toContain("hasCurrentUncommittedVersion");
+    expect(history).toContain("Current uncommitted graph");
+    expect(history).toContain("Working tree ·");
+    expect(history).toContain("if (entry) void exitHistoricalInspection();");
+    expect(history).toContain("newestCommittedVersionNumber + 1");
+    expect(history).toContain("loadMoreGraphHistory");
+    expect(history).toContain("IntersectionObserver");
   });
 
   it("persists and restores canvas pan and zoom for existing projects", () => {
@@ -1327,7 +1351,7 @@ describe("renderer UI system", () => {
 
     expect(toolbar).toContain("onSelect={() => setCleanLayoutConfirmOpen(true)}");
     expect(toolbar).toContain('title="Clean this layout?"');
-    expect(toolbar).toContain("Existing node positions will be overwritten, and there is no undo.");
+    expect(toolbar).toContain("Existing node positions will be overwritten. You can undo this layout change with Cmd/Ctrl+Z.");
     expect(toolbar).toContain("setCleanLayoutConfirmOpen(false);\n                void autoLayout();");
   });
 

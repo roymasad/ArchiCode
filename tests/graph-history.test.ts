@@ -42,8 +42,11 @@ describe("Git-backed graph history", () => {
     await git(root, "add", ".archicode/project.json", ".archicode/flows");
     await git(root, "commit", "-m", "Evolve graph");
 
-    const history = await listGraphHistory(root);
+    const page = await listGraphHistory(root);
+    const history = page.versions;
     expect(history).toHaveLength(2);
+    expect(page.newestVersionNumber).toBe(2);
+    expect(history.map((version) => version.versionNumber)).toEqual([2, 1]);
     expect(history[1]?.commits).toHaveLength(2);
     expect(history[0]?.graphVersion).not.toBe(history[1]?.graphVersion);
 
@@ -68,5 +71,34 @@ describe("Git-backed graph history", () => {
     expect(currentNodeHistory.changes.map((change) => change.kind)).toEqual(["introduced", "modified"]);
     expect(currentNodeHistory.lastSemanticChange?.author).toEqual({ name: "Graph Editor", email: "graph-editor@example.com" });
     expect(currentNodeHistory.lastSemanticChange?.changedFields).toContain("title");
+  });
+
+  it("loads first-parent history in bounded commit pages", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "archicode-graph-history-pages-"));
+    await ensureProject(root);
+    await git(root, "init");
+    await git(root, "config", "user.email", "history-test@example.com");
+    await git(root, "config", "user.name", "History Test");
+    await git(root, "add", ".archicode", ".gitignore", ".gitattributes");
+    await git(root, "commit", "-m", "Initial graph");
+    for (let index = 1; index <= 25; index += 1) {
+      await writeFile(path.join(root, "source.txt"), `source ${index}\n`, "utf8");
+      await git(root, "add", "source.txt");
+      await git(root, "commit", "-m", `Source change ${index}`);
+    }
+
+    const first = await listGraphHistory(root, { limit: 20 });
+    expect(first.hasMore).toBe(true);
+    expect(first.nextCursor).toBeTruthy();
+    expect(first.versions).toHaveLength(1);
+    expect(first.versions[0]?.commits).toHaveLength(20);
+    expect(first.versions[0]?.versionNumber).toBe(1);
+
+    const second = await listGraphHistory(root, { cursor: first.nextCursor, limit: 20 });
+    expect(second.hasMore).toBe(false);
+    expect(second.nextCursor).toBeNull();
+    expect(second.newestVersionNumber).toBeNull();
+    expect(second.versions).toHaveLength(1);
+    expect(second.versions[0]?.commits).toHaveLength(6);
   });
 });

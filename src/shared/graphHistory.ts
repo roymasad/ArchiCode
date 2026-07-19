@@ -16,6 +16,19 @@ export type GraphHistoryVersion = {
   graphVersion: string;
   commits: GraphHistoryEntry[];
   latest: GraphHistoryEntry;
+  versionNumber?: number;
+};
+
+export type GraphHistoryPage = {
+  versions: GraphHistoryVersion[];
+  nextCursor: string | null;
+  hasMore: boolean;
+  newestVersionNumber: number | null;
+};
+
+export type GraphHistoryPageOptions = {
+  cursor?: string | null;
+  limit?: number;
 };
 
 export type HistoricalGraphBundle = {

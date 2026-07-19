@@ -8,6 +8,7 @@ export const historicalMutationActions = [
   "deleteSubflow", "setNodeLinkedSubflow", "applyResearchCanvasAction", "addNode", "cutSelectedNode", "pasteNode",
   "duplicateSelectedNode", "deleteSelectedNode", "addEdge", "rememberEdgeLabel", "updateSelectedEdge",
   "updateSelectedEdgePatch", "deleteSelectedEdge", "autoLayout", "updateNode", "importFlow", "importDrawioFlow",
+  "applyPresentationAction", "undoPresentationAction", "redoPresentationAction",
   "repairProject", "deleteProjectState", "updateSettings", "updateProjectDetails", "startCodebaseOnboardingRun",
   "cancelCodebaseOnboardingRun",
 

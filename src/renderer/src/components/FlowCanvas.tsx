@@ -658,6 +658,9 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
     authorAcceptanceTestsForFlow,
     busyTestNodeIds,
     saveFlow,
+    applyPresentationAction,
+    undoPresentationAction,
+    redoPresentationAction,
     addNode,
     canvasViewport,
     setCanvasViewport,
@@ -675,7 +678,6 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
     selectProjectFile,
     setWorkbenchView,
     navigateToGraphTarget,
-    showDirectUndoNotice,
     keybindings,
     reload,
     historicalInspection
@@ -702,6 +704,9 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
     authorAcceptanceTestsForFlow: state.authorAcceptanceTestsForFlow,
     busyTestNodeIds: state.busyTestNodeIds,
     saveFlow: state.saveFlow,
+    applyPresentationAction: state.applyPresentationAction,
+    undoPresentationAction: state.undoPresentationAction,
+    redoPresentationAction: state.redoPresentationAction,
     addNode: state.addNode,
     canvasViewport: state.canvasViewport,
     setCanvasViewport: state.setCanvasViewport,
@@ -719,7 +724,6 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
     selectProjectFile: state.selectProjectFile,
     setWorkbenchView: state.setWorkbenchView,
     navigateToGraphTarget: state.navigateToGraphTarget,
-    showDirectUndoNotice: state.showDirectUndoNotice,
     keybindings: state.keybindings,
     reload: state.reload,
     historicalInspection: state.historicalInspection
@@ -1378,7 +1382,8 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
       } else if (command && event.key.toLowerCase() === "z") {
         event.preventDefault();
         event.stopPropagation();
-        showDirectUndoNotice();
+        if (event.shiftKey) void redoPresentationAction();
+        else void undoPresentationAction();
       } else if (matchesChord(keybindings["canvas.autoLayout"], event)) {
         event.preventDefault();
         void autoLayout();
@@ -1388,7 +1393,7 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
     return () => {
       window.removeEventListener("keydown", handleKeyDown);
     };
-  }, [autoLayout, canvas3dVisible, copySelectedNode, cutSelectedNode, deleteSelectedEdge, deleteSelectedNode, duplicateSelectedNode, keybindings, knowledgeMapVisible, openDeleteConfirm, openPaneMenuAtPointer, pasteNode, selectedEdgeId, showDirectUndoNotice, toggleCanvas3d, toggleMinimap]);
+  }, [autoLayout, canvas3dVisible, copySelectedNode, cutSelectedNode, deleteSelectedEdge, deleteSelectedNode, duplicateSelectedNode, keybindings, knowledgeMapVisible, openDeleteConfirm, openPaneMenuAtPointer, pasteNode, redoPresentationAction, selectedEdgeId, toggleCanvas3d, toggleMinimap, undoPresentationAction]);
 
   useEffect(() => {
     if (!contextMenu) return;
@@ -1652,18 +1657,13 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
       const position = nextPositions.get(node.id);
       return position ? { ...node, position } : node;
     });
-    const updatedAt = new Date().toISOString();
-
     setCanvasNodes(nextCanvasNodes);
     try {
-      await saveFlow({
-        ...flow,
-        nodes: flow.nodes.map((node) => {
-          const position = nextPositions.get(node.id);
-          return position ? { ...node, position, updatedAt } : node;
-        }),
-        updatedAt
-      });
+      const applied = await applyPresentationAction("Arrange selected nodes", flow.id, flow.nodes.flatMap((node) => {
+        const position = nextPositions.get(node.id);
+        return position ? [{ nodeId: node.id, field: "position" as const, expected: node.position, value: position }] : [];
+      }));
+      if (!applied) setCanvasNodes(previousCanvasNodes);
     } catch {
       setCanvasNodes(previousCanvasNodes);
     }
@@ -1687,7 +1687,12 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
         updatedAt: new Date().toISOString()
       };
     });
-    await saveFlow({ ...flow, nodes: nextNodes, updatedAt: new Date().toISOString() });
+    const applied = await applyPresentationAction("Move nodes", flow.id, nextNodes.flatMap((node) => {
+      const previous = flow.nodes.find((candidate) => candidate.id === node.id);
+      if (!previous || !draggedPositions.has(node.id)) return [];
+      return [{ nodeId: node.id, field: "position" as const, expected: previous.position, value: node.position }];
+    }));
+    if (!applied) setCanvasNodes(sourceNodes);
   };
 
   const handleSelectionChange = useCallback(({ nodes, edges }: { nodes: Node[]; edges: Edge[] }) => {
@@ -1778,8 +1783,13 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
         updatedAt: new Date().toISOString()
       };
     });
-    await saveFlow({ ...flow, nodes: nextNodes, updatedAt: new Date().toISOString() });
-  }, [canvasNodes, flow, saveFlow, selectGroupNodes]);
+    const applied = await applyPresentationAction("Move group", flow.id, nextNodes.flatMap((node) => {
+      const previous = flow.nodes.find((candidate) => candidate.id === node.id);
+      if (!previous || !draggedPositions.has(node.id)) return [];
+      return [{ nodeId: node.id, field: "position" as const, expected: previous.position, value: node.position }];
+    }));
+    if (!applied) setCanvasNodes(sourceNodes);
+  }, [applyPresentationAction, canvasNodes, flow, selectGroupNodes, sourceNodes]);
 
   useEffect(() => {
     if (!minimapVisible) return;

@@ -13,7 +13,7 @@ function graphVersionNumber(
   const index = commit
     ? versions.findIndex((version) => version.commits.some((entry) => entry.commit === commit))
     : versions.findIndex((version) => version.graphVersion === graphVersion);
-  return index >= 0 ? versions.length - index : versions.length ? versions.length + 1 : null;
+  return index >= 0 ? versions[index]?.versionNumber ?? versions.length - index : versions.length ? (versions[0]?.versionNumber ?? versions.length) + 1 : null;
 }
 
 export function GraphHistoryBar({ inline = false }: { inline?: boolean }) {
@@ -23,9 +23,11 @@ export function GraphHistoryBar({ inline = false }: { inline?: boolean }) {
     graphHistory,
     graphHistoryOpen,
     graphHistoryLoading,
+    graphHistoryHasMore,
     historicalInspection,
     toggleGraphHistory,
     refreshGraphHistory,
+    loadMoreGraphHistory,
     inspectHistoricalGraph,
     exitHistoricalInspection
   } = useArchicodeStore(useShallow((state) => ({
@@ -34,33 +36,68 @@ export function GraphHistoryBar({ inline = false }: { inline?: boolean }) {
     graphHistory: state.graphHistory,
     graphHistoryOpen: state.graphHistoryOpen,
     graphHistoryLoading: state.graphHistoryLoading,
+    graphHistoryHasMore: state.graphHistoryHasMore,
     historicalInspection: state.historicalInspection,
     toggleGraphHistory: state.toggleGraphHistory,
     refreshGraphHistory: state.refreshGraphHistory,
+    loadMoreGraphHistory: state.loadMoreGraphHistory,
     inspectHistoricalGraph: state.inspectHistoricalGraph,
     exitHistoricalInspection: state.exitHistoricalInspection
   })));
 
   const entry = historicalInspection?.entry;
+  const currentBundle = historicalInspection?.currentBundle ?? bundle;
   const autoLoadedRepoRef = useRef<string | null>(null);
+  const historyEndRef = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     const repoKey = gitStatus?.repoRoot ?? bundle?.rootPath ?? null;
     if ((inline && entry) || !repoKey || !gitStatus?.isRepo || autoLoadedRepoRef.current === repoKey) return;
     autoLoadedRepoRef.current = repoKey;
     if (!graphHistory.length) void refreshGraphHistory();
   }, [bundle?.rootPath, entry, gitStatus?.isRepo, gitStatus?.repoRoot, graphHistory.length, inline, refreshGraphHistory]);
+  useEffect(() => {
+    const target = historyEndRef.current;
+    const root = target?.parentElement;
+    if (!target || !root || !graphHistoryHasMore) return;
+    const observer = new IntersectionObserver((entries) => {
+      if (entries.some((item) => item.isIntersecting)) void loadMoreGraphHistory();
+    }, { root, rootMargin: "120px 0px" });
+    observer.observe(target);
+    return () => observer.disconnect();
+  }, [graphHistoryHasMore, graphHistoryLoading, graphHistoryOpen, loadMoreGraphHistory]);
   if (inline && entry) return null;
   const flatEntries = graphHistory.flatMap((version) => version.commits);
   const activeIndex = entry ? flatEntries.findIndex((item) => item.commit === entry.commit) : -1;
   const newer = activeIndex > 0 ? flatEntries[activeIndex - 1] : null;
   const older = activeIndex >= 0 ? flatEntries[activeIndex + 1] : null;
-  const displayedGraphVersion = entry?.graphVersion ?? bundle?.project.graphVersion;
-  const displayedVersionNumber = graphVersionNumber(graphHistory, displayedGraphVersion, entry?.commit);
+  const currentGraphVersion = currentBundle?.project.graphVersion;
+  const currentCommittedVersionIndex = currentGraphVersion
+    ? graphHistory.findIndex((version) => version.graphVersion === currentGraphVersion)
+    : -1;
+  const hasCurrentUncommittedVersion = Boolean(
+    currentGraphVersion && currentCommittedVersionIndex < 0 && (graphHistory.length > 0 || !graphHistoryLoading)
+  );
+  const newestCommittedVersionNumber = graphHistory[0]?.versionNumber ?? (graphHistory.length || null);
+  const currentVersionNumber = currentGraphVersion
+    ? currentCommittedVersionIndex >= 0
+      ? graphHistory[currentCommittedVersionIndex]?.versionNumber ?? graphHistory.length - currentCommittedVersionIndex
+      : newestCommittedVersionNumber ? newestCommittedVersionNumber + 1 : null
+    : null;
+  const displayedVersionNumber = entry
+    ? graphVersionNumber(graphHistory, entry.graphVersion, entry.commit)
+    : currentVersionNumber;
   const displayedVersionLabel = displayedVersionNumber ? `Graph v${displayedVersionNumber}` : "Graph history";
+  const currentFlowCount = currentBundle?.flows.length ?? 0;
+  const currentNodeCount = currentBundle?.flows.reduce((count, flow) => count + flow.nodes.length, 0) ?? 0;
+  const currentEdgeCount = currentBundle?.flows.reduce((count, flow) => count + flow.edges.length, 0) ?? 0;
+  const selectCurrentGraph = () => {
+    if (entry) void exitHistoricalInspection();
+    else if (graphHistoryOpen) toggleGraphHistory();
+  };
   const historyPanelContents = (
     <>
       <header>
-        <div><strong>Graph history</strong><small>Read-only snapshots from the current branch’s Git history</small></div>
+        <div><strong>Graph history</strong><small>{hasCurrentUncommittedVersion ? "Current working graph and read-only snapshots from this branch’s Git history" : "Read-only snapshots from the current branch’s Git history"}</small></div>
         <div>
           <IconButton title="Refresh graph history" onClick={() => void refreshGraphHistory()} disabled={graphHistoryLoading}>
             {graphHistoryLoading ? <LoaderCircle className="spin" size={16} /> : <History size={16} />}
@@ -69,6 +106,20 @@ export function GraphHistoryBar({ inline = false }: { inline?: boolean }) {
         </div>
       </header>
       <div className="graph-history-list">
+        {hasCurrentUncommittedVersion ? (
+          <button
+            type="button"
+            className={!entry ? "graph-history-item is-current is-selected" : "graph-history-item is-current"}
+            onClick={selectCurrentGraph}
+          >
+            <span className="graph-history-dot" />
+            <span className="graph-history-item-body">
+              <strong>Graph v{currentVersionNumber}</strong>
+              <span>Current uncommitted graph</span>
+              <small>Working tree · {currentFlowCount} flows · {currentNodeCount} nodes · {currentEdgeCount} relationships</small>
+            </span>
+          </button>
+        ) : null}
         {graphHistoryLoading && !graphHistory.length ? <p className="graph-history-empty">Reading graph snapshots from Git…</p> : null}
         {!graphHistoryLoading && !graphHistory.length ? <p className="graph-history-empty">No committed ArchiCode graphs were found on this branch.</p> : null}
         {graphHistory.map((version, index) => {
@@ -83,13 +134,18 @@ export function GraphHistoryBar({ inline = false }: { inline?: boolean }) {
             >
               <span className="graph-history-dot" />
               <span className="graph-history-item-body">
-                <strong>Graph v{graphHistory.length - index}</strong>
+                <strong>Graph v{version.versionNumber ?? graphHistory.length - index}</strong>
                 <span>{latest.subject}</span>
                 <small>{version.commits.length === 1 ? latest.shortCommit : `${version.commits.at(-1)?.shortCommit}–${latest.shortCommit}`} · {latest.flowCount} flows · {latest.nodeCount} nodes · {latest.edgeCount} relationships</small>
               </span>
             </button>
           );
         })}
+        {graphHistoryHasMore ? (
+          <div ref={historyEndRef} className="graph-history-loading-more" aria-live="polite">
+            {graphHistoryLoading ? <><LoaderCircle className="spin" size={15} /> Loading older commits…</> : "Scroll for older commits"}
+          </div>
+        ) : null}
       </div>
     </>
   );
@@ -146,7 +202,14 @@ export function GraphHistoryBar({ inline = false }: { inline?: boolean }) {
               <IconButton title="Older graph snapshot" disabled={!older || graphHistoryLoading} onClick={() => older && void inspectHistoricalGraph(older.commit)}>
                 <ChevronLeft size={16} />
               </IconButton>
-              <IconButton title="Newer graph snapshot" disabled={!newer || graphHistoryLoading} onClick={() => newer && void inspectHistoricalGraph(newer.commit)}>
+              <IconButton
+                title={activeIndex === 0 && hasCurrentUncommittedVersion ? "Current uncommitted graph" : "Newer graph snapshot"}
+                disabled={(!newer && !(activeIndex === 0 && hasCurrentUncommittedVersion)) || graphHistoryLoading}
+                onClick={() => {
+                  if (newer) void inspectHistoricalGraph(newer.commit);
+                  else if (activeIndex === 0 && hasCurrentUncommittedVersion) void exitHistoricalInspection();
+                }}
+              >
                 <ChevronRight size={16} />
               </IconButton>
               <Button size="sm" variant="secondary" onClick={toggleGraphHistory}>

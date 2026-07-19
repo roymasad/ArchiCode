@@ -374,6 +374,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
     selectedNodeIds,
     selectedEdgeId,
     updateNode,
+    applyPresentationAction,
     updateSettings,
     saveFlow,
     selectNodes,
@@ -412,6 +413,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
     selectedNodeIds: state.selectedNodeIds,
     selectedEdgeId: state.selectedEdgeId,
     updateNode: state.updateNode,
+    applyPresentationAction: state.applyPresentationAction,
     updateSettings: state.updateSettings,
     saveFlow: state.saveFlow,
     selectNodes: state.selectNodes,
@@ -552,7 +554,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
 
   useEffect(() => {
     setNodeHistoryExpanded(false);
-    if (!rootPath || !flow || !node || !window.archicode?.getGraphNodeHistory) {
+    if (!historicalInspection || !rootPath || !flow || !node || !window.archicode?.getGraphNodeHistory) {
       setNodeHistory(null);
       setNodeHistoryBusy(false);
       return;
@@ -563,7 +565,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
       return;
     }
     let cancelled = false;
-    const revision = historicalInspection?.entry.commit ?? gitStatus?.recentCommits[0]?.hash ?? "HEAD";
+    const revision = historicalInspection.entry.commit;
     setNodeHistory(null);
     setNodeHistoryBusy(true);
     void window.archicode.getGraphNodeHistory(rootPath, revision, flow.id, node.id)
@@ -579,7 +581,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
       })
       .finally(() => { if (!cancelled) setNodeHistoryBusy(false); });
     return () => { cancelled = true; };
-  }, [flow?.id, gitStatus?.isRepo, gitStatus?.recentCommits[0]?.hash, historicalInspection?.entry.commit, node?.id, rootPath]);
+  }, [flow?.id, gitStatus?.isRepo, historicalInspection?.entry.commit, node?.id, rootPath]);
 
   const loadSemanticContext = useCallback(async (refresh = false) => {
     const requestId = ++semanticContextRequestRef.current;
@@ -1524,46 +1526,47 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
   }
 
   if (multipleNodesSelected && flow) {
-    const updateSelectedNodes = (patchForNode: (selectedNode: ArchicodeNode) => Parameters<typeof updateNode>[0]) => {
-      void (async () => {
-        for (const selectedNode of selectedNodes) {
-          await updateNode(patchForNode(selectedNode));
-        }
-      })();
-    };
     const updateSelectedNodeVisual = (patch: Partial<NonNullable<ArchicodeNode["visual"]>>) => {
-      updateSelectedNodes((selectedNode) => ({
-        id: selectedNode.id,
-        visual: {
-          ...(selectedNode.visual ?? {}),
-          ...patch
-        }
-      }));
+      void applyPresentationAction("Change selected node appearance", flow.id, selectedNodes.map((selectedNode) => ({
+        nodeId: selectedNode.id,
+        field: "visual" as const,
+        expected: selectedNode.visual ?? {},
+        value: { ...(selectedNode.visual ?? {}), ...patch }
+      })));
     };
     const clearSelectedNodeBackground = () => {
-      updateSelectedNodes((selectedNode) => {
+      void applyPresentationAction("Clear selected node backgrounds", flow.id, selectedNodes.map((selectedNode) => {
         const { backgroundColor: _backgroundColor, ...visual } = selectedNode.visual ?? {};
-        return { id: selectedNode.id, visual };
-      });
+        return { nodeId: selectedNode.id, field: "visual" as const, expected: selectedNode.visual ?? {}, value: visual };
+      }));
     };
     const updateSelectedNodeSize = (axis: keyof typeof nodeSizeBounds, rawValue: number) => {
       if (!Number.isFinite(rawValue)) return;
-      updateSelectedNodes((selectedNode) => {
+      void applyPresentationAction("Resize selected nodes", flow.id, selectedNodes.map((selectedNode) => {
         const currentSize = selectedNode.size ?? defaultNodeSize;
         return {
-          id: selectedNode.id,
-          size: {
-            ...currentSize,
-            [axis]: clampNodeSize(rawValue, axis)
-          }
+          nodeId: selectedNode.id,
+          field: "size" as const,
+          expected: selectedNode.size ?? null,
+          value: { ...currentSize, [axis]: clampNodeSize(rawValue, axis) }
         };
-      });
+      }));
     };
     const resetSelectedNodeSize = () => {
-      updateSelectedNodes((selectedNode) => ({ id: selectedNode.id, size: defaultNodeSize }));
+      void applyPresentationAction("Reset selected node sizes", flow.id, selectedNodes.map((selectedNode) => ({
+        nodeId: selectedNode.id,
+        field: "size" as const,
+        expected: selectedNode.size ?? null,
+        value: defaultNodeSize
+      })));
     };
     const clearSelectedNodeVisual = () => {
-      updateSelectedNodes((selectedNode) => ({ id: selectedNode.id, visual: {} }));
+      void applyPresentationAction("Reset selected node appearance", flow.id, selectedNodes.map((selectedNode) => ({
+        nodeId: selectedNode.id,
+        field: "visual" as const,
+        expected: selectedNode.visual ?? {},
+        value: {}
+      })));
     };
     const selectedShape = selectedNodes.every((selectedNode) => (selectedNode.visual?.shape ?? "rounded") === (selectedNodes[0].visual?.shape ?? "rounded"))
       ? selectedNodes[0].visual?.shape ?? "rounded"
@@ -1804,38 +1807,58 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
   };
 
   const updateNodeVisual = (patch: Partial<NonNullable<typeof node.visual>>) => {
-    updateNodeKeepingDetailsScroll({
-      id: node.id,
-      visual: {
-        ...(node.visual ?? {}),
-        ...patch
-      }
-    });
+    const visual = { ...(node.visual ?? {}), ...patch };
+    const scrollTop = detailsScrollViewportRef.current?.scrollTop ?? detailsScrollTopRef.current;
+    void applyPresentationAction("Change node appearance", flow.id, [{
+      nodeId: node.id,
+      field: "visual",
+      expected: node.visual ?? {},
+      value: visual
+    }]).finally(() => restoreDetailsScroll(scrollTop));
   };
 
   const clearNodeBackground = () => {
     const { backgroundColor: _backgroundColor, ...visual } = node.visual ?? {};
-    updateNodeKeepingDetailsScroll({ id: node.id, visual });
+    const scrollTop = detailsScrollViewportRef.current?.scrollTop ?? detailsScrollTopRef.current;
+    void applyPresentationAction("Clear node background", flow.id, [{
+      nodeId: node.id,
+      field: "visual",
+      expected: node.visual ?? {},
+      value: visual
+    }]).finally(() => restoreDetailsScroll(scrollTop));
   };
 
   const updateNodeSize = (axis: keyof typeof nodeSizeBounds, rawValue: number) => {
     if (!Number.isFinite(rawValue)) return;
     const currentSize = node.size ?? defaultNodeSize;
-    updateNodeKeepingDetailsScroll({
-      id: node.id,
-      size: {
-        ...currentSize,
-        [axis]: clampNodeSize(rawValue, axis)
-      }
-    });
+    const size = { ...currentSize, [axis]: clampNodeSize(rawValue, axis) };
+    const scrollTop = detailsScrollViewportRef.current?.scrollTop ?? detailsScrollTopRef.current;
+    void applyPresentationAction("Resize node", flow.id, [{
+      nodeId: node.id,
+      field: "size",
+      expected: node.size ?? null,
+      value: size
+    }]).finally(() => restoreDetailsScroll(scrollTop));
   };
 
   const resetNodeSize = () => {
-    updateNodeKeepingDetailsScroll({ id: node.id, size: defaultNodeSize });
+    const scrollTop = detailsScrollViewportRef.current?.scrollTop ?? detailsScrollTopRef.current;
+    void applyPresentationAction("Reset node size", flow.id, [{
+      nodeId: node.id,
+      field: "size",
+      expected: node.size ?? null,
+      value: defaultNodeSize
+    }]).finally(() => restoreDetailsScroll(scrollTop));
   };
 
   const clearNodeVisual = () => {
-    updateNodeKeepingDetailsScroll({ id: node.id, visual: {} });
+    const scrollTop = detailsScrollViewportRef.current?.scrollTop ?? detailsScrollTopRef.current;
+    void applyPresentationAction("Reset node appearance", flow.id, [{
+      nodeId: node.id,
+      field: "visual",
+      expected: node.visual ?? {},
+      value: {}
+    }]).finally(() => restoreDetailsScroll(scrollTop));
   };
 
   const submitNote = async () => {
@@ -1943,7 +1966,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
         </div>
       ) : null}
 
-      <section className="node-git-attribution" aria-label="Git graph attribution">
+      {historicalInspection ? <section className="node-git-attribution" aria-label="Git graph attribution">
         <div className="node-git-attribution-heading">
           <span><GitCommitHorizontal size={14} /> Committed graph history</span>
           {nodeHistoryBusy ? <Loader2 size={14} className="is-spinning" /> : null}
@@ -1992,7 +2015,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
             ) : null}
           </>
         ) : !nodeHistoryBusy ? <small className="node-git-attribution-empty">{nodeHistory?.message ?? "No committed graph attribution is available."}</small> : null}
-      </section>
+      </section> : null}
 
       {readinessItems.length ? (
         <div className="readiness-strip" aria-label="Node needs attention">

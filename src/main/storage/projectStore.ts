@@ -1,15 +1,17 @@
 import { randomBytes } from "node:crypto";
 import { copyFile, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import {
   flowSchema,
+  presentationPatchRequestSchema,
   projectBundleSchema,
   projectSchema,
   providerSettingsSchema,
   defaultPhaseModelPolicies
 } from "../../shared/schema";
-import type { Artifact, DebugIncident, Flow, GraphChangeRecord, ImplementationScopeClaim, NodePatch, Note, Project, ProjectBundle, ProjectSettings, Run } from "../../shared/schema";
+import type { Artifact, DebugIncident, Flow, GraphChangeRecord, ImplementationScopeClaim, NodePatch, Note, PresentationNodeMutation, PresentationPatchRequest, PresentationPatchResult, Project, ProjectBundle, ProjectSettings, Run } from "../../shared/schema";
 import {
   applyNodePatch,
   archicodeNodeSchema,
@@ -69,6 +71,20 @@ export const ARCHICODE_GIT_ATTRIBUTES_RULES = [
   ".archicode/notes.jsonl merge=union"
 ];
 export const LEGACY_NPM_COMMANDS = ["npm run build", "npm run test", "npm run dev"];
+
+const presentationMutationTails = new Map<string, Promise<void>>();
+
+function withPresentationMutationLock<T>(projectRoot: string, flowId: string, task: () => Promise<T>): Promise<T> {
+  const key = `${projectRoot}\0${flowId}`;
+  const previous = presentationMutationTails.get(key) ?? Promise.resolve();
+  const result = previous.catch(() => undefined).then(task);
+  const tail = result.then(() => undefined, () => undefined);
+  presentationMutationTails.set(key, tail);
+  void tail.finally(() => {
+    if (presentationMutationTails.get(key) === tail) presentationMutationTails.delete(key);
+  });
+  return result;
+}
 
 export const PROJECT_STATE_LOCAL_GITIGNORE_PATTERNS = [
   ".archicode/local.json",
@@ -1227,6 +1243,104 @@ export async function saveFlow(
   const bundle = await loadProject(projectRoot);
   const policyResult = await refreshGraphArchitecturePolicyEvaluation(projectRoot, bundle);
   return policyResult?.changed ? loadProject(projectRoot) : bundle;
+}
+
+const PRESENTATION_BLOCKING_RUN_STATUSES = new Set<Run["status"]>([
+  "preparing",
+  "queued",
+  "needs-permission",
+  "running",
+  "planning",
+  "awaiting-plan-review",
+  "coding",
+  "awaiting-code-review",
+  "debugging",
+  "needs-replan",
+  "verifying"
+]);
+
+function presentationMutationCurrentValue(node: Flow["nodes"][number], mutation: PresentationNodeMutation): unknown {
+  if (mutation.field === "size") return node.size ?? null;
+  return node[mutation.field];
+}
+
+function presentationValuesEqual(left: unknown, right: unknown): boolean {
+  return isDeepStrictEqual(left, right);
+}
+
+/**
+ * Applies presentation-only node fields after validating their exact current
+ * values. The entire batch is rejected before writing if any target changed,
+ * so an inverse command can never restore a stale whole-flow snapshot.
+ */
+export async function applyPresentationPatch(
+  projectRoot: string,
+  request: PresentationPatchRequest
+): Promise<PresentationPatchResult> {
+  const parsed = presentationPatchRequestSchema.parse(request);
+  return withPresentationMutationLock(projectRoot, parsed.flowId, async () => {
+    const current = await loadProject(projectRoot);
+    if (current.runs.some((run) => PRESENTATION_BLOCKING_RUN_STATUSES.has(run.status))) {
+      return {
+        status: "conflict",
+        bundle: current,
+        message: "Presentation history is unavailable while a run is active or waiting for review."
+      };
+    }
+    const flow = current.flows.find((item) => item.id === parsed.flowId);
+    if (!flow) {
+      return { status: "conflict", bundle: current, message: "The canvas no longer exists." };
+    }
+    const nodesById = new Map(flow.nodes.map((node) => [node.id, node]));
+    for (const mutation of parsed.mutations) {
+      const node = nodesById.get(mutation.nodeId);
+      if (!node) {
+        return { status: "conflict", bundle: current, message: "A node in this presentation change no longer exists." };
+      }
+      if (!presentationValuesEqual(presentationMutationCurrentValue(node, mutation), mutation.expected)) {
+        return {
+          status: "conflict",
+          bundle: current,
+          message: `Cannot apply presentation history because ${mutation.field} changed after the recorded action.`
+        };
+      }
+    }
+
+    const mutationsByNodeId = new Map<string, PresentationNodeMutation[]>();
+    for (const mutation of parsed.mutations) {
+      const mutations = mutationsByNodeId.get(mutation.nodeId) ?? [];
+      mutations.push(mutation);
+      mutationsByNodeId.set(mutation.nodeId, mutations);
+    }
+    const updatedAt = iso();
+    const nextFlow = flowSchema.parse({
+      ...flow,
+      nodes: flow.nodes.map((node) => {
+        const mutations = mutationsByNodeId.get(node.id);
+        if (!mutations) return node;
+        let next = { ...node };
+        for (const mutation of mutations) {
+          if (mutation.field === "size") {
+            if (mutation.value === null) {
+              const { size: _size, ...withoutSize } = next;
+              next = withoutSize as typeof next;
+            } else {
+              next = { ...next, size: mutation.value };
+            }
+          } else if (mutation.field === "position") {
+            next = { ...next, position: mutation.value };
+          } else {
+            next = { ...next, visual: mutation.value };
+          }
+        }
+        return { ...next, updatedAt };
+      }),
+      updatedAt
+    });
+    await writeJson(projectStatePath(projectRoot, "flows", `${flow.id}.json`), nextFlow);
+    await touchProject(projectRoot);
+    return { status: "applied", bundle: await loadProject(projectRoot) };
+  });
 }
 
 /** Persist independent flow files as one project transaction and reload once. */

@@ -11,6 +11,7 @@ import type {
   NodeStage,
   PatchOperationDecision,
   PatchReviewRecord,
+  PresentationNodeMutation,
   ProjectBundle,
   ProjectSettings,
   ResearchChatScope,
@@ -247,6 +248,14 @@ export type AppNotice = {
   message: string;
 };
 
+export type PresentationHistoryEntry = {
+  id: string;
+  projectRoot: string;
+  flowId: string;
+  label: string;
+  mutations: PresentationNodeMutation[];
+};
+
 export type ResearchStreamState = {
   kind: "answer" | "thinking";
 };
@@ -341,6 +350,11 @@ export type ArchicodeState = {
   graphHistory: GraphHistoryVersion[];
   graphHistoryOpen: boolean;
   graphHistoryLoading: boolean;
+  graphHistoryCursor: string | null;
+  graphHistoryHasMore: boolean;
+  presentationUndoStack: PresentationHistoryEntry[];
+  presentationRedoStack: PresentationHistoryEntry[];
+  presentationHistoryBusy: boolean;
   historicalInspection: { entry: GraphHistoryEntry; currentBundle: ProjectBundle } | null;
   fileBrowser: ProjectFileBrowserData | null;
   selectedFilePath: string | null;
@@ -390,6 +404,7 @@ export type ArchicodeState = {
   refreshGitStatus: () => Promise<void>;
   toggleGraphHistory: () => void;
   refreshGraphHistory: () => Promise<void>;
+  loadMoreGraphHistory: () => Promise<void>;
   inspectHistoricalGraph: (commit: string) => Promise<void>;
   exitHistoricalInspection: () => Promise<void>;
   initializeGitRepository: () => Promise<void>;
@@ -418,6 +433,10 @@ export type ArchicodeState = {
   updateSelectedEdgePatch: (patch: Partial<Omit<FlowEdge, "id">>) => Promise<void>;
   deleteSelectedEdge: () => Promise<void>;
   autoLayout: () => Promise<void>;
+  applyPresentationAction: (label: string, flowId: string, mutations: PresentationNodeMutation[]) => Promise<boolean>;
+  undoPresentationAction: () => Promise<void>;
+  redoPresentationAction: () => Promise<void>;
+  clearPresentationHistory: () => void;
   importFlow: () => Promise<void>;
   importDrawioFlow: (mode: "replace" | "append") => Promise<void>;
   exportActiveFlow: () => Promise<void>;

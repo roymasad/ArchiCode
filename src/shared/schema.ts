@@ -2625,6 +2625,56 @@ export type ResearchGraphChangeResult = z.infer<typeof researchGraphChangeResult
 
 export type NodePatch = Partial<Omit<ArchicodeNode, "id">> & { id: string; forceUnlockRevision?: boolean };
 
+const nodePositionSchema = z.object({ x: z.number(), y: z.number() });
+const nodeSizeSchema = z.object({ width: z.number(), height: z.number() });
+
+export const presentationNodeMutationSchema = z.discriminatedUnion("field", [
+  z.object({
+    nodeId: z.string().trim().min(1),
+    field: z.literal("position"),
+    expected: nodePositionSchema,
+    value: nodePositionSchema
+  }),
+  z.object({
+    nodeId: z.string().trim().min(1),
+    field: z.literal("size"),
+    expected: nodeSizeSchema.nullable(),
+    value: nodeSizeSchema.nullable()
+  }),
+  z.object({
+    nodeId: z.string().trim().min(1),
+    field: z.literal("visual"),
+    expected: nodeVisualSchema,
+    value: nodeVisualSchema
+  })
+]);
+
+export const presentationPatchRequestSchema = z.object({
+  flowId: z.string().trim().min(1),
+  mutations: z.array(presentationNodeMutationSchema).min(1).max(500)
+}).superRefine((request, context) => {
+  const targets = new Set<string>();
+  request.mutations.forEach((mutation, index) => {
+    const target = `${mutation.nodeId}:${mutation.field}`;
+    if (targets.has(target)) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["mutations", index],
+        message: `Duplicate presentation mutation target ${target}.`
+      });
+    }
+    targets.add(target);
+  });
+});
+
+export type PresentationNodeMutation = z.infer<typeof presentationNodeMutationSchema>;
+export type PresentationPatchRequest = z.infer<typeof presentationPatchRequestSchema>;
+export type PresentationPatchResult = {
+  status: "applied" | "conflict";
+  bundle: ProjectBundle;
+  message?: string;
+};
+
 export function isNoteActiveForModelContext(note: Pick<Note, "pinned" | "resolved">): boolean {
   return note.pinned || !note.resolved;
 }

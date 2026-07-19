@@ -257,8 +257,8 @@ export const ACTION_DESCRIPTORS: ActionDescriptor[] = [
   {
     id: "canvas.undo",
     group: "Canvas",
-    label: "Undo (notice)",
-    description: "Show the direct-undo notice (realtime undo is disabled by design). Universal shortcut.",
+    label: "Undo presentation change",
+    description: "Undo the latest safe node movement, layout, size, shape, or color change. Universal shortcut.",
     scope: "canvas",
     reserved: true,
     default: parseChord(["cmd", "z"])

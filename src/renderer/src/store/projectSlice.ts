@@ -260,6 +260,8 @@ export const createProjectSlice = (set: StoreSet, get: StoreGet): Pick<Archicode
       canvasViewport: readStoredViewport(rootPath, activeFlowId, activeSubflowId),
       canvasViewportCenter: null,
       appNotice: gitAttributesNotice,
+      presentationUndoStack: [],
+      presentationRedoStack: [],
       error: null
     });
   },
@@ -534,6 +536,8 @@ export const createProjectSlice = (set: StoreSet, get: StoreGet): Pick<Archicode
           selectedNodeId,
           selectedNodeIds,
           selectedEdgeId,
+          presentationUndoStack: [],
+          presentationRedoStack: [],
           error: null
         };
       });
@@ -699,7 +703,7 @@ export const createProjectSlice = (set: StoreSet, get: StoreGet): Pick<Archicode
     }
     const bundle = await window.archicode.importFlow(rootPath);
     if (!bundle) return;
-    set({ bundle, activeFlowId: bundle.project.activeFlowId, activeSubflowId: null, selectedNodeId: null, selectedNodeIds: [], selectedEdgeId: null, error: null });
+    set({ bundle, activeFlowId: bundle.project.activeFlowId, activeSubflowId: null, selectedNodeId: null, selectedNodeIds: [], selectedEdgeId: null, presentationUndoStack: [], presentationRedoStack: [], error: null });
   },
 
   importDrawioFlow: async (mode) => {
@@ -722,6 +726,8 @@ export const createProjectSlice = (set: StoreSet, get: StoreGet): Pick<Archicode
       selectedNodeId: null,
       selectedNodeIds: [],
       selectedEdgeId: null,
+      presentationUndoStack: [],
+      presentationRedoStack: [],
       error: null
     });
   },

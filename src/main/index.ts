@@ -14,7 +14,7 @@ import { exportProjectDocument, type ProjectDocumentExportFormat } from "./stora
 import { checkProjectProvider, createProjectSkill, importProjectMcpServers, installProjectMcpRegistryServer, listMcpServers, listProjectSkills, refreshProjectMcpServerCapabilities, searchMcpRegistry, updateMcpServer } from "./storage/mcpSettings";
 import { addNote, attachNodeReferences, deleteNote, purgeResolvedNotes, purgeSystemNotes, updateNotePinned, updateNoteResolved } from "./storage/notes";
 import { applyPatchProposal, listPatchProposals, readArtifactDataUrl, readArtifactText } from "./storage/patches";
-import { archicodeGitAttributesStatus, checkGlobalProvider, createProject, deleteProjectState, enableArchicodeGitAttributes, ensureEmptyCodebaseProject, ensureProject, loadProject, repairProject, saveFlow, setGlobalMcpSettingsStore, setGlobalProviderSettingsStore, updateNode, updateProjectDetails, updateProjectSettings } from "./storage/projectStore";
+import { applyPresentationPatch, archicodeGitAttributesStatus, checkGlobalProvider, createProject, deleteProjectState, enableArchicodeGitAttributes, ensureEmptyCodebaseProject, ensureProject, loadProject, repairProject, saveFlow, setGlobalMcpSettingsStore, setGlobalProviderSettingsStore, updateNode, updateProjectDetails, updateProjectSettings } from "./storage/projectStore";
 import { approveRun, cancelRun, dismissRunError, rejectRun, removeRunFromQueue, reportBug, retryRun, runAgent, startAgentRun, startDebuggingRun, startIncidentDebugRun, startRunProfile, startRuntimeDebugRun, updateBugIncident } from "./storage/runEngine";
 import { setRunUpdatePublisher } from "./storage/runLogs";
 import { listRuntimeServices, restartRuntimeService, shutdownRuntimeServices, startRuntimeService, stopRuntimeService } from "./storage/runtimeServices";
@@ -1409,7 +1409,9 @@ function installApplicationMenu(): void {
           {
             label: "Redo",
             accelerator: "Shift+CmdOrCtrl+Z",
-            enabled: false
+            click: () => {
+              BrowserWindow.getFocusedWindow()?.webContents.send("archicode:direct-redo-requested");
+            }
           },
           { type: "separator" },
           { role: "cut" },
@@ -2146,6 +2148,8 @@ function registerIpc(): void {
     return bundle;
   });
   ipcMain.handle("archicode:save-flow", async (_event, projectRoot, flow) => saveFlow(projectRoot, flow, { recordGraphChanges: true, actor: "user" }));
+  ipcMain.handle("archicode:apply-presentation-patch", async (_event, projectRoot, request) =>
+    applyPresentationPatch(projectRoot, request));
   ipcMain.handle("archicode:import-flow", async (_event, projectRoot) => {
     const win = BrowserWindow.getFocusedWindow();
     const options: OpenDialogOptions = {
@@ -2428,7 +2432,7 @@ function registerIpc(): void {
   ipcMain.handle("archicode:list-chat-artifacts", async (_event, projectRoot, chatId) => listChatArtifacts(projectRoot, chatId));
   ipcMain.handle("archicode:read-chat-artifact", async (_event, projectRoot, chatId, artifactId) => readChatArtifact(projectRoot, chatId, artifactId));
   ipcMain.handle("archicode:get-git-status", async (_event, projectRoot: string) => getGitStatus(projectRoot));
-  ipcMain.handle("archicode:list-graph-history", async (_event, projectRoot: string) => listGraphHistory(projectRoot));
+  ipcMain.handle("archicode:list-graph-history", async (_event, projectRoot: string, options) => listGraphHistory(projectRoot, options));
   ipcMain.handle("archicode:load-historical-graph", async (_event, projectRoot: string, commit: string) =>
     loadHistoricalGraphBundle(projectRoot, commit)
   );

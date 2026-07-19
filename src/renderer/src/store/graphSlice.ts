@@ -11,6 +11,7 @@ import type {
   NodeStage,
   PatchOperationDecision,
   PatchReviewRecord,
+  PresentationNodeMutation,
   ProjectBundle,
   ProjectSettings,
   ResearchChatScope,
@@ -112,7 +113,9 @@ export const createGraphSlice = (set: StoreSet, get: StoreGet): Pick<ArchicodeSt
       canvasViewport: rootPath ? readStoredViewport(rootPath, activeFlowId, null) : null,
       canvasViewportCenter: null,
       lastAddNodePosition: null,
-      lastAddNodeScope: null
+      lastAddNodeScope: null,
+      presentationUndoStack: [],
+      presentationRedoStack: []
     });
   },
   setActiveSubflow: (activeSubflowId) => {
@@ -126,7 +129,9 @@ export const createGraphSlice = (set: StoreSet, get: StoreGet): Pick<ArchicodeSt
       canvasViewport: rootPath ? readStoredViewport(rootPath, activeFlowId, activeSubflowId) : null,
       canvasViewportCenter: null,
       lastAddNodePosition: null,
-      lastAddNodeScope: null
+      lastAddNodeScope: null,
+      presentationUndoStack: [],
+      presentationRedoStack: []
     });
   },
   setSearchQuery: (searchQuery) => set({ searchQuery }),
@@ -691,10 +696,17 @@ export const createGraphSlice = (set: StoreSet, get: StoreGet): Pick<ArchicodeSt
   },
 
   autoLayout: async () => {
-    const { bundle, activeFlowId, activeSubflowId, saveFlow } = get();
+    const { bundle, activeFlowId, activeSubflowId, applyPresentationAction } = get();
     const flow = getActiveFlow(bundle, activeFlowId);
     if (!flow) return;
-    await saveFlow(autoLayoutFlow(flow, activeSubflowId));
+    const nextFlow = autoLayoutFlow(flow, activeSubflowId);
+    const nextNodesById = new Map(nextFlow.nodes.map((node) => [node.id, node]));
+    const mutations: PresentationNodeMutation[] = flow.nodes.flatMap((node) => {
+      const next = nextNodesById.get(node.id);
+      if (!next || JSON.stringify(next.position) === JSON.stringify(node.position)) return [];
+      return [{ nodeId: node.id, field: "position", expected: node.position, value: next.position }];
+    });
+    await applyPresentationAction("Auto-layout canvas", flow.id, mutations);
   },
 
   updateNode: async (patch, actor = "user") => {
