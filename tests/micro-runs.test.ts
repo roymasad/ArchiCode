@@ -6,14 +6,18 @@ import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   executeMicroRun,
+  getMicroRunAgent,
   getConflictedFiles,
   isFileConflicted,
+  registerMicroRunAgent,
   resolveMicroRunProvider,
   runGitCommand,
-  runVerificationCommand
+  runVerificationCommand,
+  visualAnalysisUnavailable
 } from "../src/main/microRuns";
 import { graphReconciliationAgent } from "../src/main/microRunAgents/graphReconciliation";
-import { mergeResolutionAgent, picassoGraphAgent, registerAllMicroRunAgents, sherlockResearchAgent } from "../src/main/microRunAgents";
+import { delphiTestingAgent, mergeResolutionAgent, picassoGraphAgent, registerAllMicroRunAgents, sherlockResearchAgent, testAuthoringAgent } from "../src/main/microRunAgents";
+import { normalizeDelphiFindingCategory } from "../src/main/microRunAgents/delphiTesting";
 import { investigationToolProgressMessage } from "../src/main/microRunAgents/readOnlyTools";
 import { microRunResultText } from "../src/main/research/inspectionTools";
 import { providerSettingsSchema, type GraphReconciliationOutput, type MicroRunKind, type ProjectBundle, type ProjectSettings } from "../src/shared/schema";
@@ -21,6 +25,52 @@ import { providerSettingsSchema, type GraphReconciliationOutput, type MicroRunKi
 const execAsync = promisify(exec);
 
 registerAllMicroRunAgents();
+
+describe("Delphi visual analysis evidence", () => {
+  it("distinguishes unavailable pixels from a real visual observation", () => {
+    expect(visualAnalysisUnavailable("The landing-page capture is unavailable to inspect.")).toBe(true);
+    expect(visualAnalysisUnavailable("No capture image is available to inspect.")).toBe(true);
+    expect(visualAnalysisUnavailable("The heading is visible and no clipping appears at the right edge.")).toBe(false);
+  });
+
+  it("normalizes provider-specific finding labels without discarding evidence", async () => {
+    expect(normalizeDelphiFindingCategory("responsive-layout")).toBe("visual");
+    expect(normalizeDelphiFindingCategory("verification-coverage")).toBe("tooling");
+    expect(normalizeDelphiFindingCategory("build-failure")).toBe("tooling");
+    expect(normalizeDelphiFindingCategory("test-suite")).toBe("tooling");
+    expect(normalizeDelphiFindingCategory("ui-polish")).toBe("visual");
+
+    const parsed = await delphiTestingAgent.parseOutput(JSON.stringify({
+      status: "completed",
+      verdict: "failed",
+      summary: "Two evidence-backed gaps were found.",
+      findings: [
+        {
+          title: "Mobile layout clips",
+          severity: "high",
+          category: "responsive-layout",
+          detail: "The navigation is visibly clipped at 390px.",
+          reproductionSteps: "Open the landing page at 390px",
+          evidence: "landing-mobile"
+        },
+        {
+          title: "Route coverage incomplete",
+          severity: "warning",
+          category: "verification-coverage",
+          detail: "The About route was not exercised.",
+          evidence: ["Only / was checked"]
+        }
+      ]
+    }));
+
+    expect(parsed).toMatchObject({
+      findings: [
+        { title: "Mobile layout clips", category: "visual", reproductionSteps: ["Open the landing page at 390px"], evidence: ["landing-mobile"] },
+        { title: "Route coverage incomplete", category: "tooling", severity: "medium" }
+      ]
+    });
+  });
+});
 
 function sseResponse(chunks: string[]): Response {
   const encoder = new TextEncoder();
@@ -168,6 +218,243 @@ describe("executeMicroRun", () => {
     expect(result.error).toMatch(/No micro-run agent registered/);
   });
 
+  it("returns an invalid final answer to the same trajectory until its schema is satisfied", async () => {
+    const original = getMicroRunAgent("test-authoring");
+    if (!original) throw new Error("Expected the test-authoring agent to be registered.");
+    registerMicroRunAgent({
+      kind: "test-authoring",
+      systemPrompt: () => "Return the requested JSON schema.",
+      userMessage: () => "Return the report.",
+      tools: () => [],
+      timeoutMs: 5_000,
+      parseOutput: (text) => {
+        const parsed = JSON.parse(text) as { items?: unknown };
+        if (!Array.isArray(parsed.items)) throw new Error("items must be an array");
+        return parsed;
+      },
+      repairMessage: (_input, _output, validationError) => `Correct the output schema: ${validationError}`
+    });
+    const progress: string[] = [];
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(streamingAnthropicText(JSON.stringify({ items: "wrong" })))
+      .mockResolvedValueOnce(streamingAnthropicText(JSON.stringify({ items: ["fixed"] })));
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const result = await executeMicroRun(
+        "/nonexistent",
+        "test-authoring",
+        {},
+        fakeAnthropicProvider(),
+        fakeBundle(),
+        { onProgress: (message) => progress.push(message) }
+      );
+
+      expect(result).toMatchObject({ status: "completed", output: { items: ["fixed"] } });
+      expect(result.diagnostics?.repairAttempted).toBe(true);
+      expect(result.diagnostics?.validationErrors?.[0]).toContain("items must be an array");
+      expect(result.diagnostics?.responsePreview).toContain('"fixed"');
+      expect(progress).toContain("The subagent's final answer missed its contract; returning the exact validation result to the same trajectory.");
+      expect(fetchMock).toHaveBeenCalledTimes(2);
+    } finally {
+      registerMicroRunAgent(original);
+    }
+  });
+
+  it("preserves a failed tool's serializable partial result in the same provider trajectory", async () => {
+    const original = getMicroRunAgent("test-authoring");
+    if (!original) throw new Error("Expected the test-authoring agent to be registered.");
+    registerMicroRunAgent({
+      kind: "test-authoring",
+      systemPrompt: () => "Exercise the partial-result tool once, then finish.",
+      userMessage: () => "Run the tool.",
+      tools: () => [{
+        providerToolName: "partial_failure",
+        serverId: "partial-test",
+        serverLabel: "Partial Result Test",
+        toolName: "partial_failure",
+        description: "Fails after producing durable evidence.",
+        inputSchema: { type: "object", additionalProperties: false, properties: {} },
+        handler: async () => {
+          const error = new Error("Assertion failed after capture");
+          Object.defineProperty(error, "executionStarted", { value: true });
+          Object.defineProperty(error, "partialResult", {
+            value: {
+              status: "failed",
+              artifacts: [{ id: "capture-before-failure", label: "landing", path: ".archicode/artifacts/delphi/capture.png", mediaType: "image/png" }]
+            }
+          });
+          throw error;
+        }
+      }],
+      timeoutMs: 5_000,
+      parseOutput: (_text, toolCalls) => toolCalls?.[0] ?? {}
+    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(streamingAnthropicToolUse("partial_failure"))
+      .mockResolvedValueOnce(streamingAnthropicText("done"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const result = await executeMicroRun(
+        "/nonexistent",
+        "test-authoring",
+        {},
+        fakeAnthropicProvider(),
+        fakeBundle()
+      );
+
+      expect(result).toMatchObject({
+        status: "completed",
+        output: {
+          providerToolName: "partial_failure",
+          succeeded: false,
+          executionStarted: true,
+          resultJson: expect.stringContaining("capture-before-failure")
+        }
+      });
+      const continuation = JSON.parse(fetchMock.mock.calls[1]![1]!.body as string) as Record<string, unknown>;
+      expect(JSON.stringify(continuation.messages)).toContain("Partial result");
+      expect(JSON.stringify(continuation.messages)).toContain("capture-before-failure");
+    } finally {
+      registerMicroRunAgent(original);
+    }
+  });
+
+  it("aborts the live provider trajectory when a micro-run times out", async () => {
+    const original = getMicroRunAgent("test-authoring");
+    if (!original) throw new Error("Expected the test-authoring agent to be registered.");
+    registerMicroRunAgent({
+      kind: "test-authoring",
+      systemPrompt: () => "Wait for the report.",
+      userMessage: () => "Return the report.",
+      tools: () => [],
+      timeoutMs: 20,
+      parseOutput: (text) => JSON.parse(text)
+    });
+    let providerAborted = false;
+    vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => new Promise<Response>((_resolve, reject) => {
+      init?.signal?.addEventListener("abort", () => {
+        providerAborted = true;
+        reject(new Error("aborted"));
+      }, { once: true });
+    })));
+
+    try {
+      const result = await executeMicroRun(
+        "/nonexistent",
+        "test-authoring",
+        {},
+        fakeAnthropicProvider(),
+        fakeBundle()
+      );
+
+      expect(result.status).toBe("failed");
+      expect(result.error).toContain("timed out");
+      expect(result.failureKind).toBe("timeout");
+      expect(providerAborted).toBe(true);
+    } finally {
+      registerMicroRunAgent(original);
+    }
+  });
+
+  it("preserves host-observed evidence when an evidence-first agent times out before its final answer", async () => {
+    const original = getMicroRunAgent("test-authoring");
+    if (!original) throw new Error("Expected the test-authoring agent to be registered.");
+    registerMicroRunAgent({
+      kind: "test-authoring",
+      systemPrompt: () => "Run the command, then return a report.",
+      userMessage: () => "Verify the project.",
+      tools: () => [{
+        providerToolName: "archicode_console_run_command",
+        serverId: "evidence-test",
+        serverLabel: "Evidence Test",
+        toolName: "run_command",
+        description: "Records one host-observed verification result.",
+        inputSchema: { type: "object", additionalProperties: false, properties: {} },
+        handler: async () => ({ status: "succeeded", stdout: "build passed" })
+      }],
+      timeoutMs: 5_000,
+      parseOutput: (_text, toolCalls) => ({ executedCalls: toolCalls?.filter((call) => call.executionStarted).length ?? 0 }),
+      preservePartialOutputOnFailure: true
+    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(streamingAnthropicToolUse("archicode_console_run_command"))
+      .mockRejectedValueOnce(new Error("Local provider call produced no output for 5 minutes. The CLI process and its child processes were stopped."));
+    vi.stubGlobal("fetch", fetchMock);
+
+    try {
+      const result = await executeMicroRun(
+        "/nonexistent",
+        "test-authoring",
+        {},
+        fakeAnthropicProvider(),
+        fakeBundle()
+      );
+
+      expect(result).toMatchObject({
+        status: "failed",
+        failureKind: "timeout",
+        output: { executedCalls: 1 }
+      });
+    } finally {
+      registerMicroRunAgent(original);
+    }
+  });
+
+  it("lets the same trajectory resolve successive contract failures without feature-specific retry slots", async () => {
+    const original = getMicroRunAgent("test-authoring");
+    if (!original) throw new Error("Expected the test-authoring agent to be registered.");
+    registerMicroRunAgent({
+      kind: "test-authoring",
+      systemPrompt: () => "Return the requested JSON schema.",
+      userMessage: () => "Run the report.",
+      tools: () => [],
+      timeoutMs: 5_000,
+      parseOutput: (text) => JSON.parse(text) as { stage: number },
+      validateOutput: (output) => {
+        const stage = (output as { stage: number }).stage;
+        if (stage === 1) return "The approved live web target was never opened or exercised.";
+        if (stage === 2) return "This audit requested visual inspection, but Delphi completed without analyzing any captured screenshot pixels.";
+        return undefined;
+      },
+      repairMessage: (_input, _output, validationError) => `Correct this completion error: ${validationError}`
+    });
+    const progress: string[] = [];
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(streamingAnthropicText(JSON.stringify({ stage: 1 })))
+      .mockResolvedValueOnce(streamingAnthropicText(JSON.stringify({ stage: 2 })))
+      .mockResolvedValueOnce(streamingAnthropicText(JSON.stringify({ stage: 3 })));
+    vi.stubGlobal("fetch", fetchMock);
+    const provider = {
+      ...fakeAnthropicProvider(),
+      detectedAvailableModels: ["claude-sonnet-test"],
+      detectedModelCapabilities: {
+        "claude-sonnet-test": { supportsImageInput: true }
+      }
+    };
+
+    try {
+      const result = await executeMicroRun(
+        "/nonexistent",
+        "test-authoring",
+        {},
+        provider,
+        fakeBundle(),
+        { onProgress: (message) => progress.push(message) }
+      );
+
+      expect(result).toMatchObject({ status: "completed", output: { stage: 3 } });
+      expect(fetchMock).toHaveBeenCalledTimes(3);
+      expect(progress).toEqual([
+        "The subagent's final answer missed its contract; returning the exact validation result to the same trajectory.",
+        "The subagent's final answer missed its contract; returning the exact validation result to the same trajectory."
+      ]);
+    } finally {
+      registerMicroRunAgent(original);
+    }
+  });
+
   it("resolves independent subagent models while Default inherits the invoking provider model", () => {
     const seed = fakeAnthropicProvider();
     const chatSelectedProvider = {
@@ -282,8 +569,8 @@ describe("executeMicroRun", () => {
     const userText = (firstBody.messages ?? []).flatMap((message) => message.content ?? []).map((block) => block.text ?? "").join("\n");
     expect(result.status).toBe("completed");
     expect(systemText).toContain("You are Picasso");
-    expect(systemText).toContain("LONG-RUN EXECUTION POLICY");
-    expect(systemText).toContain("bounded, verifiable units");
+    expect(systemText).toContain("AUTONOMOUS SUBAGENT CONTRACT");
+    expect(systemText).toContain("Own the tactics and iteration");
     expect(systemText).not.toContain("Your name is Archi");
     expect(userText).not.toContain("You are Picasso");
     expect(firstBody.model).toBe("claude-picasso");
@@ -398,6 +685,13 @@ describe("executeMicroRun", () => {
     expect(result.status).toBe("completed");
     expect(fetchMock).toHaveBeenCalledTimes(3);
     expect(result.diagnostics?.repairAttempted).toBeUndefined();
+    expect(result.diagnostics?.toolRejections).toEqual([
+      expect.objectContaining({
+        providerToolName: "propose_graph_change_set",
+        argumentsJson: expect.stringContaining("flow-missing"),
+        error: expect.stringContaining("Batch rejected before assembly")
+      })
+    ]);
     expect((result.output as GraphReconciliationOutput).graphChangeSet?.operations).toHaveLength(1);
     expect(progress).toEqual(expect.arrayContaining([
       expect.stringContaining("Rejected final graph batch"),
@@ -884,13 +1178,63 @@ describe("Sherlock and Picasso contracts", () => {
     expect(prompt).toContain("Constraints: Exactly six flows; No cross-flow edges");
   });
 
-  it("keeps Sherlock read-only and disables online search when project web access is off", () => {
-    const context = { projectRoot: "/tmp/project", bundle: fakeBundle(), provider: fakeAnthropicProvider() };
+  it("gives Sherlock and Solomon the shared guarded CLI while Picasso remains graph-only", async () => {
+    const runConsoleCommand = vi.fn().mockResolvedValue({ status: "succeeded", stdout: "ok" });
+    const context = { projectRoot: "/tmp/project", bundle: fakeBundle(), provider: fakeAnthropicProvider(), runConsoleCommand };
     const tools = sherlockResearchAgent.tools(context, { objective: "Investigate routing", mode: "mixed" });
 
-    expect(tools.map((tool) => tool.providerToolName)).not.toContain("archicode_console_run_command");
+    expect(tools.map((tool) => tool.providerToolName)).toContain("archicode_console_run_command");
     expect(tools.some((tool) => tool.providerToolName.includes("spawn"))).toBe(false);
     expect(sherlockResearchAgent.webSearchEnabled?.({ objective: "Check current docs", mode: "online" }, context)).toBe(false);
+    await tools.find((tool) => tool.providerToolName === "archicode_console_run_command")!.handler({ command: "project-inspector --summary" });
+    expect(runConsoleCommand).toHaveBeenCalledWith({ command: "project-inspector --summary" });
+
+    const solomonTools = mergeResolutionAgent.tools(context, { conflictedFiles: ["src/shared.ts"] });
+    expect(solomonTools.map((tool) => tool.providerToolName)).toContain("archicode_console_run_command");
+    await solomonTools.find((tool) => tool.providerToolName === "run_verification_command")!
+      .handler({ command: "npm test", args: ["--", "tests/shared.test.ts"] });
+    expect(runConsoleCommand).toHaveBeenLastCalledWith({
+      command: "npm test '--' 'tests/shared.test.ts'",
+      timeoutMs: 600000
+    });
+    expect(picassoGraphAgent.tools(context, { objective: "Assess the graph", mode: "assess" })
+      .map((tool) => tool.providerToolName)).not.toContain("archicode_console_run_command");
+  });
+
+  it("requires explicit user authorization before Test Authoring writes files", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-test-authoring-auth-"));
+    const input = { suggestedTestDir: ".archicode/tests/example", writeAuthorizedByUser: false };
+    const noApprovalContext = { projectRoot, bundle: fakeBundle(), provider: fakeAnthropicProvider() };
+    const unauthorizedTools = testAuthoringAgent.tools(noApprovalContext, input);
+    const unauthorizedWrite = unauthorizedTools.find((tool) => tool.providerToolName === "write_test_file")!;
+    await expect(unauthorizedWrite.handler({
+      filePath: ".archicode/tests/example/example.test.ts",
+      content: "test('example', () => {})",
+      checks: [],
+      testCommand: "npm test"
+    })).rejects.toThrow(/explicit user authorization/i);
+
+    const approvedContext = {
+      ...noApprovalContext,
+      onClarification: vi.fn().mockResolvedValue("Yes, write those tests.")
+    };
+    const approvedTools = testAuthoringAgent.tools(approvedContext, input);
+    await approvedTools.find((tool) => tool.providerToolName === "request_test_write_authorization")!
+      .handler({ reason: "Create one scoped acceptance test." });
+    const result = await approvedTools.find((tool) => tool.providerToolName === "write_test_file")!.handler({
+      filePath: ".archicode/tests/example/example.test.ts",
+      content: "test('example', () => {})",
+      checks: [],
+      testCommand: "npm test"
+    });
+    expect(result).toMatchObject({ success: true });
+    await expect(approvedTools.find((tool) => tool.providerToolName === "write_test_file")!.handler({
+      filePath: "src/not-a-test.ts",
+      content: "export const changed = true;",
+      checks: [],
+      testCommand: "npm test"
+    })).resolves.toMatchObject({ success: false, error: expect.stringContaining("outside this agent's assigned test directory") });
+    expect(approvedContext.onClarification).toHaveBeenCalledTimes(1);
   });
 
   it("parses Sherlock's compact evidence dossier", () => {
@@ -965,7 +1309,7 @@ describe("Sherlock and Picasso contracts", () => {
     )).toContain("without any structured findings");
   });
 
-  it("rejects Sherlock and Picasso completions that did not satisfy their evidence contracts", () => {
+  it("accepts concrete subagent blockers while rejecting unsupported Picasso completion contracts", () => {
     const blockedSherlock = sherlockResearchAgent.parseOutput(JSON.stringify({
       status: "blocked",
       blockers: ["تعذّر الوصول إلى ملف المصدر المطلوب"],
@@ -979,7 +1323,27 @@ describe("Sherlock and Picasso contracts", () => {
       blockedSherlock,
       [{ providerToolName: "archicode_project_list_files", argumentsJson: "{}" }],
       { objective: "Audit the source", mode: "codebase" }
-    )).toContain("evidence-collection blocker");
+    )).toBeUndefined();
+
+    const falseToolBlocker = sherlockResearchAgent.parseOutput(JSON.stringify({
+      status: "blocked",
+      blockers: ["The structured research tools were not available beyond the initial directory listing."],
+      summary: "The source review could not continue.",
+      findings: [],
+      sources: [],
+      openQuestions: [],
+      recommendedNextSteps: []
+    }));
+    expect(sherlockResearchAgent.validateOutput?.(
+      falseToolBlocker,
+      [{ providerToolName: "archicode_project_list_files", argumentsJson: "{}", succeeded: true }],
+      { objective: "Audit the source", mode: "codebase" }
+    )).toContain("without a failed tool invocation");
+    expect(sherlockResearchAgent.validateOutput?.(
+      falseToolBlocker,
+      [{ providerToolName: "archicode_project_read_file", argumentsJson: JSON.stringify({ path: "src/router.ts" }), succeeded: false, error: "Permission denied" }],
+      { objective: "Audit the source", mode: "codebase" }
+    )).toBeUndefined();
 
     const blockedPicasso = picassoGraphAgent.parseOutput(JSON.stringify({
       status: "blocked",
@@ -991,7 +1355,7 @@ describe("Sherlock and Picasso contracts", () => {
       openQuestions: []
     }));
     expect(picassoGraphAgent.validateOutput?.(blockedPicasso, [], { objective: "راجع المخطط", mode: "assess" }))
-      .toContain("graph-inspection blocker");
+      .toBeUndefined();
 
     const unreadPicasso = picassoGraphAgent.parseOutput(JSON.stringify({
       nodesAffected: [],

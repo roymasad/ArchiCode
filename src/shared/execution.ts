@@ -209,6 +209,13 @@ function parseShellCommand(command: string): ParsedShellCommand {
         quote = null;
         continue;
       }
+      // Command substitution still executes inside double quotes. Treat it as
+      // shell control syntax rather than misclassifying the quoted text as a
+      // harmless argument.
+      if ((char === "$" && next === "(") || char === "`") {
+        sawControlSyntax = true;
+        break;
+      }
       if (char === "\\") {
         escaping = true;
         continue;
@@ -251,6 +258,69 @@ function parseShellCommand(command: string): ParsedShellCommand {
     sawControlSyntax,
     unterminatedQuote: Boolean(quote || escaping)
   };
+}
+
+type SimpleOutputRedirection = {
+  sourceCommand: string;
+  target: string;
+};
+
+/**
+ * Recognizes only one trailing output redirection to one literal path. This is
+ * deliberately narrow: substitutions, fd duplication, multiple redirects,
+ * dynamic targets, and additional shell control syntax fall back to High.
+ */
+function parseSimpleOutputRedirection(command: string): SimpleOutputRedirection | null {
+  let quote: "'" | "\"" | null = null;
+  let escaping = false;
+  let redirectStart = -1;
+  let redirectEnd = -1;
+
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index] as string;
+    const next = command[index + 1];
+    if (escaping) {
+      escaping = false;
+      continue;
+    }
+    if (quote === "'") {
+      if (char === "'") quote = null;
+      continue;
+    }
+    if (quote === "\"") {
+      if (char === "\"") quote = null;
+      else if (char === "\\") escaping = true;
+      else if ((char === "$" && next === "(") || char === "`") return null;
+      continue;
+    }
+    if (char === "'" || char === "\"") {
+      quote = char;
+      continue;
+    }
+    if (char === "\\") {
+      escaping = true;
+      continue;
+    }
+    if ((char === "$" && next === "(") || char === "`") return null;
+    if (char !== ">") continue;
+    if (redirectStart >= 0 || next === "&" || next === "|") return null;
+    redirectStart = index;
+    if (index > 0 && /\d/.test(command[index - 1] as string) && (index === 1 || /\s/.test(command[index - 2] as string))) {
+      redirectStart = index - 1;
+    }
+    redirectEnd = index + (next === ">" ? 2 : 1);
+    if (next === ">") index += 1;
+  }
+
+  if (quote || escaping || redirectStart < 0 || redirectEnd < 0) return null;
+  const sourceCommand = command.slice(0, redirectStart).trim();
+  const targetText = command.slice(redirectEnd).trim();
+  if (!sourceCommand || !targetText || /[$`*?{}()[\]\n\r]/.test(targetText)) return null;
+  const source = parseShellCommand(sourceCommand);
+  const target = parseShellCommand(targetText);
+  if (source.sawControlSyntax || source.unterminatedQuote || source.tokens.length === 0) return null;
+  if (target.sawControlSyntax || target.unterminatedQuote || target.tokens.length !== 1) return null;
+  return { sourceCommand, target: target.tokens[0] as string };
 }
 
 function normalizeCommandToken(token: string): string {
@@ -487,6 +557,12 @@ export function classifyCommandRisk(command: string): ShellCommandRisk {
   const normalized = command.trim();
   if (!normalized) return "low";
 
+  const outputRedirection = parseSimpleOutputRedirection(normalized);
+  if (outputRedirection) {
+    const sourceRisk = classifyCommandRisk(outputRedirection.sourceCommand);
+    return sourceRisk === "high" ? "high" : "medium";
+  }
+
   const parsed = parseShellCommand(normalized);
   if (parsed.unterminatedQuote) return "high";
   if (parsed.sawControlSyntax) return classifyCompoundCommandRisk(normalized);
@@ -527,6 +603,8 @@ const KNOWN_BASE_COMMANDS = new Set<string>([
 
 export function isKnownBinary(command: string): boolean {
   const normalized = command.trim();
+  const outputRedirection = parseSimpleOutputRedirection(normalized);
+  if (outputRedirection) return isKnownBinary(outputRedirection.sourceCommand);
   const parsed = parseShellCommand(normalized);
   if (parsed.unterminatedQuote) return false;
   if (parsed.sawControlSyntax) {
@@ -572,6 +650,7 @@ export function embeddedClassifyCommandRiskSource(functionName = "classify"): st
     classifyDockerCommand.toString(),
     classifyKubectlCommand.toString(),
     isLowRiskBaseCommand.toString(),
+    parseSimpleOutputRedirection.toString(),
     splitCompoundShellSegments.toString(),
     classifyCompoundCommandRisk.toString(),
     classifyCommandRisk.toString(),

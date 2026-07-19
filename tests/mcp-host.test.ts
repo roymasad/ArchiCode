@@ -167,7 +167,7 @@ describe("Hosted ArchiCode MCP", () => {
     const aboutResource = await rpc("resources/read", { uri: "archicode://about" });
     const about = JSON.parse(aboutResource.result.contents[0].text);
     expect(about.archicode.name).toBe("ArchiCode");
-    expect(about.archicode.capabilityVersion).toBe("2026-07-14.1");
+    expect(about.archicode.capabilityVersion).toBe("2026-07-17.3");
     expect(about.archicode.capabilities.researchChat.can.join(" ")).toContain("Sherlock");
     expect(about.archicode.currentProjectOptions.reviewAndApproval.codeReviewMode).toBe("auto-apply");
     expect(about.guidance.bestContextTool).toBe("archicode_get_scoped_change_context");

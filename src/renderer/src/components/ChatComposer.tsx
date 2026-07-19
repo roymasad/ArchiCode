@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ProjectBundle } from "@shared/schema";
 import { useArchicodeStore, type ComposerSegment } from "../store/useArchicodeStore";
 
@@ -206,8 +206,9 @@ export function ChatComposer({
     setResearchDraft(next);
   }, [setResearchDraft]);
 
-  const allOptionsRef = useRef<NodeOption[]>([]);
-  allOptionsRef.current = bundle ? listAllNodeOptions(bundle) : [];
+  const allOptions = useMemo(() => bundle ? listAllNodeOptions(bundle) : [], [bundle]);
+  const allOptionsRef = useRef<NodeOption[]>(allOptions);
+  allOptionsRef.current = allOptions;
 
   const updateTrigger = useCallback(() => {
     const root = composerRef.current;

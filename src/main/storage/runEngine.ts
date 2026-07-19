@@ -36,6 +36,7 @@ import {
   notificationSettingsSchema,
   canvasBackgroundSchema,
   canvasEdgeStyleSchema,
+  delphiTestingInputSchema,
   type Artifact,
   type ContextLifecycle,
   type Note,
@@ -76,13 +77,16 @@ import {
   type LlmUsage,
   type LlmPhase,
   type SherlockResearchOutput,
-  type PicassoGraphOutput
+  type PicassoGraphOutput,
+  type DelphiTestingInput,
+  type DelphiTestingOutput
 } from "../../shared/schema";
 import type { CreateProjectSkillInput, McpImportSource, McpRefreshResult, McpRegistryInstallInput, McpRegistryInstallResult, McpRegistrySearchInput, McpRegistrySearchResult, ProjectSkill } from "../../shared/capabilities";
 import { createSeedProject } from "../../shared/fixtures";
 import { createProjectFromTemplate, flutterRunTargetProfiles, type ProjectTemplateId } from "../../shared/templates";
 import { extractArchicodePatch, type QuarantinedPatchOperation } from "../../shared/patchExtraction";
 import { compactImplementationScope, implementationScopeAdvisory, semanticRetrievalAdvisory } from "../../shared/implementationScope";
+import { gaiaAgent, pandoraAgent } from "../../shared/agentIdentities";
 import { callProvider, checkProviderHealth, summarizeWithProvider, type ProviderCallOptions, type ProviderHealthResult, type ProviderImageAttachment, type ProviderProgressEvent, type ProviderTextAttachment } from "../providers";
 import { runVerificationCommand, executeMicroRun } from "../microRuns";
 import { registerAllMicroRunAgents } from "../microRunAgents";
@@ -93,6 +97,8 @@ import { createProjectSkill as writeProjectSkill, listProjectSkills as readProje
 import { callMcpTool, enabledMcpServers, importMcpServers, listMcpRegistryServers, mcpServerFromRegistryEntry, providerMcpTools, refreshMcpServerCapabilities, type ProviderMcpTool } from "../mcp";
 import { archicodeInternalTools, callArchicodeInternalTool, createArchicodeInternalMcpServer, isArchicodeInternalTool, type InternalConsoleCommandResult } from "../internalTools";
 import { type ShellCommandRisk, buildSubprocessEnv, classifyCommandRisk, commandAllowedBySettings, isKnownBinary } from "../../shared/execution";
+import { assessAgentCommandSafety, type AgentCommandAuthorization } from "../actionSafety";
+import { createConsecutiveToolCallLoopDetector } from "../agentRuntime";
 import { deriveContextBudgetPlan, estimateTextTokens } from "../../shared/contextBudget";
 import { sumLlmUsage, isAllUsageUnavailable } from "../../shared/llmPricing";
 import { isSubflowIgnored, workingNodesForFlow } from "../../shared/graph";
@@ -114,6 +120,8 @@ import { extractTextDocument, isSupportedTextDocumentMediaType } from "../docume
 import { getGitStatus, readProjectFile, readProjectFileDiff } from "../projectTools";
 import { isRepairableProjectToolError, normalizeProjectToolArguments, repairableProjectToolResult } from "../../shared/toolRepair";
 import { archicodeCapabilityDigest, archicodeCapabilityVersion, archicodeCurrentProjectOptions } from "../../shared/appCapabilities";
+import { installDelphiManagedTool } from "../testing/toolCache";
+import { acquireDelphiRuntimeTarget, planDelphiRuntimeLaunch, releaseDelphiRuntimeTarget, type DelphiRuntimeLease } from "../testing/runtimeLifecycle";
 import { searchSemanticIndex, semanticRelatedNodeIds, type SemanticSearchResult } from "../semanticIndex";
 import {
   PROJECT_STATE_DIR,
@@ -2658,7 +2666,7 @@ async function startAgentRunUnlocked(input: StartAgentRunInput): Promise<{ bundl
       ...(command || runScope?.kind === "no-scope" ? [] : [{ id: id("todo"), text: "Coding phase only after planning is complete", kind: "coding-phase" as const, status: "todo" as const }])
     ],
     logs: [
-      { at: iso(), stream: "system", text: scopeDenied ? "Run blocked before context preparation." : needsPermission ? "Waiting for shell permission. Context will be prepared before execution." : "Preparing run context and plan artifact..." },
+      { at: iso(), stream: "system", text: scopeDenied ? "Run blocked before context preparation." : needsPermission ? "Waiting for shell permission. Context will be prepared before execution." : `Preparing run context and plan artifact... ${gaiaAgent.title} owns this implementation run.` },
       ...(guidance?.text || guidance?.evidence.length ? [{ at: iso(), stream: "system" as const, text: guidanceAttachedLog(guidance, "run") }] : []),
       ...(scopeDenied ? [{ at: iso(), stream: "stderr" as const, text: `Blocked by filesystem scope: ${scope?.violations.join(" ")}` }] : [])
     ],
@@ -2974,15 +2982,18 @@ export async function approveRun(input: {
   if (pendingToolCall) {
     const bundle = await loadProject(input.projectRoot);
     const internalTools = archicodeInternalTools(bundle.project.settings);
-    const internalNames = new Set(internalTools.map((tool) => tool.providerToolName));
-    const mcpTools = [...internalTools, ...providerMcpTools(bundle.project.settings).filter((tool) => !internalNames.has(tool.providerToolName))];
+    const firstPartyTools = [...internalTools, ...runSubagentTools(bundle.project.settings)];
+    const firstPartyNames = new Set(firstPartyTools.map((tool) => tool.providerToolName));
+    const mcpTools = [...firstPartyTools, ...providerMcpTools(bundle.project.settings).filter((tool) => !firstPartyNames.has(tool.providerToolName))];
     try {
       approvedToolResult = await executeRunMcpTool(input.projectRoot, run.id, bundle.project.settings, mcpTools, {
         providerToolName: pendingToolCall.providerToolName,
         argumentsJson: pendingToolCall.argumentsJson ?? "{}"
       }, { approvedByUser: true });
     } catch (error) {
-      approvedToolResult = `Tool execution failed after approval: ${error instanceof Error ? error.message : String(error)}`;
+      if (!(error instanceof RunConsoleApprovalPending)) {
+        approvedToolResult = `Tool execution failed after approval: ${error instanceof Error ? error.message : String(error)}`;
+      }
     }
   }
   const approvedMcpServerIds = run.mcp?.pendingServerIds.length
@@ -2991,6 +3002,16 @@ export async function approveRun(input: {
   // Re-read after executing the approved tool call so its call records and
   // logs survive; building from the pre-execution snapshot would erase them.
   const runAfterTool = pendingToolCall ? await readRun(input.projectRoot, input.runId).catch(() => run) : run;
+  const chainedPendingToolCall = runAfterTool.status === "needs-permission" ? runAfterTool.mcp?.pendingToolCall : undefined;
+  if (pendingToolCall && chainedPendingToolCall && (
+    chainedPendingToolCall.providerToolName !== pendingToolCall.providerToolName
+    || chainedPendingToolCall.argumentsJson !== pendingToolCall.argumentsJson
+  )) {
+    // Preserve a new setup approval discovered by the just-approved Delphi
+    // audit. Rebuilding from the original approval snapshot would otherwise
+    // clear this chained card and lose the provider continuation.
+    return loadProject(input.projectRoot);
+  }
   const approved = runSchema.parse({
     ...runAfterTool,
     status: nextStatus,
@@ -4031,7 +4052,7 @@ async function startDebuggingRunUnlocked(
   const failedRun = await readRun(projectRoot, runId);
   const debugEligible = failedRun.status === "failed" || (failedRun.status === "cancelled" && failedRun.stoppedAtPhase === "debugging");
   if (!debugEligible) {
-    throw new Error(`Run ${failedRun.id} is ${failedRun.status}; AI Debug can only start from a failed run or resume a cancelled debugging phase.`);
+    throw new Error(`Run ${failedRun.id} is ${failedRun.status}; ${pandoraAgent.name} can only start from a failed run or resume a cancelled debugging phase.`);
   }
   const guidance = normalizeGuidance(guidanceInput);
   const bundle = await loadProject(projectRoot);
@@ -4092,7 +4113,7 @@ async function startDebuggingRunUnlocked(
       ...(guidance?.text || guidance?.evidence.length ? [{ at: iso(), stream: "system" as const, text: guidanceAttachedLog(guidance, "debug") }] : []),
       { at: iso(), stream: "system", text: failedRun.logs.slice(-12).map((line) => `[${line.stream}] ${line.text}`).join("\n") }
     ],
-    runInstructions: "Debugging uses low-temperature/high-reasoning defaults and should make the smallest repair before verification.",
+    runInstructions: `${pandoraAgent.name} uses low-temperature/high-reasoning defaults and should make the smallest repair before verification.`,
     createdAt: iso(),
     startedAt: iso()
   });
@@ -4201,7 +4222,7 @@ async function startRuntimeDebugRunUnlocked(input: {
       ...(guidance?.text || guidance?.evidence.length ? [{ at: iso(), stream: "system" as const, text: guidanceAttachedLog(guidance, "runtime debug") }] : []),
       { at: iso(), stream: "system", text: runtimeText || "Runtime service has no captured output yet." }
     ],
-    runInstructions: "Runtime debug fixes the smallest cause visible in service logs and avoids unrelated feature work.",
+    runInstructions: `${pandoraAgent.name} fixes the smallest cause visible in service logs and avoids unrelated feature work.`,
     createdAt: iso(),
     startedAt: iso()
   });
@@ -4374,10 +4395,10 @@ async function startIncidentDebugRunUnlocked(input: {
   guidance?: Partial<RunGuidance>;
 }): Promise<{ bundle: ProjectBundle; runId: string }> {
   const bundle = await loadProject(input.projectRoot);
-  assertNoActiveRunLane(bundle, "starting AI Debug");
+  assertNoActiveRunLane(bundle, `starting ${pandoraAgent.name}`);
   const provider = bundle.project.settings.providers.find((item) => item.id === input.providerId);
   if (!isCodeCapableProvider(provider)) {
-    throw new Error("AI Debug requires an enabled provider that can produce source changes or repair proposals.");
+    throw new Error(`${pandoraAgent.title} requires an enabled provider that can produce source changes or repair proposals.`);
   }
   const runtimeServices = await listRuntimeServices(input.projectRoot);
   const flowId = input.flowId || bundle.project.activeFlowId;
@@ -4414,7 +4435,7 @@ async function startIncidentDebugRunUnlocked(input: {
       : { kind: "flow", flowId, nodeIds: [], label: "Open debug incidents" },
     permission: {
       decision: "allowed",
-      reason: "AI Debug uses explicit bug reports, bug notes, failed run logs, and failed runtime services as incident context."
+      reason: `${pandoraAgent.name} uses explicit bug reports, bug notes, failed run logs, and failed runtime services as incident context.`
     },
     contextSummary: context.summary,
     contextArtifacts: [...context.artifacts.map((artifact) => artifact.id), planArtifact.id, ...new Set(incidents.flatMap((incident) => incident.artifactIds))],
@@ -4433,11 +4454,11 @@ async function startIncidentDebugRunUnlocked(input: {
       { id: id("todo"), text: "Verify fixes with the configured build/test command", status: "todo" }
     ],
     logs: [
-      { at: iso(), stream: "system", text: `AI Debug started with ${incidents.length} open incident${incidents.length === 1 ? "" : "s"}.` },
+      { at: iso(), stream: "system", text: `AI Debug started with ${incidents.length} open incident${incidents.length === 1 ? "" : "s"}. ${pandoraAgent.title} owns this recovery run.` },
       ...(guidance?.text || guidance?.evidence.length ? [{ at: iso(), stream: "system" as const, text: guidanceAttachedLog(guidance, "incident debug") }] : []),
       { at: iso(), stream: "system", text: incidentText }
     ],
-    runInstructions: "AI Debug fixes flagged bugs and regressions only. Avoid feature work unless required to resolve an incident.",
+    runInstructions: `${pandoraAgent.name} fixes flagged bugs and regressions only. Avoid feature work unless required to resolve an incident.`,
     createdAt: iso(),
     startedAt: iso()
   });
@@ -4684,7 +4705,7 @@ type LocalProviderMcpApprovalRequest = {
 };
 
 type LocalProviderSubagentRequest = {
-  agent: "sherlock" | "picasso";
+  agent: "sherlock" | "picasso" | "delphi";
   input: Record<string, unknown>;
 };
 
@@ -4795,7 +4816,7 @@ export function extractLocalProviderSubagentRequest(output: string): LocalProvid
       const value = outer.archicodeSubagentRequest ?? outer;
       if (!value || typeof value !== "object" || Array.isArray(value)) continue;
       const request = value as Record<string, unknown>;
-      if (request.agent !== "sherlock" && request.agent !== "picasso") continue;
+      if (request.agent !== "sherlock" && request.agent !== "picasso" && request.agent !== "delphi") continue;
       const input = request.input && typeof request.input === "object" && !Array.isArray(request.input)
         ? request.input as Record<string, unknown>
         : {};
@@ -4864,16 +4885,18 @@ function localProviderSubagentPrompt(settings: ProjectSettings, provider: Projec
   if (!isLocalProviderKind(provider?.kind)) return "";
   const agents = [
     ...(settings.agentTools.subagents?.sherlockResearch ?? true ? ["sherlock"] : []),
-    ...(settings.agentTools.subagents?.graphReconciliation ?? true ? ["picasso"] : [])
+    ...(settings.agentTools.subagents?.graphReconciliation ?? true ? ["picasso"] : []),
+    ...(settings.agentTools.subagents?.delphiTesting ?? true ? ["delphi"] : [])
   ];
   if (!agents.length) return "Long-work subagents are disabled for this project.";
   return [
     "Fresh-context delegation for this run:",
     `Available subagents: ${agents.join(", ")}.`,
     "Use delegation only for substantial work whose investigation trail would otherwise pollute this run's context. Do not delegate simple reads or routine edits.",
-    "To delegate, stop the current response and return exactly one JSON object with this shape: { \"archicodeSubagentRequest\": { \"agent\": \"sherlock\" | \"picasso\", \"input\": { \"objective\": string, ... } } }.",
+    "To delegate, stop the current response and return exactly one JSON object with this shape: { \"archicodeSubagentRequest\": { \"agent\": \"sherlock\" | \"picasso\" | \"delphi\", \"input\": { \"objective\": string, ... } } }.",
     "Sherlock input may also include mode (codebase/online/topic/mixed), scope, codePaths, and evidenceRequirements. Sherlock is read-only.",
     "Picasso input may also include mode (assess/design/refine/reconcile), scope, evidenceSummary, constraints, and detailLevel. Assess is read-only; Picasso's graph changes are proposal-only and always require review.",
+    "Delphi input may also include mode (plan/audit/retest), scope, codePaths, platforms, observation (visible/headless plus evidence preference), an explicit target (profileId/deviceId/baseUrl or a localhost appiumServerUrl plus existing appiumSessionId), target launch (never/if-needed), cleanup (stop-if-started/keep-running), acceptanceCriteria, and advisory command ideas. Give Delphi the goal and boundaries, not a command sequence or retry plan. Default to visible observation for interactive audits. Use launch if-needed when Delphi should start an existing Run App profile or emulator after approval. Missing supported adapters are downloaded only after user approval into ArchiCode's managed cache; Delphi never installs dependencies silently or into the project.",
     "Do not mix the request JSON with prose. ArchiCode will run the subagent and resume this same phase with a compact artifact-backed result. Do not request another subagent from inside a subagent result."
   ].join("\n");
 }
@@ -4945,6 +4968,188 @@ async function pauseRunForConsoleApproval(
   }));
 }
 
+async function pauseRunForDelphiSetupApproval(
+  projectRoot: string,
+  runId: string,
+  callId: string,
+  input: { providerToolName: string; argumentsJson: string },
+  continuation?: { providerKind: "codex-local" | "claude-local" | "api"; originalOutput: string }
+): Promise<void> {
+  const latest = await readRun(projectRoot, runId);
+  const setup = runDelphiSetupInputSchema.parse(JSON.parse(input.argumentsJson || "{}"));
+  const at = iso();
+  const summary = [
+    `Managed adapters: ${setup.adapters.map((adapter) => adapter === "playwright" ? "Playwright" : "Appium").join(", ")}.`,
+    setup.adapters.includes("playwright") ? `Browsers: ${setup.playwrightBrowsers.join(", ")}.` : "",
+    setup.adapters.includes("appium") && setup.appiumDrivers.length ? `Drivers: ${setup.appiumDrivers.join(", ")}.` : ""
+  ].filter(Boolean).join(" ");
+  const hasExistingCall = latest.mcpToolCalls.some((call) => call.id === callId);
+  const approvalCall: Run["mcpToolCalls"][number] = {
+    id: callId,
+    serverId: "archicode-subagents",
+    serverLabel: "Subagents",
+    toolName: "setup_delphi_managed_tools",
+    argumentsJson: input.argumentsJson,
+    status: "approval-required",
+    resultSummary: `Waiting for managed Delphi setup approval. ${summary}`,
+    startedAt: at,
+    completedAt: at
+  };
+  await writeRun(projectRoot, runSchema.parse({
+    ...latest,
+    status: "needs-permission",
+    permission: {
+      ...latest.permission,
+      decision: "pending",
+      reason: `Delphi wants to download managed test tooling. ${summary}`
+    },
+    mcp: {
+      decision: "pending",
+      approvedServerIds: latest.mcp?.approvedServerIds ?? [],
+      deniedServerIds: latest.mcp?.deniedServerIds ?? [],
+      pendingServerIds: ["archicode-subagents"],
+      pendingToolCall: {
+        serverId: "archicode-subagents",
+        serverLabel: "Subagents",
+        toolName: "setup_delphi_managed_tools",
+        providerToolName: input.providerToolName,
+        argumentsJson: input.argumentsJson,
+        intent: `Install missing Delphi components in ArchiCode's managed cache. ${summary}`,
+        phase: latest.phase
+      },
+      continuation: {
+        providerKind: continuation?.providerKind ?? "api",
+        originalOutput: continuation?.originalOutput ?? ""
+      },
+      reason: `Waiting for approval to install managed Delphi tooling. ${summary}`
+    },
+    mcpToolCalls: hasExistingCall
+      ? latest.mcpToolCalls.map((call) => call.id === callId
+          ? { ...call, status: "approval-required", resultSummary: approvalCall.resultSummary, completedAt: at }
+          : call)
+      : [...latest.mcpToolCalls, approvalCall],
+    logs: [...latest.logs, { at, stream: "system", text: `Waiting for managed Delphi setup approval. ${summary}` }]
+  }));
+}
+
+async function pauseRunForDelphiAuditApproval(
+  projectRoot: string,
+  runId: string,
+  callId: string,
+  input: { providerToolName: string; argumentsJson: string },
+  plan?: NonNullable<Awaited<ReturnType<typeof planDelphiRuntimeLaunch>>>,
+  continuation?: { providerKind: "codex-local" | "claude-local" | "api"; originalOutput: string }
+): Promise<void> {
+  const latest = await readRun(projectRoot, runId);
+  const delphiArgs = delphiTestingInputSchema.parse(JSON.parse(input.argumentsJson || "{}"));
+  const at = iso();
+  const summary = [
+    delphiArgs.mode === "setup" && delphiArgs.setup
+      ? `Managed setup before audit: ${delphiArgs.setup.adapters.join(", ")}${delphiArgs.setup.adapters.includes("playwright") ? ` (${delphiArgs.setup.playwrightBrowsers.join(", ")})` : ""}.`
+      : "",
+    "Verification capability: Delphi may choose relevant bounded project-local checks; every chosen action is dynamically safety-checked. Dependency setup, deployment, and source edits remain outside this audit.",
+    delphiArgs.commands.length ? `Caller-suggested checks: ${delphiArgs.commands.join(" | ")}.` : "",
+    delphiArgs.target?.baseUrl ? `Approved browser origin: ${new URL(delphiArgs.target.baseUrl).origin}.` : "",
+    `Observation: ${delphiArgs.observation.mode}${delphiArgs.observation.capture === "none" ? "" : ` with ${delphiArgs.observation.capture} evidence capture`}.`,
+    plan ? `Run App profile: ${plan.profileLabel} (${plan.profileId}).` : "",
+    plan?.targetId ? `Target: ${plan.targetId}.` : "",
+    plan?.occupiedPorts.length
+      ? `Pre-existing port conflict: ${plan.occupiedPorts.join(", ")}. Delphi will not use or stop those listeners; ${plan.allowsReportedLocalFallback ? "it may use a localhost fallback URL reported by the exact approved runtime process" : "the audit will stop and ask for cleanup if the approved runtime cannot start"}.`
+      : "",
+    plan?.commands.length ? `Lifecycle commands: ${plan.commands.join(" | ")}.` : "",
+    plan?.cleanupCommands.length ? `Owned-target cleanup: ${plan.cleanupCommands.join(" | ")}.` : ""
+  ].filter(Boolean).join(" ");
+  const hasExistingCall = latest.mcpToolCalls.some((call) => call.id === callId);
+  const approvalCall: Run["mcpToolCalls"][number] = {
+    id: callId,
+    serverId: "archicode-subagents",
+    serverLabel: "Subagents",
+    toolName: "spawn_delphi",
+    argumentsJson: input.argumentsJson,
+    status: "approval-required",
+    resultSummary: `Waiting for Delphi audit approval. ${summary}`,
+    startedAt: at,
+    completedAt: at
+  };
+  await writeRun(projectRoot, runSchema.parse({
+    ...latest,
+    status: "needs-permission",
+    permission: {
+      ...latest.permission,
+      decision: "pending",
+      reason: `${plan?.requiresLaunch ? "Delphi wants to start a runtime target and run the bounded audit." : "Delphi wants to run a bounded project verification audit."} ${summary}`
+    },
+    mcp: {
+      decision: "pending",
+      approvedServerIds: latest.mcp?.approvedServerIds ?? [],
+      deniedServerIds: latest.mcp?.deniedServerIds ?? [],
+      pendingServerIds: ["archicode-subagents"],
+      pendingToolCall: {
+        serverId: "archicode-subagents",
+        serverLabel: "Subagents",
+        toolName: "spawn_delphi",
+        providerToolName: input.providerToolName,
+        argumentsJson: input.argumentsJson,
+        intent: `${plan?.requiresLaunch ? "Start the selected Run App target, " : ""}Grant Delphi the bounded project-verification capability${plan?.requiresLaunch ? ", and clean up only Delphi-owned processes" : ""}. ${summary}`,
+        phase: latest.phase
+      },
+      continuation: {
+        providerKind: continuation?.providerKind ?? "api",
+        originalOutput: continuation?.originalOutput ?? ""
+      },
+      reason: `Waiting for Delphi audit approval. ${summary}`
+    },
+    mcpToolCalls: hasExistingCall
+      ? latest.mcpToolCalls.map((call) => call.id === callId
+          ? { ...call, argumentsJson: input.argumentsJson, status: "approval-required", resultSummary: approvalCall.resultSummary, completedAt: at }
+          : call)
+      : [...latest.mcpToolCalls, approvalCall],
+    logs: [...latest.logs, { at, stream: "system", text: `Waiting for Delphi audit approval. ${summary}` }]
+  }));
+}
+
+async function pinDelphiTestingCommands(projectRoot: string, rawArgs: unknown): Promise<DelphiTestingInput> {
+  const args = delphiTestingInputSchema.parse(rawArgs);
+  const { inspectDelphiTestEnvironment, pinDelphiRuntimeTarget } = await import("../testing/toolchains");
+  const environment = await inspectDelphiTestEnvironment(projectRoot, args);
+  return pinDelphiRuntimeTarget(args, environment);
+}
+
+function prepareDelphiManagedPreflightFromEnvironment(
+  args: DelphiTestingInput,
+  environment: { toolchains: Array<{ adapter: string; status: string; installPlan?: { scope: string } }> }
+): DelphiTestingInput {
+  if (args.mode === "plan" || args.mode === "setup") return args;
+  const adapters = Array.from(new Set(environment.toolchains.flatMap((toolchain) =>
+    toolchain.status === "missing"
+      && (toolchain.adapter === "playwright" || toolchain.adapter === "appium")
+      && toolchain.installPlan?.scope === "managed-cache"
+      ? [toolchain.adapter]
+      : []
+  )));
+  if (!adapters.length) return args;
+  return delphiTestingInputSchema.parse({
+    ...args,
+    mode: "setup",
+    setup: {
+      adapters,
+      playwrightBrowsers: ["chromium"],
+      appiumDrivers: [
+        ...(args.platforms.includes("android") ? ["uiautomator2" as const] : []),
+        ...(args.platforms.includes("ios") ? ["xcuitest" as const] : [])
+      ],
+      resumeMode: args.mode === "retest" ? "retest" : "audit"
+    }
+  });
+}
+
+async function prepareDelphiApprovalArguments(projectRoot: string, rawArgs: unknown): Promise<DelphiTestingInput> {
+  const args = delphiTestingInputSchema.parse(rawArgs);
+  const { inspectDelphiTestEnvironment, pinDelphiRuntimeTarget } = await import("../testing/toolchains");
+  const environment = await inspectDelphiTestEnvironment(projectRoot, args);
+  return prepareDelphiManagedPreflightFromEnvironment(pinDelphiRuntimeTarget(args, environment), environment);
+}
+
 async function executeRunMcpTool(
   projectRoot: string,
   runId: string,
@@ -4954,7 +5159,7 @@ async function executeRunMcpTool(
   execOptions?: { approvedByUser?: boolean }
 ): Promise<string> {
   const normalized = normalizeProjectToolArguments(projectRoot, input.providerToolName, input.argumentsJson);
-  const effectiveInput = normalized.changed ? { ...input, argumentsJson: normalized.argumentsJson } : input;
+  let effectiveInput = normalized.changed ? { ...input, argumentsJson: normalized.argumentsJson } : input;
   const startedAt = iso();
   const started = await readRun(projectRoot, runId);
   const tool = mcpTools.find((item) => item.providerToolName === input.providerToolName);
@@ -4982,6 +5187,19 @@ async function executeRunMcpTool(
     ]
   }));
   try {
+    if (effectiveInput.providerToolName === RUN_SPAWN_DELPHI_TOOL && !execOptions?.approvedByUser) {
+      const delphiArgs = await prepareDelphiApprovalArguments(projectRoot, JSON.parse(effectiveInput.argumentsJson || "{}"));
+      effectiveInput = { ...effectiveInput, argumentsJson: JSON.stringify(delphiArgs) };
+      const launchPlan = await planDelphiRuntimeLaunch(projectRoot, delphiArgs);
+      if (delphiArgs.mode !== "plan") {
+        await pauseRunForDelphiAuditApproval(projectRoot, runId, callId, effectiveInput, launchPlan);
+        throw new RunConsoleApprovalPending("Delphi audit");
+      }
+    }
+    if (effectiveInput.providerToolName === RUN_SETUP_DELPHI_TOOL && !execOptions?.approvedByUser) {
+      await pauseRunForDelphiSetupApproval(projectRoot, runId, callId, effectiveInput);
+      throw new RunConsoleApprovalPending("Delphi managed-tool setup");
+    }
     const output = isRunSubagentTool(input.providerToolName)
       ? await executeRunSubagentTool(projectRoot, runId, settings, effectiveInput)
       : isArchicodeInternalTool(input.providerToolName)
@@ -4994,6 +5212,30 @@ async function executeRunMcpTool(
         }, effectiveInput)
       : await callMcpTool(settings, effectiveInput);
     const resultText = output.resultText;
+    if (input.providerToolName === RUN_SPAWN_DELPHI_TOOL) {
+      try {
+        const compact = JSON.parse(resultText) as {
+          status?: unknown;
+          managedSetup?: { adapters?: unknown; playwrightBrowsers?: unknown; appiumDrivers?: unknown };
+        };
+        const setup = runDelphiSetupInputSchema.safeParse(compact.managedSetup);
+        if (compact.status === "needs-setup" && setup.success && setup.data.adapters.length) {
+          const continuation = started.mcp?.continuation;
+          await pauseRunForDelphiSetupApproval(projectRoot, runId, callId, {
+            providerToolName: RUN_SETUP_DELPHI_TOOL,
+            argumentsJson: JSON.stringify(setup.data)
+          }, continuation ? {
+            providerKind: continuation.providerKind,
+            originalOutput: continuation.originalOutput
+          } : undefined);
+          throw new RunConsoleApprovalPending("Delphi managed-tool setup");
+        }
+      } catch (error) {
+        if (error instanceof RunConsoleApprovalPending) throw error;
+        // A malformed compact result is recorded normally; it is not allowed
+        // to synthesize or silently execute a setup request.
+      }
+    }
     // A gated console command pauses the run for the user's decision instead of
     // handing the model a dead-end "approval-required" receipt. Local CLI
     // providers keep the receipt: their transport cannot pause mid-invocation.
@@ -5050,9 +5292,16 @@ async function executeRunMcpTool(
 
 const RUN_SPAWN_SHERLOCK_TOOL = "archicode_spawn_sherlock";
 const RUN_SPAWN_PICASSO_TOOL = "archicode_spawn_picasso";
+const RUN_SPAWN_DELPHI_TOOL = "archicode_spawn_delphi";
+const RUN_SETUP_DELPHI_TOOL = "archicode_setup_delphi_managed_tools";
+const runDelphiSetupInputSchema = z.object({
+  adapters: z.array(z.enum(["playwright", "appium"])).min(1),
+  playwrightBrowsers: z.array(z.enum(["chromium", "firefox", "webkit"])).default(["chromium"]),
+  appiumDrivers: z.array(z.enum(["uiautomator2", "xcuitest"])).default([])
+});
 
 function isRunSubagentTool(providerToolName: string): boolean {
-  return providerToolName === RUN_SPAWN_SHERLOCK_TOOL || providerToolName === RUN_SPAWN_PICASSO_TOOL;
+  return providerToolName === RUN_SPAWN_SHERLOCK_TOOL || providerToolName === RUN_SPAWN_PICASSO_TOOL || providerToolName === RUN_SPAWN_DELPHI_TOOL || providerToolName === RUN_SETUP_DELPHI_TOOL;
 }
 
 export function runSubagentTools(settings: ProjectSettings): ProviderMcpTool[] {
@@ -5107,6 +5356,67 @@ export function runSubagentTools(settings: ProjectSettings): ProviderMcpTool[] {
       }
     });
   }
+  if (settings.agentTools.subagents?.delphiTesting ?? true) {
+    tools.push({
+      providerToolName: RUN_SPAWN_DELPHI_TOOL,
+      serverId: "archicode-subagents",
+      serverLabel: "Subagents",
+      toolName: "spawn_delphi",
+      description: "Delegate a bounded test, visual, runtime, or emulator audit to Delphi in a fresh context. Delphi can approval-gated start an explicit Run App target, wait for readiness, test it, and stop only what it started. It never installs dependencies silently and returns an artifact-backed report.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["objective"],
+        properties: {
+          objective: { type: "string" },
+          mode: { type: "string", enum: ["plan", "audit", "retest"] },
+          scope: { type: "string" },
+          codePaths: { type: "array", items: { type: "string" } },
+          platforms: { type: "array", items: { type: "string", enum: ["web", "electron", "flutter", "android", "ios", "generic"] } },
+          observation: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              mode: { type: "string", enum: ["visible", "headless"] },
+              capture: { type: "string", enum: ["key-steps", "final", "none"] }
+            }
+          },
+          target: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              profileId: { type: "string" },
+              deviceId: { type: "string" },
+              baseUrl: { type: "string" },
+              appiumServerUrl: { type: "string" },
+              appiumSessionId: { type: "string" },
+              launch: { type: "string", enum: ["never", "if-needed"] },
+              cleanup: { type: "string", enum: ["stop-if-started", "keep-running"] }
+            }
+          },
+          acceptanceCriteria: { type: "array", items: { type: "string" } },
+          commands: { type: "array", maxItems: 20, items: { type: "string" }, description: "Optional advisory check ideas, not an authorization list." }
+        }
+      }
+    });
+    tools.push({
+      providerToolName: RUN_SETUP_DELPHI_TOOL,
+      serverId: "archicode-subagents",
+      serverLabel: "Subagents",
+      toolName: "setup_delphi_managed_tools",
+      description: "Request approval to install missing Delphi Playwright/Appium components in ArchiCode's managed cache, never in the project. Delphi's normal audit preflight does this automatically when required; use this explicit tool only to prepare tooling without immediately running an audit. The exact setup pauses the run for user approval.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["adapters"],
+        properties: {
+          adapters: { type: "array", minItems: 1, uniqueItems: true, items: { type: "string", enum: ["playwright", "appium"] } },
+          playwrightBrowsers: { type: "array", uniqueItems: true, items: { type: "string", enum: ["chromium", "firefox", "webkit"] } },
+          appiumDrivers: { type: "array", uniqueItems: true, items: { type: "string", enum: ["uiautomator2", "xcuitest"] } }
+        }
+      }
+    });
+  }
   return tools;
 }
 
@@ -5121,25 +5431,145 @@ export async function executeRunSubagentTool(
   settings: ProjectSettings,
   input: { providerToolName: string; argumentsJson: string }
 ): Promise<{ serverId: string; serverLabel: string; toolName: string; resultText: string }> {
-  const args = input.argumentsJson.trim() ? JSON.parse(input.argumentsJson) as Record<string, unknown> : {};
+  let args = input.argumentsJson.trim() ? JSON.parse(input.argumentsJson) as Record<string, unknown> : {};
   const run = await readRun(projectRoot, runId);
+  if (input.providerToolName === RUN_SETUP_DELPHI_TOOL) {
+    if (!(settings.agentTools.subagents?.delphiTesting ?? true)) throw new Error("Delphi is disabled in project settings.");
+    const setup = runDelphiSetupInputSchema.parse(args);
+    const results: Awaited<ReturnType<typeof installDelphiManagedTool>>[] = [];
+    for (const adapter of setup.adapters) {
+      results.push(await installDelphiManagedTool(projectRoot, {
+        adapter,
+        playwrightBrowsers: adapter === "playwright" ? setup.playwrightBrowsers : undefined,
+        appiumDrivers: adapter === "appium" ? setup.appiumDrivers : undefined
+      }, {
+        signal: activeRunAbortControllers.get(runId)?.signal,
+        onProgress: (message) => queueRunLogAppend(projectRoot, runId, "system", `Delphi setup: ${message}`)
+      }));
+    }
+    await flushRunLogAppends(runId);
+    const artifact: Artifact = artifactSchema.parse({
+      id: id("artifact"),
+      type: "generated-file",
+      title: `Delphi managed-tool setup for ${runId}`,
+      path: `.archicode/artifacts/${runId}-delphi-managed-setup-${Date.now()}.json`,
+      runId,
+      summary: `Installed managed Delphi adapter${results.length === 1 ? "" : "s"}: ${results.map((result) => `${result.adapter} ${result.version ?? ""}`.trim()).join(", ")}.`,
+      createdAt: iso()
+    });
+    await writeJson(path.join(projectRoot, artifact.path), { ...artifact, setup, results });
+    const latest = await readRun(projectRoot, runId);
+    await writeRun(projectRoot, runSchema.parse({
+      ...latest,
+      contextArtifacts: Array.from(new Set([...latest.contextArtifacts, artifact.id])),
+      logs: [...latest.logs, { at: iso(), stream: "system", text: `${artifact.summary} Report: ${artifact.path}` }]
+    }));
+    return {
+      serverId: "archicode-subagents",
+      serverLabel: "Subagents",
+      toolName: "setup_delphi_managed_tools",
+      resultText: JSON.stringify({
+        status: "completed",
+        installed: results.map((result) => ({ adapter: result.adapter, version: result.version, browsersPath: result.browsersPath })),
+        reportArtifact: { id: artifact.id, path: artifact.path },
+        next: "Call Delphi again with the original audit objective and target."
+      })
+    };
+  }
   const bundle = await loadProject(projectRoot);
   const provider = bundle.project.settings.providers.find((item) => item.id === run.providerId);
   if (!provider) throw new Error(`Provider ${run.providerId} was not found for the subagent.`);
-  const kind = input.providerToolName === RUN_SPAWN_SHERLOCK_TOOL ? "sherlock-research" : "graph-reconciliation";
-  const displayName = kind === "sherlock-research" ? "Sherlock" : "Picasso";
+  const kind = input.providerToolName === RUN_SPAWN_SHERLOCK_TOOL ? "sherlock-research"
+    : input.providerToolName === RUN_SPAWN_DELPHI_TOOL ? "delphi-testing"
+      : "graph-reconciliation";
+  const displayName = kind === "sherlock-research" ? "Sherlock" : kind === "delphi-testing" ? "Delphi" : "Picasso";
   queueRunLogAppend(projectRoot, runId, "system", `${displayName} subagent started in a fresh context.`);
-  const result = await executeMicroRun(
-    projectRoot,
-    kind,
-    args,
-    await hydrateProviderForUse(provider),
-    bundle,
-    {
-      signal: activeRunAbortControllers.get(runId)?.signal,
-      onProgress: (message) => queueRunLogAppend(projectRoot, runId, "system", `${displayName}: ${message}`)
+  let runtimeLease: DelphiRuntimeLease | undefined;
+  let runtimeStopped = false;
+  let cleanupError: string | undefined;
+  const delphiSetupResults: Awaited<ReturnType<typeof installDelphiManagedTool>>[] = [];
+  const delphiObservedArtifacts: Array<{ id: string; label: string; path: string; mediaType: string }> = [];
+  if (kind === "delphi-testing") {
+    let delphiArgs: DelphiTestingInput = delphiTestingInputSchema.parse(args);
+    delphiArgs = await pinDelphiTestingCommands(projectRoot, delphiArgs);
+    if (delphiArgs.mode === "setup") {
+      if (!delphiArgs.setup) throw new Error("The Delphi audit preflight is missing its managed setup plan.");
+      for (const adapter of delphiArgs.setup.adapters) {
+        delphiSetupResults.push(await installDelphiManagedTool(projectRoot, {
+          adapter,
+          playwrightBrowsers: adapter === "playwright" ? delphiArgs.setup.playwrightBrowsers : undefined,
+          appiumDrivers: adapter === "appium" ? delphiArgs.setup.appiumDrivers : undefined
+        }, {
+          signal: activeRunAbortControllers.get(runId)?.signal,
+          onProgress: (message) => queueRunLogAppend(projectRoot, runId, "system", `Delphi setup: ${message}`)
+        }));
+      }
+      delphiArgs = delphiTestingInputSchema.parse({
+        ...delphiArgs,
+        mode: delphiArgs.setup.resumeMode,
+        setup: undefined
+      });
     }
-  );
+    if (delphiArgs.mode !== "plan") {
+      runtimeLease = await acquireDelphiRuntimeTarget(projectRoot, delphiArgs, {
+        signal: activeRunAbortControllers.get(runId)?.signal,
+        onProgress: (message) => queueRunLogAppend(projectRoot, runId, "system", `Delphi: ${message}`)
+      });
+      if (runtimeLease) {
+        delphiArgs = delphiTestingInputSchema.parse({
+          ...delphiArgs,
+          target: {
+            ...delphiArgs.target,
+            baseUrl: delphiArgs.target?.baseUrl ?? runtimeLease.service.url,
+            deviceId: runtimeLease.service.runTargetId ?? runtimeLease.service.targetId ?? delphiArgs.target?.deviceId
+          }
+        });
+      }
+    }
+    args = delphiArgs as unknown as Record<string, unknown>;
+  }
+  const result = await executeMicroRun(
+      projectRoot,
+      kind,
+      args,
+      await hydrateProviderForUse(provider),
+      bundle,
+      {
+        signal: activeRunAbortControllers.get(runId)?.signal,
+        runConsoleCommand: kind === "delphi-testing" || kind === "sherlock-research"
+          ? (commandArgs) => {
+              return runInternalConsoleCommand(projectRoot, settings, commandArgs, {
+                authorization: {
+                  actor: kind === "delphi-testing" ? "delphi" : "sherlock",
+                  capabilities: kind === "delphi-testing"
+                    ? ["inspect-project", "verify-project"]
+                    : ["inspect-project"]
+                },
+                maxTimeoutMs: 10 * 60_000,
+                signal: activeRunAbortControllers.get(runId)?.signal
+              });
+            }
+          : undefined,
+        onProgress: (message) => queueRunLogAppend(projectRoot, runId, "system", `${displayName}: ${message}`),
+        onArtifact: kind === "delphi-testing" ? (artifact) => {
+          if (!delphiObservedArtifacts.some((entry) => entry.id === artifact.id)) delphiObservedArtifacts.push(artifact);
+          queueRunLogAppend(projectRoot, runId, "system", `Delphi observation: ${artifact.label} (${artifact.path})`);
+        } : undefined
+      }
+    ).finally(async () => {
+      if (kind !== "delphi-testing") return;
+      try {
+        runtimeStopped = await releaseDelphiRuntimeTarget(
+          projectRoot,
+          runtimeLease,
+          delphiTestingInputSchema.parse(args),
+          (message) => queueRunLogAppend(projectRoot, runId, "system", `Delphi: ${message}`)
+        );
+      } catch (error) {
+        cleanupError = error instanceof Error ? error.message : String(error);
+        queueRunLogAppend(projectRoot, runId, "stderr", `Delphi target cleanup failed: ${cleanupError}`);
+      }
+    });
   await flushRunLogAppends(runId);
   if (result.usage) await persistRunUsage(projectRoot, runId, runPhaseForSubagent(run), [result.usage]);
 
@@ -5152,7 +5582,22 @@ export async function executeRunSubagentTool(
     summary: result.status === "failed" ? result.error : `${displayName} completed its isolated assignment.`,
     createdAt: iso()
   });
-  await writeJson(path.join(projectRoot, artifact.path), { ...artifact, microRun: result });
+  await writeJson(path.join(projectRoot, artifact.path), {
+    ...artifact,
+    runtime: runtimeLease ? {
+      profileId: runtimeLease.plan.profileId,
+      serviceId: runtimeLease.service.id,
+      targetId: runtimeLease.service.targetId,
+      runTargetId: runtimeLease.service.runTargetId,
+      url: runtimeLease.service.url,
+      startedByDelphi: runtimeLease.startedByDelphi,
+      stoppedAfterAudit: runtimeStopped,
+      cleanupError
+    } : undefined,
+    managedSetup: delphiSetupResults,
+    observedArtifacts: delphiObservedArtifacts,
+    microRun: result
+  });
 
   let reviewArtifact: Artifact | undefined;
   if (kind === "graph-reconciliation" && result.status !== "failed") {
@@ -5201,12 +5646,15 @@ export async function executeRunSubagentTool(
       ...latest.logs,
       {
         at: iso(),
-        stream: result.status === "failed" ? "stderr" : "system",
-        text: `${displayName} ${result.status === "failed" ? "failed" : "completed"}. Full report: ${artifact.path}${reviewArtifact ? `; graph proposal awaiting review: ${reviewArtifact.path}` : ""}`
+        stream: result.status === "failed" || cleanupError ? "stderr" : "system",
+        text: cleanupError
+          ? `${displayName} completed its audit but failed to clean up its owned runtime target: ${cleanupError}. Full report: ${artifact.path}`
+          : `${displayName} ${result.status === "failed" ? "failed" : "completed"}. Full report: ${artifact.path}${reviewArtifact ? `; graph proposal awaiting review: ${reviewArtifact.path}` : ""}`
       }
     ]
   }));
   if (result.status === "failed") throw new Error(result.error ?? `${displayName} failed.`);
+  if (cleanupError) throw new Error(`Delphi completed its audit but could not clean up its owned runtime target: ${cleanupError}. Full report: ${artifact.path}`);
 
   const compact = kind === "sherlock-research"
     ? (() => {
@@ -5219,7 +5667,46 @@ export async function executeRunSubagentTool(
           reportArtifact: { id: artifact.id, path: artifact.path }
         };
       })()
-    : (() => {
+    : kind === "delphi-testing"
+      ? (() => {
+          const output = result.output as DelphiTestingOutput;
+          return {
+            agent: "Delphi",
+            status: output.status,
+            verdict: output.verdict,
+            summary: output.summary,
+            checkCount: output.checks.length,
+            findingCount: output.findings.length,
+            blockers: output.blockers,
+            runtime: runtimeLease ? {
+              profileId: runtimeLease.plan.profileId,
+              serviceId: runtimeLease.service.id,
+              targetId: runtimeLease.service.targetId,
+              runTargetId: runtimeLease.service.runTargetId,
+              url: runtimeLease.service.url,
+              startedByDelphi: runtimeLease.startedByDelphi,
+              stoppedAfterAudit: runtimeStopped,
+              cleanupError
+            } : undefined,
+            managedSetup: {
+              adapters: Array.from(new Set(output.toolchains.flatMap((toolchain) =>
+                toolchain.status === "missing"
+                  && (toolchain.adapter === "playwright" || toolchain.adapter === "appium")
+                  && toolchain.installPlan?.scope === "managed-cache"
+                  ? [toolchain.adapter]
+                  : []
+              ))),
+              playwrightBrowsers: ["chromium"],
+              appiumDrivers: [
+                ...(args.platforms instanceof Array && args.platforms.includes("android") ? ["uiautomator2"] : []),
+                ...(args.platforms instanceof Array && args.platforms.includes("ios") ? ["xcuitest"] : [])
+              ]
+            },
+            recommendedNextSteps: output.recommendedNextSteps,
+            reportArtifact: { id: artifact.id, path: artifact.path }
+          };
+        })()
+      : (() => {
         const output = result.output as PicassoGraphOutput;
         const changeSet = output.graphChangeSet as { operations?: unknown[] } | undefined;
         return {
@@ -5234,12 +5721,12 @@ export async function executeRunSubagentTool(
   return {
     serverId: "archicode-subagents",
     serverLabel: "Subagents",
-    toolName: input.providerToolName === RUN_SPAWN_SHERLOCK_TOOL ? "spawn_sherlock" : "spawn_picasso",
+    toolName: input.providerToolName === RUN_SPAWN_SHERLOCK_TOOL ? "spawn_sherlock" : input.providerToolName === RUN_SPAWN_DELPHI_TOOL ? "spawn_delphi" : "spawn_picasso",
     resultText: JSON.stringify(compact)
   };
 }
 
-export async function runInternalConsoleCommand(projectRoot: string, settings: ProjectSettings, args: Record<string, unknown>, options?: { approvalGranted?: boolean }): Promise<InternalConsoleCommandResult> {
+export async function runInternalConsoleCommand(projectRoot: string, settings: ProjectSettings, args: Record<string, unknown>, options?: { approvalGranted?: boolean; authorization?: AgentCommandAuthorization; maxTimeoutMs?: number; signal?: AbortSignal }): Promise<InternalConsoleCommandResult> {
   const command = typeof args.command === "string" ? args.command.trim() : "";
   if (!command) throw new Error("command is required.");
   const rawCwd = typeof args.cwd === "string" ? args.cwd.trim() : "";
@@ -5249,37 +5736,49 @@ export async function runInternalConsoleCommand(projectRoot: string, settings: P
     : path.resolve(resolvedProjectRoot, rawCwd || ".");
   const relativeCwd = path.relative(resolvedProjectRoot, cwd).split(path.sep).join("/");
   if (relativeCwd.startsWith("..") || path.isAbsolute(relativeCwd)) throw new Error("Console tool cwd escapes the project root.");
-  const risk = classifyCommandRisk(command);
-  if (isRuntimeOrWatchCommand(command)) {
-    return {
-      command,
-      cwd: relativeCwd || ".",
-      risk,
-      status: "rejected",
-      message: "Runtime/watch/dev-server commands must be launched with Run App, not the built-in console tool."
-    };
-  }
-  const scope = await evaluateFilesystemScope(projectRoot, settings, command, cwd, risk);
-  if (!scope.allowed) {
+  const safety = await assessAgentCommandSafety({
+    projectRoot,
+    settings,
+    command,
+    cwd,
+    authorization: options?.authorization ?? {
+      actor: "other-subagent",
+      exactCommandApproved: options?.approvalGranted
+    }
+  });
+  const risk = safety.risk;
+  if (safety.decision === "denied") {
     return {
       command,
       cwd: relativeCwd || ".",
       risk,
       status: "denied",
-      message: `Filesystem scope denied: ${scope.violations.join(" ")}`
+      message: safety.reason
     };
   }
-  const reusablePolicy = commandAllowedBySettings(settings, command, cwd);
-  if (!options?.approvalGranted && risk !== "low" && !reusablePolicy && !commandsAutoApproved(settings, risk, command)) {
+  if (safety.decision === "redirect") {
+    return {
+      command,
+      cwd: relativeCwd || ".",
+      risk,
+      status: "redirected",
+      message: safety.reason
+    };
+  }
+  if (safety.decision === "approval-required") {
     return {
       command,
       cwd: relativeCwd || ".",
       risk,
       status: "approval-required",
-      message: "Medium/high-risk command requires approval or a reusable shell policy before the built-in console tool can run it."
+      message: safety.reason
     };
   }
-  const timeoutMs = Math.min(60_000, Math.max(1_000, typeof args.timeoutMs === "number" ? Math.floor(args.timeoutMs) : 60_000));
+  const maximumTimeoutMs = Math.min(10 * 60_000, Math.max(1_000, options?.maxTimeoutMs ?? 60_000));
+  const timeoutMs = Math.min(maximumTimeoutMs, Math.max(1_000, typeof args.timeoutMs === "number" ? Math.floor(args.timeoutMs) : maximumTimeoutMs));
+  if (options?.signal?.aborted) {
+    return { command, cwd: relativeCwd || ".", risk, status: "failed", exitCode: null, message: "Command cancelled before it started." };
+  }
   return new Promise((resolve) => {
     const child = spawn(command, {
       cwd,
@@ -5301,14 +5800,23 @@ export async function runInternalConsoleCommand(projectRoot: string, settings: P
       stderr += `${stderr.endsWith("\n") || !stderr ? "" : "\n"}Command timed out after ${timeoutMs}ms.`;
       child.kill("SIGTERM");
     }, timeoutMs);
+    const abort = (): void => {
+      stderr += `${stderr.endsWith("\n") || !stderr ? "" : "\n"}Command cancelled.`;
+      child.kill("SIGTERM");
+    };
+    options?.signal?.addEventListener("abort", abort, { once: true });
+    const cleanup = (): void => {
+      clearTimeout(timeout);
+      options?.signal?.removeEventListener("abort", abort);
+    };
     child.stdout.on("data", (chunk: Buffer) => capture("stdout", chunk));
     child.stderr.on("data", (chunk: Buffer) => capture("stderr", chunk));
     child.on("error", (error) => {
-      clearTimeout(timeout);
+      cleanup();
       resolve({ command, cwd: relativeCwd || ".", risk, status: "failed", exitCode: null, stdout, stderr: stderr || error.message });
     });
     child.on("close", (exitCode) => {
-      clearTimeout(timeout);
+      cleanup();
       resolve({ command, cwd: relativeCwd || ".", risk, status: exitCode === 0 ? "succeeded" : "failed", exitCode, stdout, stderr });
     });
   });
@@ -5741,30 +6249,58 @@ export async function callProviderForRun(
     return callProvider(provider, contextText, promptSummary, options);
   }
   let delegatedContext = contextText;
-  for (let delegationCount = 0; delegationCount <= 2; delegationCount += 1) {
+  const delegationLoopDetector = createConsecutiveToolCallLoopDetector();
+  while (true) {
     const output = await callProvider(provider, delegatedContext, promptSummary, options);
     const request = extractLocalProviderSubagentRequest(output);
     if (!request) return output;
-    if (delegationCount === 2) throw new Error("Local provider exceeded the maximum of two fresh-context subagent delegations for one phase.");
+    const duplicateWarning = delegationLoopDetector.record(`spawn_${request.agent}`, JSON.stringify(request.input));
+    if (duplicateWarning) {
+      delegatedContext = [
+        delegatedContext,
+        "",
+        duplicateWarning,
+        "The identical delegation already completed and its result is present above. Do not spawn it again. Use that evidence, choose a different useful action, or finish the phase."
+      ].join("\n");
+      continue;
+    }
     const settings = (await loadProject(projectRoot)).project.settings;
     const enabled = request.agent === "sherlock"
       ? (settings.agentTools.subagents?.sherlockResearch ?? true)
-      : (settings.agentTools.subagents?.graphReconciliation ?? true);
-    if (!enabled) throw new Error(`${request.agent === "sherlock" ? "Sherlock" : "Picasso"} is disabled in project settings.`);
+      : request.agent === "delphi"
+        ? (settings.agentTools.subagents?.delphiTesting ?? true)
+        : (settings.agentTools.subagents?.graphReconciliation ?? true);
+    const displayName = request.agent === "sherlock" ? "Sherlock" : request.agent === "delphi" ? "Delphi" : "Picasso";
+    if (!enabled) throw new Error(`${displayName} is disabled in project settings.`);
+    let subagentInput: unknown = request.input;
+    if (request.agent === "delphi") {
+      const delphiArgs = await prepareDelphiApprovalArguments(projectRoot, request.input);
+      subagentInput = delphiArgs;
+      const launchPlan = await planDelphiRuntimeLaunch(projectRoot, delphiArgs);
+      if (delphiArgs.mode !== "plan") {
+        await pauseRunForDelphiAuditApproval(projectRoot, runId, id("mcp-call"), {
+          providerToolName: RUN_SPAWN_DELPHI_TOOL,
+          argumentsJson: JSON.stringify(delphiArgs)
+        }, launchPlan, {
+          providerKind: provider.kind,
+          originalOutput: output.trim()
+        });
+        throw new RunConsoleApprovalPending("Delphi audit");
+      }
+    }
     const result = await executeRunSubagentTool(projectRoot, runId, settings, {
-      providerToolName: request.agent === "sherlock" ? RUN_SPAWN_SHERLOCK_TOOL : RUN_SPAWN_PICASSO_TOOL,
-      argumentsJson: JSON.stringify(request.input)
+      providerToolName: request.agent === "sherlock" ? RUN_SPAWN_SHERLOCK_TOOL : request.agent === "delphi" ? RUN_SPAWN_DELPHI_TOOL : RUN_SPAWN_PICASSO_TOOL,
+      argumentsJson: JSON.stringify(subagentInput)
     });
     delegatedContext = [
       contextText,
       "",
       "## Completed Fresh-Context Delegation",
-      `${request.agent === "sherlock" ? "Sherlock" : "Picasso"} completed the requested isolated work.`,
+      `${displayName} completed the requested isolated work.`,
       `Compact result: ${result.resultText}`,
       "Continue the original phase now. Use the compact result and its artifact reference; do not repeat the investigation or request the same delegation again."
     ].join("\n");
   }
-  throw new Error("Local provider delegation loop exhausted.");
 }
 
 async function writeMcpTranscriptArtifact(projectRoot: string, run: Run): Promise<Artifact | null> {
@@ -5875,7 +6411,7 @@ async function completePlanningRun(projectRoot: string, run: Run, contextText?: 
     status: "planning",
     phase: "planning",
     todos: run.todos.map((todo) => todo.kind === "planning-phase" || todo.text.includes("Planning phase") ? { ...todo, status: "doing" } : todo),
-    logs: [...run.logs, { at: iso(), stream: "system", text: "Planning phase started." }],
+    logs: [...run.logs, { at: iso(), stream: "system", text: `Planning phase started. ${gaiaAgent.title} owns this implementation run.` }],
     startedAt: run.startedAt ?? iso()
   });
   await writeRun(projectRoot, planningRun);
@@ -6085,7 +6621,11 @@ async function completeCodingRun(projectRoot: string, run: Run, contextText?: st
           ? `${provider?.kind === "claude-local" ? "Claude Code CLI" : "Codex Local CLI"} provider launch allowed by ${codexLocalSandboxDisplayLabel(provider?.localSandbox)}.`
         : "API provider coding is applied through source-file handoffs."
     },
-    logs: [...run.logs, { at: iso(), stream: "system", text: providerPhase === "debugging" ? "Debugging phase started." : directWrite ? "Coding phase started." : "API coding phase started; provider must return source-file proposals for ArchiCode to apply." }]
+    logs: [...run.logs, { at: iso(), stream: "system", text: providerPhase === "debugging"
+      ? `Debugging phase started. ${pandoraAgent.title} owns this repair run.`
+      : directWrite
+        ? `Coding phase started. ${gaiaAgent.title} owns this implementation run.`
+        : `API coding phase started; ${gaiaAgent.name} must return source-file proposals for ArchiCode to apply.` }]
   });
   await writeRun(projectRoot, codingRun);
 

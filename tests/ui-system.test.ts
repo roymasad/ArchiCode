@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { resolve } from "node:path";
 
 const repoRoot = resolve(__dirname, "..");
@@ -41,7 +41,60 @@ function readStoreSource(): string {
   return storeSourceFiles.map((file) => readFileSync(resolve(repoRoot, file), "utf8")).join("\n");
 }
 
+function sourceFilesUnder(directory: string): string[] {
+  return readdirSync(directory, { withFileTypes: true }).flatMap((entry) => {
+    const path = resolve(directory, entry.name);
+    return entry.isDirectory() ? sourceFilesUnder(path) : [path];
+  });
+}
+
 describe("renderer UI system", () => {
+  it("keeps functional toolbar labels while surfacing the Gaia and Pandora personas", () => {
+    const toolbar = readProjectToolbarSource();
+    const identities = readFileSync(resolve(repoRoot, "src/shared/agentIdentities.ts"), "utf8");
+
+    expect(toolbar).toContain("<span>AI Implement</span>");
+    expect(toolbar).toContain("<span>AI Debug</span>");
+    expect(toolbar).toContain("gaiaAgent.title");
+    expect(toolbar).toContain("pandoraAgent.title");
+    expect(identities).toContain('title: "Gaia — Build & Implementation"');
+    expect(identities).toContain('title: "Pandora — Debug & Recovery"');
+  });
+
+  it("keeps renderer store subscriptions selector-scoped", () => {
+    const rendererRoot = resolve(repoRoot, "src/renderer/src");
+    const offenders = sourceFilesUnder(rendererRoot)
+      .filter((file) => /\.tsx?$/.test(file))
+      .filter((file) => /useArchicodeStore\s*\(\s*\)/.test(readFileSync(file, "utf8")))
+      .map((file) => file.slice(rendererRoot.length + 1));
+
+    expect(offenders).toEqual([]);
+  });
+
+  it("bounds long-chat rendering and high-frequency UI updates", () => {
+    const panel = readResearchPanelSource();
+    const markdown = readFileSync(resolve(repoRoot, "src/renderer/src/components/ResearchMarkdown.tsx"), "utf8");
+    const store = readStoreSource();
+    const app = readFileSync(resolve(repoRoot, "src/renderer/src/App.tsx"), "utf8");
+    const css = readFileSync(resolve(repoRoot, "src/renderer/src/styles/app.css"), "utf8");
+
+    expect(markdown).toContain("export const ResearchMarkdown = memo");
+    expect(panel).toContain("analyzeResearchTranscript");
+    expect(panel).toContain("ResearchMessageImageAttachments");
+    expect(panel).toContain("IntersectionObserver");
+    expect(store).toContain("createResearchUpdateBatch");
+    expect(store).toContain('scheduleLatest("token"');
+    const runtimeRefresh = store.slice(
+      store.indexOf("refreshRuntimeServices: async"),
+      store.indexOf("stopRuntimeService: async")
+    );
+    expect(runtimeRefresh).toContain(": { runtimeServices }");
+    expect(runtimeRefresh).not.toContain("error: null");
+    expect(app).toContain('style.setProperty("--left-panel-width"');
+    expect(app).toContain('style.setProperty("--right-panel-width"');
+    expect(css).toContain("content-visibility: auto");
+  });
+
   it("keeps planning and policy violation badges distinct on nodes and in properties", () => {
     const nodeCard = readFileSync(resolve(repoRoot, "src/renderer/src/components/ArchicodeNodeCard.tsx"), "utf8");
     const inspector = readNodeInspectorSource();
@@ -232,13 +285,15 @@ describe("renderer UI system", () => {
     expect(helpPage).toContain("Ctrl/Cmd + drag empty canvas");
   });
 
-  it("mounts the read-only CLI inspector for Codex Local research chats", () => {
+  it("mounts the shared safety-broker console for Codex Local research chats", () => {
     const providers = readFileSync(resolve(repoRoot, "src/main/providers.ts"), "utf8")
       + readFileSync(resolve(repoRoot, "src/main/providers/localCli.ts"), "utf8");
+    const internalTools = readFileSync(resolve(repoRoot, "src/main/internalTools.ts"), "utf8");
 
-    expect(providers).toContain("archicode_project_inspect_cli");
-    expect(providers).toContain("server.registerTool(\"archicode_project_inspect_cli\"");
-    expect(providers).toContain("Project files and read-only CLI inspection are available through structured tools in this chat");
+    expect(providers).not.toContain("server.registerTool(\"archicode_project_inspect_cli\"");
+    expect(providers).toContain("Project files and bounded project CLI actions are available through structured tools in this chat");
+    expect(internalTools).toContain("archicode_console_run_command");
+    expect(internalTools).toContain("shared safety broker");
     expect(providers).toContain("Before proposing any new queue start, check activeQueue, queue, recentRuns, runtimeServices, and orchestration todos already in context.");
     expect(providers).toContain("graph-to-code sync only as one brief capability");
     expect(providers).toContain("Do not explain sync options, comparison scopes, or the approval flow unless the user specifically asks");
@@ -397,6 +452,31 @@ describe("renderer UI system", () => {
     expect(panel).toContain('className="research-mcp-remember"');
     expect(css).toContain(".research-mcp-request.is-rule-change");
     expect(css).toContain(".research-rule-approval-proposal pre");
+  });
+
+  it("reveals new approval cards and shows the exact custom command before approval", () => {
+    const panel = readResearchPanelSource();
+    const css = readFileSync(resolve(repoRoot, "src/renderer/src/styles/app.css"), "utf8");
+
+    expect(panel).toContain("const researchApprovalActivityKey");
+    expect(panel).toContain("requestAnimationFrame(scrollResearchToBottom)");
+    expect(panel).toContain('run.status === "awaiting-approval"');
+    expect(panel).toContain("message.mcpApprovalRequest");
+    expect(panel).toContain("message.changeSet && !message.changeSet.reviewedAt");
+    expect(panel).toContain("commandApprovalPresentation(");
+    expect(panel).toContain("Command to run");
+    expect(panel).toContain("Working directory:");
+    expect(panel).toContain("classifyCommandRisk(command)");
+    expect(panel).toContain("shellCommandMarkdown(commandApproval.command)");
+    expect(panel).toContain("research-command-risk-badge");
+    expect(panel).toContain("Copy exact command");
+    expect(panel).toContain("copyApprovalCommand(message.id, commandApproval.command)");
+    expect(panel).toContain("shell command substitution can execute nested commands");
+    expect(panel).toContain("review especially carefully");
+    expect(panel).toContain("Review this exact command, then approve or reject it.");
+    expect(css).toContain(".research-command-approval-code .research-markdown pre");
+    expect(css).toContain(".research-command-copy-button.ui-icon-button");
+    expect(css).toContain(".research-command-risk-hint");
   });
 
   it("renders research messages with CommonMark and GitHub-flavored Markdown", () => {
@@ -630,15 +710,25 @@ describe("renderer UI system", () => {
     expect(toolbar).toContain("PROVIDER_DEFAULT_MODEL_VALUE");
     expect(toolbar).toContain("profileModelOptions(enabledProvider, policy)");
     expect(toolbar).toContain("Model choices are remembered separately for each provider card");
-    expect(toolbar).toContain('picasso: "Picasso"');
-    expect(toolbar).toContain('sherlock: "Sherlock"');
-    expect(toolbar).toContain('solomon: "Solomon"');
+    expect(toolbar).toContain('picasso: "Picasso — Graph design"');
+    expect(toolbar).toContain('sherlock: "Sherlock — Research"');
+    expect(toolbar).toContain('solomon: "Solomon — Merge resolution"');
     expect(toolbar).toContain("enabledProvider.subagentModelPolicies?.[profile]");
     expect(toolbar).toContain("phaseProfileDescriptions[phase]");
+    expect(toolbar).toContain('title: "Archi — Research Chat"');
+    expect(toolbar).toContain("title: gaiaAgent.title");
+    expect(toolbar).toContain("title: pandoraAgent.title");
+    expect(toolbar).toContain('title: "System tasks"');
+    expect(toolbar).toContain('{ phase: "coding", label: "Implementation / Coding" }');
+    expect(toolbar).toContain('{ phase: "review", label: "Build/runtime review" }');
+    expect(toolbar).toContain('{ phase: "verifying", label: "Verification" }');
+    expect(toolbar).toContain('{ phase: "summarizing", label: "Context summary" }');
+    expect(toolbar).toContain("llm-profile-group-grid");
     expect(toolbar).toContain("llm-profile-card-help");
     expect(toolbar).toContain("<HelpCircle size={14}");
     expect(picker).toContain("catalogMode ? selectedLabel : value");
     expect(css).toContain(".llm-profile-section-heading");
+    expect(css).toContain(".llm-profile-group-grid");
     expect(css).toContain(".llm-profile-card-help");
   });
 
@@ -670,6 +760,11 @@ describe("renderer UI system", () => {
     expect(main).toContain('app.on("window-all-closed"');
     expect(main).toContain("app.quit();");
     expect(main).not.toContain('process.platform !== "darwin"');
+    expect(main).toContain("if (appShutdownCompleted) return;");
+    expect(main).toContain("if (appShutdownStarted) return;");
+    expect(main.indexOf("event.preventDefault();")).toBeLessThan(main.indexOf("if (appShutdownStarted) return;"));
+    expect(main).toContain("Promise.race([cleanup.then(() => undefined), deadline])");
+    expect(main).toContain("APP_SHUTDOWN_TIMEOUT_MS = 25_000");
   });
 
   it("refreshes artifact lists when live run updates add new artifact references", () => {
@@ -941,6 +1036,12 @@ describe("renderer UI system", () => {
     expect(panel).toContain("localProviderUsageUnavailableDetail(selectedSessionProvider)");
     expect(panel).toContain("Recent messages included before send");
     expect(panel).toContain("showSecondaryContextLine={false}");
+    const researchContextIndicator = panel.slice(
+      panel.indexOf("{researchContextEstimate ? ("),
+      panel.indexOf("<MenuRoot>", panel.indexOf("{researchContextEstimate ? ("))
+    );
+    expect(researchContextIndicator).toContain("<ResearchDraftContextIndicator");
+    expect(researchContextIndicator).not.toContain("active={researchBusy}");
     expect(panel).not.toContain("Cumulative sent context estimate");
     expect(panel).not.toContain("Pre-send estimate for draft");
     expect(panel).not.toContain("Graph, files, web, images, and tool context are added dynamically at send time");
@@ -957,14 +1058,37 @@ describe("renderer UI system", () => {
 
     expect(store).toContain("disposeSubagentProgressStream = window.archicode.onResearchSubagentProgress");
     expect(store).toContain("disposeActivityStream = window.archicode.onResearchChatActivity");
-    expect(store).toContain("[optimisticAssistantId]: nextRuns");
+    expect(store).toContain("const clearParentActivity = (state: ArchicodeState)");
+    expect(store).toContain("[messageId]: { status: payload.status ?? existing.status, lines }");
+    expect(store).toContain("function mergeLiveSubagentProgress(");
+    expect(store.match(/mergeLiveSubagentProgress\(/g)).toHaveLength(4);
+    expect(store).toContain('payload.observationAnalysis?.status === "completed"');
+    expect(store).toContain("visuallyAnalyzedArtifactIds");
     expect(store).toContain("Archi is continuing with the collected evidence");
     expect(main).toContain("onSubagentProgress: ({ runId, kind, title, message, status })");
     expect(main).toContain("onActivity: (message, status) => publishResearchChatActivity");
     expect(panel).toContain("Archi — Parent investigation");
+    expect(panel).toContain('const isParentActivityRunning = liveParentActivity?.status === "running"');
+    expect(panel).toContain("formatResearchTaskElapsed");
+    expect(panel).toContain('className="ui-badge research-task-timer"');
+    expect(panel).toContain("researchTaskStartedAtMs !== null");
+    expect(panel).toContain("Date.parse(latestTaskUserMessage.createdAt)");
+    expect(panel).toContain("including parent continuations and subagent work");
+    expect(panel).not.toContain("setResearchTaskStartedAtMs");
+    expect(styles).toContain(".research-task-timer");
     expect(panel).toContain("streamingStructuredActivityLabel");
     expect(panel).toContain("researchHasNewActivity");
-    expect(panel).toContain("New activity");
+    expect(panel).toContain("researchRevealSubmittedMessageRef");
+    expect(panel).toContain("researchRevealSubmittedMessageRef.current = !researchBusy");
+    expect(panel).toContain("viewport && researchRevealSubmittedMessageRef.current");
+    expect(panel).toContain("<span>More</span>");
+    expect(panel).toContain("researchManualScrollHoldRef");
+    expect(panel).toContain('viewport.addEventListener("wheel", holdAutoFollowOnWheel');
+    expect(panel).toContain('viewport.addEventListener("touchmove", holdAutoFollow');
+    expect(panel).toContain('viewport.addEventListener("keydown", holdAutoFollowOnKey');
+    expect(panel).toContain('event.target.closest(".ui-scrollbar")');
+    expect(panel).toContain("distanceFromBottom() <= 8");
+    expect(panel).not.toContain("researchScrollFollowRef.current = atBottom");
     expect(panel).toContain("successfulSubagentBatchCount");
     expect(panel).toContain("research-subagent-batch-count");
     expect(panel).toContain("B{successfulBatchCount}");
@@ -972,6 +1096,21 @@ describe("renderer UI system", () => {
     expect(panel).toContain("Copy full subagent log");
     expect(panel).toContain('progressLines.join("\\n")');
     expect(panel).toContain("research-subagent-copy-button");
+    expect(panel).toContain("DelphiObservationGallery");
+    expect(panel).toContain("Visible observation");
+    expect(panel).toContain("Open target");
+    expect(panel).toContain("Captured evidence");
+    expect(panel).toContain("model-inspected");
+    expect(panel).toContain("not model-inspected");
+    expect(panel).toContain("inspection pending");
+    expect(panel).toContain("safety-classified medium-risk Chat commands");
+    expect(panel).toContain("imageArtifacts.slice(-4)");
+    expect(panel).toContain('expanded ? "Show less" : `Show all ${imageArtifacts.length}`');
+    expect(panel).toContain("IntersectionObserver");
+    expect(panel).toContain('loading="lazy"');
+    expect(panel).toContain('imageInputSupport === "supported" && runStatus === "running"');
+    expect(panel).toContain("imageInputSupport={run.imageInputSupport}");
+    expect(panel).toContain("visuallyAnalyzedArtifactIds");
     expect(panel).toContain('Create node "${operation.node.title}" in subflow');
     expect(panel).toContain('Create node "${operation.node.title}" on root flow');
     expect(panel).toContain("flowTitleMap");
@@ -981,11 +1120,23 @@ describe("renderer UI system", () => {
     expect(picasso).toContain("every child create-node operation must keep flowId set to the containing top-level flow id");
     expect(picasso).toContain("Never put a subflow id in operation.flowId");
     expect(picasso).toContain("nodes without node.subflowId are created on the root canvas");
-    expect(styles).toContain(".research-message-has-subagents > .research-subagent-runs");
-    expect(styles).toContain(".research-message-has-subagents > .research-parent-activity");
-    expect(styles).toContain(".research-message-has-subagents > .research-markdown");
+    expect(panel).toContain("research-message-has-activity");
+    expect(panel).toContain('research-timeline-${displayStatus === "running" || displayStatus === "awaiting-approval" ? "active" : "terminal"}');
+    expect(panel).toContain("left.createdAt.localeCompare(right.createdAt)");
+    expect(styles).toMatch(/research-message-has-activity \.research-timeline-terminal\s*\{\s*order: 2;/);
+    expect(styles).toMatch(/research-message-has-activity > :is\(\.research-parent-activity-completed, \.research-parent-activity-failed\)\s*\{\s*order: 3;/);
+    expect(styles).toMatch(/research-message-has-activity > \.research-message-content\s*\{\s*order: 4;/);
+    expect(styles).toMatch(/research-message-has-activity \.research-timeline-active\s*\{\s*order: 10;/);
+    expect(styles).toMatch(/research-message-has-activity > \.research-parent-activity-running\s*\{\s*order: 11;/);
+    expect(styles).toMatch(/research-message-has-activity > \.research-message-timestamp\s*\{\s*order: 8;/);
+    expect(styles).toMatch(/\.research-subagent-runs\s*\{[\s\S]*?display: contents;/);
     expect(styles).toContain(".research-subagent-batch-count");
     expect(styles).toContain(".research-subagent-copy-button.ui-icon-button");
+    expect(styles).toContain(".research-delphi-observation-grid");
+    expect(panel).toContain('visibleArtifacts.length === 1 ? " is-single" : ""');
+    expect(styles).toMatch(/research-delphi-observation-grid\.is-single\s*\{[\s\S]*?grid-template-columns: repeat\(2, minmax\(0, 1fr\)\);/);
+    expect(styles).toContain("grid-template-rows: 110px auto");
+    expect(styles).toMatch(/research-delphi-observation-grid img[\s\S]*?height: 110px;/);
   });
 
   it("uses latest run context, not run token spend, for the run context radial", () => {
@@ -1620,33 +1771,87 @@ describe("renderer UI system", () => {
     expect(panel).toContain("openExternalMarkdownHref");
     expect(panel).toContain("PopoverTrigger asChild");
     expect(panel).toContain("research-memory-popover");
+    expect(panel).toContain("if (!notes.length && !error) return null;");
     expect(panel).toContain("research-status-cluster");
-    expect(panel).toContain("ResearchTodoCapsule");
+    expect(panel).toContain("ResearchWorkCapsule");
     expect(panel).toContain("researchTodosForSession");
-    expect(panel).toContain("<ResearchTodoCapsule items={researchTodosForSession(selected)} />");
+    expect(panel).toContain("<ResearchWorkCapsule session={selected} items={researchTodosForSession(selected)} />");
     const todoCapsuleSource = panel.slice(
-      panel.indexOf("function ResearchTodoCapsule"),
-      panel.indexOf("export function ResearchMarkdown")
+      panel.indexOf("function ResearchWorkCapsule"),
+      panel.indexOf("export const ResearchMarkdown")
     );
     const memoryCapsuleStyles = css.slice(
       css.indexOf(".research-memory-panel {"),
       css.indexOf(".research-memory-panel svg")
     );
-    expect(todoCapsuleSource).toContain("onClick={toggle}");
+    expect(todoCapsuleSource).toContain("<PopoverRoot>");
+    expect(todoCapsuleSource).toContain("<PopoverTrigger asChild>");
+    expect(todoCapsuleSource).not.toContain("onMouseEnter=");
+    expect(todoCapsuleSource).not.toContain("onMouseLeave=");
+    expect(todoCapsuleSource).not.toContain("closeTimer");
     expect(todoCapsuleSource).not.toContain("title={label}");
     expect(todoCapsuleSource).not.toContain("onFocus={show}");
     expect(todoCapsuleSource).not.toContain("<small>todo");
     expect(css).toContain(".research-memory-panel");
     expect(memoryCapsuleStyles).toContain("border: 1px solid transparent;");
     expect(css).toContain(".research-memory-popover");
-    expect(css).toContain(".research-todo-capsule");
-    expect(css).toContain(".research-todo-capsule > svg");
+    expect(css).toContain(".research-work-capsule");
+    expect(css).toContain(".research-work-capsule > svg");
     expect(css).toContain("color: var(--text);");
     expect(css).toContain(".research-todo-popover");
     expect(css).toContain(".research-status-cluster");
     expect(css).toContain("border-radius: 999px");
     expect(main).toContain("setWindowOpenHandler");
     expect(main).toContain("shell.openExternal(url)");
+  });
+
+  it("keeps research work controls compact and treats only transcript growth as new activity", () => {
+    const panel = readResearchPanelSource();
+    const css = readFileSync(resolve(repoRoot, "src/renderer/src/styles/app.css"), "utf8");
+
+    expect(panel).toContain("ResearchWorkCapsule");
+    expect(panel).not.toContain("ResearchGoalCapsule");
+    expect(panel).not.toContain("ResearchTodoCapsule({");
+    expect(readFileSync(resolve(repoRoot, "src/renderer/src/components/ResearchTodoCapsule.tsx"), "utf8")).toContain("<span>{workItems.length}</span>");
+    expect(panel).toContain('className="research-auto-approve"');
+    expect(css).toContain(".research-context-panel:not(.is-new-chat)");
+    expect(css).toContain("flex-wrap: nowrap;");
+    expect(panel).toContain("research-auto-approve-fit");
+    expect(panel).not.toContain("ResizeObserver");
+    expect(panel).not.toContain("MutationObserver");
+    expect(css).toContain("@container (max-width: 107px)");
+    expect(css).toContain(".research-auto-approve-fit .ui-switch-row > span");
+    expect(panel).toContain("delphiArgs.objective || run.subtitle");
+    expect(panel).toContain('summaryExpanded ? "Show less" : "Show more"');
+    expect(css).toContain(".research-subagent-summary:not(.is-expanded) small");
+    expect(panel).toContain("isTimeoutFailureMessage");
+    expect(panel).toContain('displayStatus === "timed-out" ? "Timed out"');
+    expect(css).toContain(".research-subagent-run-timed-out");
+
+    const activitySource = panel.slice(
+      panel.indexOf("const researchTranscriptActivityKey"),
+      panel.indexOf("const submit = async")
+    );
+    expect(activitySource).toContain("message.content.length");
+    expect(activitySource).toContain("hasUnseenTranscript");
+    expect(activitySource).not.toContain("progress.length");
+    expect(activitySource).not.toContain("lastLiveSubagents");
+    expect(activitySource).not.toContain("researchBusy ? \"busy\"");
+  });
+
+  it("offers an explicit multi-select when Delphi has several compatible runtime targets", () => {
+    const panel = readResearchPanelSource();
+    const store = readStoreSource();
+    const preload = readFileSync(resolve(repoRoot, "src/preload/index.ts"), "utf8");
+    const css = readFileSync(resolve(repoRoot, "src/renderer/src/styles/app.css"), "utf8");
+
+    expect(panel).toContain("Choose every target Delphi should run and test");
+    expect(panel).toContain("Select one target or combine several");
+    expect(panel).toContain("runtimeTargetProfileIds");
+    expect(panel).toContain("disabled={researchBusy || !targetSelectionValid}");
+    expect(store).toContain("runtimeTargetProfileIds");
+    expect(preload).toContain("runtimeTargetProfileIds?: string[]");
+    expect(css).toContain(".research-delphi-target-picker");
   });
 
   it("derives graph-edit and queue-submission UI from their actual reviewed operations", () => {
@@ -1656,7 +1861,7 @@ describe("renderer UI system", () => {
     expect(panel).toContain("function reviewSummaryAfterChangeSet");
     expect(panel).toContain("function reviewStatusPresentation");
     expect(panel).toContain("if (isChangeSetReviewMessage(message)) return null;");
-    expect(panel).toContain("!selected.messages.slice(messageIndex + 1).some((laterMessage) => !isChangeSetReviewMessage(laterMessage))");
+    expect(panel).toContain("messageIndex === transcriptAnalysis.lastVisibleMessageIndex");
     expect(panel).toContain("Queue submission reviewed|Queue submission retry reviewed|Changes reviewed|Changes retry reviewed");
     expect(panel).toContain('queueSubmission ? "Queue failed" : "Failed"');
     expect(panel).toContain('queueSubmission ? "Queue failed" : "Apply Failed"');
@@ -1665,7 +1870,8 @@ describe("renderer UI system", () => {
     expect(panel).toContain('"Repair & Apply"');
     expect(panel).toContain('"Queue Selected"');
     expect(panel).toContain("retryReviewed");
-    expect(panel).toContain("changeSetResultReportPresentation(presentationContent)");
+    expect(panel).toContain("changeSetResultReportPresentation(message.content)");
+    expect(panel).not.toContain("researchMessagePresentationContent");
     expect(panel).toContain('"Queue submission complete"');
     expect(panel).toContain('tone: "success" | "warning" | "danger"');
     expect(panel).toContain('failed > 0 && applied === 0');
@@ -1708,7 +1914,8 @@ describe("renderer UI system", () => {
     expect(panel).toContain("navigator.mediaDevices.getUserMedia");
     expect(panel).toContain("window.archicode.transcribeSpeech");
     expect(panel).toContain("research-speech-button");
-    expect(panel).toContain("speechLevel");
+    expect(panel).toContain("setSpeechMeterLevel");
+    expect(panel).not.toContain("setSpeechLevel");
     expect(panel).toContain("research-speech-meter");
     expect(panel).toContain("research-recording-send");
     expect(panel).toContain("research-recording-done");
@@ -1823,10 +2030,36 @@ describe("renderer UI system", () => {
 
   it("explains which MCP tools a chat message used when its capsule is hovered", () => {
     const panel = readResearchPanelSource();
+    const css = readFileSync(resolve(repoRoot, "src/renderer/src/styles/app.css"), "utf8");
 
     expect(panel).toContain("mcpToolUsageTooltip(message.mcpToolCalls)");
     expect(panel).toContain("call.serverLabel?.trim() || call.serverId");
     expect(panel).toContain("`${server}: ${tool}${count > 1 ? ` ×${count}` : \"\"}`");
+    expect(panel).toContain("ResearchToolTrace");
+    expect(panel).toContain('aria-label="Agent tool activity in chronological order"');
+    expect(panel).toContain("left.createdAt.localeCompare(right.createdAt)");
+    expect(panel).toContain('message.mcpApprovalRequest && call.status === "approval-required"');
+    expect(panel).toContain('command ? "Ran CLI" : "Used tool"');
+    expect(panel).toContain("copyApprovalCommand(key, commandText)");
+    expect(panel).toContain("onToggle={(event) => setExpanded(event.currentTarget.open)}");
+    expect(panel).toContain("expanded ? <div className=\"research-tool-trace-details\"");
+    expect(css).toContain(".research-tool-trace > summary");
+    expect(css).toContain(".research-tool-trace-activity");
+    expect(css).toContain(".research-tool-trace-details");
+    expect(css).toContain(".research-message-has-activity > .research-tool-traces");
+  });
+
+  it("does not render approval-resume host prompts as optimistic user messages", () => {
+    const store = readFileSync(resolve(repoRoot, "src/renderer/src/store/researchSlice.ts"), "utf8");
+    const research = readFileSync(resolve(repoRoot, "src/main/research.ts"), "utf8");
+    const schema = readFileSync(resolve(repoRoot, "src/shared/schema.ts"), "utf8");
+
+    expect(schema).toContain("internalContinuation: z.boolean().optional()");
+    expect(research).toContain("input.internalContinuation || approvalRequest?.internalContinuation");
+    expect(research).toContain("internalContinuation,\n          providerContinuation");
+    expect(store).toContain("const isApprovalResume = Boolean(approvalResumeMessage?.mcpApprovalRequest)");
+    expect(store).toContain("...(!isApprovalResume ? [{");
+    expect(store).toContain("resumeApprovalMessageId,\n        internalContinuation,");
   });
 
   it("adds optional Kokoro text-to-speech playback to research chat output", () => {
@@ -1851,6 +2084,10 @@ describe("renderer UI system", () => {
     expect(panel).toContain("stream-message-observed");
     expect(panel).toContain("stream-status-waiting");
     expect(panel).toContain("stream-status-blocked");
+    expect(panel).toContain("correctedLegacyDelphiBlock");
+    expect(panel).toContain('displayStatus === "incomplete" ? "Incomplete"');
+    expect(panel).toContain('displayStatus === "blocked" ? "Blocked"');
+    expect(panel).toContain('research-subagent-run-${displayStatus}');
     expect(panel).toContain("inspectStreamingSpeechPrefix");
     expect(panel).toContain("streamingTtsMinPrepareUnitChars");
     expect(panel).toContain("maxActiveTtsSpeechJobs = 3");

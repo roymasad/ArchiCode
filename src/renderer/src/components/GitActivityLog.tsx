@@ -1,5 +1,6 @@
 import { GitBranch, GitCommit, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { FormEvent } from "react";
 import { useArchicodeStore } from "../store/useArchicodeStore";
 import { Badge, Button, EmptyState, IconButton, ScrollArea, Select, TextInput } from "./ui";
@@ -11,7 +12,13 @@ export function GitActivityLog() {
     gitStatus,
     createGitBranch,
     switchGitBranch
-  } = useArchicodeStore();
+  } = useArchicodeStore(useShallow((state) => ({
+    gitBusy: state.gitBusy,
+    gitLogs: state.gitLogs,
+    gitStatus: state.gitStatus,
+    createGitBranch: state.createGitBranch,
+    switchGitBranch: state.switchGitBranch
+  })));
   const [branchDraft, setBranchDraft] = useState("");
   const [creatingBranch, setCreatingBranch] = useState(false);
   const [newBranchName, setNewBranchName] = useState("");

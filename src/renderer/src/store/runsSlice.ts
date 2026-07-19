@@ -25,6 +25,7 @@ import type {
   SpeechSettings,
   TtsSettings
 } from "@shared/schema";
+import { pandoraAgent } from "@shared/agentIdentities";
 import type {
   GitOperationResult,
   GitStatus,
@@ -64,6 +65,15 @@ import {
 
 import type { ComposerMention, ComposerSegment, QueuedResearchMessage, ShellPrompt, AgentRunInput, RunGuidanceInput, BuildQuestionCheck, NodeClipboard, CodebaseOnboardingLevel, CodebaseOnboardingDetail, CodebaseOnboardingGranularity, ProjectSettingsTab, WorkbenchView, GitOperationName, CanvasViewport, UiScale, GraphNavigationRequest, FilePreviewRequest, GraphNavigationTarget, CodebaseOnboarding, ProjectSettingsRequest, RunProfileInput, PatchProposalView, AppNotice, ResearchStreamState, LiveSubagentActivity, LiveResearchActivity, ArchicodeState, StoreSet, StoreGet } from "./types";
 import { uid, uniqueNodeIds, selectedNodeIdsFor, appendEdgeLabelHistory, directUndoNotice, offerGitAttributesSetup, now, runInputKey, runProfileKey, isSameRunRequest, isSameRunProfileRequest, runArtifactIds, runHasQuestionRefreshSignal, shouldRefreshQuestionsForRun, hasActiveRun, editingLockedMessage, notifyJobFinished, notifyReviewRequired, createOptimisticRun, createOptimisticRunProfile, defaultNodeHalfSize, getInitialTheme, getInitialUiScale, projectUiKey, projectScopedUiKey, readStoredWorkbenchView, readProjectFileBrowserState, isFiniteNumber, readStoredViewport, isVisualQaPreview, createFallbackBundle, projectScopedResetState, clearProjectStateForBranchChange, reloadProjectStateAfterBranchChange, isBuildLikeAgentRun, getActiveFlow, getSelectedNode, getSelectedEdge, defaultResearchScope, normalizeComposerSegments, addResearchBusySession, removeResearchBusySession, selectedResearchSessionOrFallback, nextGraphNavigationRequestId, nextFilePreviewRequestId } from "./helpers";
+
+function sameRuntimeServices(left: RuntimeService[], right: RuntimeService[]): boolean {
+  if (left === right) return true;
+  if (left.length !== right.length) return false;
+  // Runtime-service collections are small IPC snapshots. Comparing the full
+  // serialized shape prevents idle polls from publishing equivalent arrays
+  // without accidentally ignoring a newly added user-visible field.
+  return JSON.stringify(left) === JSON.stringify(right);
+}
 
 export const createRunsSlice = (set: StoreSet, get: StoreGet): Pick<ArchicodeState, "selectRun" | "handleRunUpdated" | "authorAcceptanceTests" | "authorAcceptanceTestsForFlow" | "enhanceNodeField" | "clearAcceptanceTests" | "runAcceptanceChecks" | "runAgent" | "runProfile" | "refreshRuntimeServices" | "stopRuntimeService" | "restartRuntimeService" | "continueQuestionBlockedRun" | "dismissQuestionCheck" | "approveRun" | "cancelRun" | "rejectRun" | "dismissRunError" | "removeRunFromQueue" | "retryRun" | "retryRunWithGuidance" | "startDebuggingRun" | "startRuntimeDebugRun" | "reportBug" | "updateBugIncident" | "startIncidentDebugRun"> => ({
   selectRun: (selectedRunId) => set({ selectedRunId }),
@@ -370,7 +380,9 @@ export const createRunsSlice = (set: StoreSet, get: StoreGet): Pick<ArchicodeSta
     const { rootPath } = get();
     if (!window.archicode || !rootPath) return;
     const runtimeServices = await window.archicode.listRuntimeServices(rootPath);
-    set({ runtimeServices, error: null });
+    set((state) => sameRuntimeServices(state.runtimeServices, runtimeServices)
+      ? state
+      : { runtimeServices });
   },
 
   stopRuntimeService: async (serviceId) => {
@@ -531,11 +543,11 @@ export const createRunsSlice = (set: StoreSet, get: StoreGet): Pick<ArchicodeSta
     if (!rootPath || !activeFlowId || !bundle) return;
     const providerId = bundle.project.settings.providers.find((provider) => provider.enabled)?.id;
     if (!providerId) {
-      set({ error: "Choose a provider in Settings before running AI Debug." });
+      set({ error: `Choose a provider in Settings before running ${pandoraAgent.title}.` });
       return;
     }
     if (!window.archicode) {
-      set({ error: "AI Debug is available in the Electron app." });
+      set({ error: `${pandoraAgent.title} is available in the Electron app.` });
       return;
     }
     try {

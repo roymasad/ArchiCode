@@ -3,6 +3,7 @@ import { copyFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } from 
 import { createHash } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import path from "node:path";
+import { gaiaAgent, pandoraAgent } from "../shared/agentIdentities";
 import { authorAcceptanceTestsScoped, runNodeAcceptanceChecks } from "./storage/acceptanceChecks";
 import { createAttachmentArtifacts, createImageArtifacts, imageAttachmentsForNodeNotes, mediaTypeForFile, textAttachmentsForNodeNotes, uniqueProviderImageAttachments, uniqueProviderTextAttachments } from "./storage/artifacts";
 import { reconcileRuntimeProfilesWithLlm, refreshInferredProjectCommands } from "./storage/commandInference";
@@ -10,9 +11,9 @@ import { recordGraphChange } from "./storage/ledgers";
 import { addNote, deleteNote, updateNoteResolved } from "./storage/notes";
 import { readArtifactText } from "./storage/patches";
 import { hydrateProviderForUse, loadProject, saveFlow, saveFlows, updateNode, updateProjectMetadata, updateProjectSettings } from "./storage/projectStore";
-import { retryRun, startAgentRun, startDebuggingRun, startIncidentDebugRun, startRunProfile, startRuntimeDebugRun } from "./storage/runEngine";
+import { retryRun, runInternalConsoleCommand, startAgentRun, startDebuggingRun, startIncidentDebugRun, startRunProfile, startRuntimeDebugRun } from "./storage/runEngine";
 import { listRuntimeServices } from "./storage/runtimeServices";
-import { callResearchProvider, inferModelCapabilityProfile, type Provider, type ProviderTokenKind, type ResearchProviderContinuation } from "./providers";
+import { callResearchProvider, inferModelCapabilityProfile, isExplicitDelphiAuditRequest, resolvePhaseModelPolicy, type Provider, type ProviderTokenKind, type ResearchProviderContinuation } from "./providers";
 import { selectedSkillsPrompt } from "./skills";
 import { callMcpTool, providerMcpTools, type ProviderMcpTool } from "./mcp";
 import {
@@ -77,6 +78,7 @@ import {
   type ResearchGraphOperation,
   type ResearchMessageNodeReference,
   type RunGuidance,
+  type Run,
   type LlmUsage
 } from "../shared/schema";
 import { autoLayoutFlow, deleteSubflowFromFlow, isSubflowIgnored, linkNodeToSubflow, normalizeEvidenceFlow, workingNodesForFlow } from "../shared/graph";
@@ -93,11 +95,13 @@ import type { ResyncProgress, ResyncResult, ResyncScope } from "./importer/resyn
 import { extractArchicodeResearch } from "../shared/researchExtraction";
 import { parseGlobalResearchPersonality, parseGlobalResearchVerbosity, pickRandomResearchThinkingPhrase, researchPersonalityPrompt, type GlobalResearchPersonality, type GlobalResearchVerbosity } from "../shared/researchPersonality";
 import { deriveResearchChatContextPlan, estimateTextTokens } from "../shared/contextBudget";
+import { mergeReasoningReplayStates } from "../shared/llmPricing";
+import { providerImageInputSupportStatus, type ProviderImageInputSupportStatus } from "../shared/providerCapabilities";
 import { compactImplementationScope, implementationScopeAdvisory, semanticRetrievalAdvisory } from "../shared/implementationScope";
 import { archicodeCapabilityDigest, archicodeCapabilityVersion, archicodeCurrentProjectOptions } from "../shared/appCapabilities";
 import { readProjectConventions } from "./projectConventions";
 import { isRepairableProjectToolError, normalizeProjectToolArguments, repairableProjectToolResult } from "../shared/toolRepair";
-import { executeMicroRun, getConflictedFiles, commitStagedResolution, type MicroRunResult } from "./microRuns";
+import { executeMicroRun, getConflictedFiles, commitStagedResolution, resolveMicroRunProvider, type MicroRunResult } from "./microRuns";
 import { registerAllMicroRunAgents } from "./microRunAgents";
 import type {
   MergeResolutionInput,
@@ -107,8 +111,11 @@ import type {
   PicassoGraphOutput,
   SherlockResearchInput,
   SherlockResearchOutput,
+  DelphiTestingInput,
+  DelphiTestingOutput,
   SubagentRun
 } from "../shared/schema";
+import { delphiTestingInputSchema } from "../shared/schema";
 import { searchSemanticIndex, semanticRelatedNodeIds } from "./semanticIndex";
 import {
   type ResearchChangeSet,
@@ -142,11 +149,11 @@ import {
   isResearchContextExpansionTool,
   isResearchGraphLayoutTool,
   isResearchMemoryTool,
-  isResearchMemoryUnchangedTool,
   isResearchProjectFileTool,
   isResearchSinkTool,
   isResearchSpawnGraphReconciliationTool,
   isResearchSpawnMergeTool,
+  isResearchSpawnDelphiTool,
   isResearchSpawnSherlockTool,
   microRunHumanSummary,
   microRunResultText,
@@ -171,20 +178,54 @@ import {
   activeResearchGraphLockRuns
 } from "./research/contextAssembly";
 import {
+  applyHostObservedResearchMemory,
   applyResearchTurnMemory,
   buildResearchTurnChangeSet,
   compactResearchMemoryIfNeeded,
   formatResearchMemoryForPrompt,
   formatResearchOrchestrationForPrompt,
+  checkpointResearchGoal,
   reviewResearchChangeSetTodo,
+  startResearchGoal,
   trackResearchChangeSetTodo
 } from "./research/memoryFold";
 import { fetchResearchWebPages } from "./research/webFetch";
-import { persistResearchSession, readChatsForMutation, withResearchSessionLock } from "./research/chatStore";
+import { markSubagentRunSettled, persistResearchSession, readChatsForMutation, transitionSubagentRun, withResearchSessionLock } from "./research/chatStore";
+import { deriveResearchTurnKind, researchTurnPolicy } from "./research/turnPolicy";
+import { compatibleDelphiRuntimeProfiles, inspectDelphiTestEnvironment, pinDelphiRuntimeTarget } from "./testing/toolchains";
+import { createChatArtifact } from "./storage/researchKnowledge";
+import { delphiAdapterCacheRoot, installDelphiManagedTool } from "./testing/toolCache";
+import { acquireDelphiRuntimeTarget, planDelphiRuntimeLaunch, releaseDelphiRuntimeTarget, type DelphiRuntimeLease } from "./testing/runtimeLifecycle";
 
 
 // Register all micro-run agents on module load
 registerAllMicroRunAgents();
+
+export function effectiveDelphiModelPreflight(provider: Provider): {
+  modelId: string;
+  imageInputSupport: ProviderImageInputSupportStatus;
+  capabilitySource: "detected" | "heuristic";
+} {
+  const delphiProvider = resolveMicroRunProvider(provider, "delphi-testing");
+  const modelPolicy = resolvePhaseModelPolicy(delphiProvider, "brainstorming");
+  const modelId = modelPolicy.modelOverride ?? delphiProvider.model ?? "unknown";
+  const capability = providerImageInputSupportStatus(delphiProvider, modelPolicy.modelOverride);
+  return {
+    modelId,
+    imageInputSupport: capability.status,
+    capabilitySource: capability.source
+  };
+}
+
+function delphiVisionPreflightText(preflight: ReturnType<typeof effectiveDelphiModelPreflight>): string {
+  if (preflight.imageInputSupport === "supported") {
+    return `Effective Delphi model ${preflight.modelId} supports image input (${preflight.capabilitySource} capability). For explicit visual, layout, or responsive inspection, Delphi must inspect pixels from selected captures before it can pass that portion of the audit.`;
+  }
+  if (preflight.imageInputSupport === "unsupported") {
+    return `Effective Delphi model ${preflight.modelId} does not support image input (${preflight.capabilitySource} capability). Delphi can still inspect the requested page with functional/DOM assertions and capture screenshots for the user, but it cannot pass pixel-level visual, layout, or responsive inspection.`;
+  }
+  return `Image-input support for effective Delphi model ${preflight.modelId} is unknown (${preflight.capabilitySource} capability). Treat screenshots as user-review evidence only and do not promise pixel-level visual inspection unless capability detection is refreshed first.`;
+}
 
 let globalResearchPersonalityResolver: (() => GlobalResearchPersonality | Promise<GlobalResearchPersonality>) | null = null;
 let globalResearchVerbosityResolver: (() => GlobalResearchVerbosity | Promise<GlobalResearchVerbosity>) | null = null;
@@ -198,6 +239,7 @@ function mergeResearchUsage(current: LlmUsage | undefined, next: LlmUsage): LlmU
     thinkingTokens: (current.thinkingTokens ?? 0) + (next.thinkingTokens ?? 0) || undefined,
     cacheReadTokens: (current.cacheReadTokens ?? 0) + (next.cacheReadTokens ?? 0) || undefined,
     cacheCreationTokens: (current.cacheCreationTokens ?? 0) + (next.cacheCreationTokens ?? 0) || undefined,
+    reasoningReplayState: mergeReasoningReplayStates([current.reasoningReplayState, next.reasoningReplayState]),
     calls: current.calls + next.calls,
     costUsd: current.costUsd !== undefined || next.costUsd !== undefined
       ? (current.costUsd ?? 0) + (next.costUsd ?? 0)
@@ -207,6 +249,33 @@ function mergeResearchUsage(current: LlmUsage | undefined, next: LlmUsage): LlmU
   };
 }
 
+function researchGoalAwaitingApproval(
+  orchestration: ResearchOrchestration,
+  approval: { id?: string; label: string },
+  updatedAt = iso()
+): ResearchOrchestration {
+  const goal = orchestration.goal;
+  if (!goal || goal.status === "completed" || goal.status === "cancelled") return orchestration;
+  return {
+    ...orchestration,
+    goal: {
+      ...goal,
+      status: "awaiting-approval",
+      checkpointSummary: `Waiting for user review: ${approval.label}`,
+      waitingFor: [{ kind: "approval", id: approval.id, label: approval.label }],
+      steps: goal.steps.map((step) => step.id === goal.currentStepId
+        ? { ...step, status: "awaiting-approval", updatedAt }
+        : step),
+      updatedAt
+    },
+    updatedAt
+  };
+}
+
+function researchGoalIsUnfinished(session: ResearchChatSession): boolean {
+  const status = session.orchestration.goal?.status;
+  return status === "active" || status === "awaiting-approval" || status === "waiting" || status === "blocked";
+}
 
 export function setGlobalResearchPersonalityResolver(
   resolver: (() => GlobalResearchPersonality | Promise<GlobalResearchPersonality>) | null
@@ -265,19 +334,6 @@ class ResearchMcpApprovalRequired extends Error {
   }
 }
 
-const MAX_RESEARCH_INVALID_TOOL_CALLS = 2;
-
-class ResearchInvalidToolCallLimit extends Error {
-  constructor(
-    readonly requestedToolNames: string[],
-    readonly availableToolNames: string[]
-  ) {
-    super(
-      `Research stopped after ${requestedToolNames.length} invalid tool calls: ${requestedToolNames.join(", ")}.`
-    );
-  }
-}
-
 // Persisted provider state can be large; above this it is dropped so the turn
 // replays (cheaply, thanks to prompt caching) instead of bloating the store.
 const MAX_PROVIDER_CONTINUATION_CHARS = 200_000;
@@ -309,7 +365,7 @@ async function executeResearchToolCall(
   projectRoot: string,
   settings: ProjectSettings,
   input: { providerToolName: string; argumentsJson: string },
-  options: { ruleMutationApproved?: boolean } = {}
+  options: { ruleMutationApproved?: boolean; agentActionApproved?: boolean } = {}
 ): Promise<{ serverId: string; serverLabel: string; toolName: string; resultText: string }> {
   if (isArchicodeInternalTool(input.providerToolName)) {
     const isRulesTool = input.providerToolName === ARCHICODE_RESEARCH_RULES_TOOL_NAME;
@@ -329,6 +385,12 @@ async function executeResearchToolCall(
       settings,
       loadProject: () => loadProject(projectRoot),
       readArtifactText: (artifactPath) => readArtifactText(projectRoot, artifactPath),
+      runConsoleCommand: (args) => runInternalConsoleCommand(projectRoot, settings, args, {
+        authorization: {
+          actor: "parent-chat",
+          exactCommandApproved: options.agentActionApproved
+        }
+      }),
       ...(isRulesTool ? {
         researchRules: {
           updateProjectSettings: (nextSettings: ProjectSettings) => updateProjectSettings(projectRoot, nextSettings),
@@ -337,6 +399,18 @@ async function executeResearchToolCall(
         }
       } : {})
     }, input);
+    if (input.providerToolName === "archicode_console_run_command") {
+      const parsed = JSON.parse(result.resultText) as { status?: string };
+      if (parsed.status === "approval-required") {
+        throw new ResearchMcpApprovalRequired({
+          serverId: result.serverId,
+          serverLabel: result.serverLabel,
+          toolName: result.toolName,
+          providerToolName: input.providerToolName,
+          argumentsJson: input.argumentsJson
+        });
+      }
+    }
     if (isRuleMutation) {
       await refreshArchitecturePolicyEvaluation(projectRoot, await loadProject(projectRoot));
     }
@@ -430,7 +504,28 @@ export function id(prefix: string): string {
 export function visibleResearchAnswer(answer: string): string {
   const trimmed = answer.trim();
   const withoutTrailingSummary = trimmed.replace(/(?:\n+\s*|\s+)Summary:\s*[\s\S]*$/i, "").trim();
-  return withoutTrailingSummary || trimmed;
+  const visible = withoutTrailingSummary || trimmed;
+  // Some OpenAI-compatible gateways/models repeat the complete assistant text
+  // on a later tool-loop round. Collapse only an exact adjacent duplicate;
+  // ordinary repeated sentences and intentional emphasis remain untouched.
+  if (visible.length % 2 === 0) {
+    const midpoint = visible.length / 2;
+    if (visible.slice(0, midpoint) === visible.slice(midpoint)) return visible.slice(0, midpoint).trim();
+  }
+  return visible;
+}
+
+function isInternalOutcomeBookkeepingNarration(answer: string): boolean {
+  const normalized = answer.replace(/\s+/g, " ").trim();
+  if (!normalized || normalized.length > 900) return false;
+  return /\b(?:need to|let me|now i (?:need to|will)) (?:make|update|record|checkpoint)\b.{0,100}\b(?:memory|goal|checkpoint)\b/i.test(normalized)
+    || /\b(?:goal )?checkpoint (?:is|has been) recorded\b.{0,160}\b(?:memory|decision|update)\b/i.test(normalized);
+}
+
+function hostOutcomeReportFromContinuation(content: string): string | undefined {
+  const match = content.match(/The approved Delphi audit finished\.\s*([\s\S]*?)(?:\n\nThe host outcome above is the complete evidence packet|$)/i);
+  const report = match?.[1]?.trim();
+  return report ? `Delphi audit finished.\n\n${report}` : undefined;
 }
 
 function claimsPreparedGraphReviewCard(answer: string): boolean {
@@ -513,6 +608,8 @@ type SendResearchChatMessageInput = {
   resumeApprovalMessageId?: string;
   retryAssistantMessageId?: string;
   internalContinuation?: boolean;
+  /** The host already supplied the complete external outcome evidence packet. */
+  outcomeEvidenceProvided?: boolean;
   optimisticUserMessageId?: string;
   optimisticAssistantMessageId?: string;
   onToken?: (text: string, kind?: ProviderTokenKind) => void;
@@ -523,7 +620,7 @@ type SendResearchChatMessageInput = {
     kind: SubagentRun["kind"];
     title: string;
     message: string;
-    status?: "running" | "completed" | "failed";
+    status?: "running" | "completed" | "blocked" | "failed";
   }) => void;
 };
 
@@ -552,6 +649,31 @@ function isResearchCancellationError(error: unknown): boolean {
   return error.name === "AbortError" || /\bcancelled\b|\baborted\b/i.test(error.message);
 }
 
+function researchLoopGuardFailure(error: unknown): string | undefined {
+  const message = error instanceof Error ? error.message : String(error);
+  return /(?:Consecutive identical (?:tool-call|invalid final-answer)|Repeated final-answer validation) loop detected/i.test(message)
+    ? message
+    : undefined;
+}
+
+/**
+ * Persists honest terminal states for runs a turn abandoned mid-flight: a
+ * "running" run has no live operation once its turn ended. When the user
+ * explicitly stops the parent turn, approval cards created by that unfinished
+ * turn are rejected too; a later user request can create a fresh card.
+ */
+function settleAbandonedSubagentRuns(
+  runs: NonNullable<ResearchChatMessage["subagentRuns"]>,
+  settledAt: string,
+  options: { rejectAwaitingApprovals?: boolean } = {}
+): NonNullable<ResearchChatMessage["subagentRuns"]> {
+  return runs.map((run) => run.status === "running"
+    ? transitionSubagentRun(run, "failed", { error: run.error ?? "The turn ended before this subagent finished; no result was recorded." }, settledAt)
+    : options.rejectAwaitingApprovals && run.status === "awaiting-approval"
+      ? transitionSubagentRun(run, "rejected", { resultSummary: run.resultSummary ?? "Cancelled with the stopped parent turn before approval." }, settledAt)
+      : run);
+}
+
 /** Aborts the in-flight research turn for a session, if any. Returns whether one was cancelled. */
 export function cancelResearchChatMessage(sessionId: string): boolean {
   const controller = activeResearchTurnControllers.get(sessionId);
@@ -563,16 +685,82 @@ export function cancelResearchChatMessage(sessionId: string): boolean {
 export async function sendResearchChatMessage(input: SendResearchChatMessageInput): Promise<ResearchChatSession> {
   const controller = new AbortController();
   activeResearchTurnControllers.set(input.sessionId, controller);
+  let result: ResearchChatSession;
   try {
     // Serialize turns per session so a concurrent operation cannot clobber this
     // turn's messages with a stale whole-session snapshot.
-    return await withResearchSessionLock(input.projectRoot, input.sessionId, () =>
+    result = await withResearchSessionLock(input.projectRoot, input.sessionId, () =>
       sendResearchChatMessageTurn({ ...input, signal: controller.signal }));
   } finally {
     if (activeResearchTurnControllers.get(input.sessionId) === controller) {
       activeResearchTurnControllers.delete(input.sessionId);
     }
   }
+  return result;
+}
+
+const terminalResearchWakeRunStatuses = new Set<Run["status"]>(["succeeded", "failed", "cancelled"]);
+
+/** Resume chats that explicitly checkpointed a wait on this exact run. */
+export async function resumeResearchGoalsForRunUpdate(projectRoot: string, run: Run): Promise<ResearchChatSession[]> {
+  if (!terminalResearchWakeRunStatuses.has(run.status)) return [];
+  const store = await readChatsForMutation(projectRoot);
+  const candidateIds = store.sessions
+    .filter((session) => session.orchestration.goal?.status === "waiting")
+    .filter((session) => session.orchestration.goal?.waitingFor.some((reference) => reference.kind === "run" && reference.id === run.id))
+    .map((session) => session.id);
+  const results: ResearchChatSession[] = [];
+  for (const sessionId of candidateIds) {
+    const activated = await withResearchSessionLock(projectRoot, sessionId, async () => {
+      const latestStore = await readChatsForMutation(projectRoot);
+      const session = latestStore.sessions.find((item) => item.id === sessionId);
+      const goal = session?.orchestration.goal;
+      if (!session || !goal || goal.status !== "waiting" || !goal.waitingFor.some((reference) => reference.kind === "run" && reference.id === run.id)) {
+        return undefined;
+      }
+      const updatedAt = iso();
+      const updatedSession = researchChatSessionSchema.parse({
+        ...session,
+        orchestration: {
+          ...session.orchestration,
+          goal: {
+            ...goal,
+            status: "active",
+            checkpointSummary: `Run ${run.id} reached ${run.status}; Archi resumed the goal.`,
+            waitingFor: goal.waitingFor.filter((reference) => !(reference.kind === "run" && reference.id === run.id)),
+            steps: goal.steps.map((step) => step.id === goal.currentStepId && step.status === "waiting"
+              ? { ...step, status: "doing", updatedAt }
+              : step),
+            updatedAt
+          },
+          updatedAt
+        },
+        updatedAt
+      });
+      await persistResearchSession(projectRoot, updatedSession);
+      return updatedSession;
+    });
+    if (!activated) continue;
+    try {
+      results.push(await sendResearchChatMessage({
+        projectRoot,
+        sessionId,
+        providerId: activated.providerId,
+        internalContinuation: true,
+        content: [
+          "HOST DURABLE-GOAL RUN EVENT.",
+          `The exact run ${run.id} reached terminal status ${run.status}.`,
+          `Run objective: ${run.promptSummary}`,
+          run.lastVerification ? `Last verification: ${run.lastVerification.command} (exit ${run.lastVerification.exitCode ?? "unknown"}).` : "",
+          run.logs.length ? `Latest run log: ${run.logs.slice(-3).map((entry) => `[${entry.stream}] ${entry.text}`).join("\n").slice(0, 4_000)}` : "",
+          "Inspect the run evidence if needed, continue any remaining useful work, and return the self-contained result. The host owns the persisted goal checkpoint."
+        ].filter(Boolean).join("\n")
+      }));
+    } catch {
+      results.push(activated);
+    }
+  }
+  return results;
 }
 
 async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput & { signal?: AbortSignal }): Promise<ResearchChatSession> {
@@ -600,6 +788,13 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
     : -1;
   const approvalMessage = approvalMessageIndex >= 0 ? session.messages[approvalMessageIndex] : undefined;
   const approvalRequest = approvalMessage?.mcpApprovalRequest;
+  const internalContinuation = Boolean(input.internalContinuation || approvalRequest?.internalContinuation);
+  const turnKind = deriveResearchTurnKind({
+    internalContinuation,
+    outcomeEvidenceProvided: input.outcomeEvidenceProvided,
+    approvalResume: Boolean(approvalRequest)
+  });
+  const turnPolicy = researchTurnPolicy(turnKind);
   const retryMessageIndex = input.retryAssistantMessageId
     ? session.messages.findIndex((message) => message.id === input.retryAssistantMessageId)
     : -1;
@@ -627,14 +822,14 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
         return artifact ? [artifact] : [];
       }) ?? []
     : [];
-  const messageFilePaths = input.internalContinuation ? [] : approvalRequest?.filePaths ?? input.filePaths ?? [];
+  const messageFilePaths = internalContinuation ? [] : approvalRequest?.filePaths ?? input.filePaths ?? [];
   const messageHasImagePaths = messageFilePaths.some((filePath) => mediaTypeForFile(filePath).startsWith("image/")) ||
     retryAttachmentArtifacts.some((artifact) => artifact.mediaType?.startsWith("image/"));
   if (messageHasImagePaths && !profile.supportsImageInput) {
     throw new Error(`${provider.label} does not advertise image input support for research image attachments.`);
   }
   if (approvalRequest) content = approvalRequest.originalContent.trim();
-  const attachmentArtifacts = approvalRequest || input.internalContinuation
+  const attachmentArtifacts = approvalRequest || internalContinuation
     ? []
     : input.retryAssistantMessageId
       ? retryAttachmentArtifacts
@@ -642,7 +837,7 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
         summary: "Attachment uploaded with a research chat message."
       });
 
-  const userMessage: ResearchChatMessage = input.internalContinuation
+  const userMessage: ResearchChatMessage = internalContinuation
     ? {
         id: id("msg"),
         role: "system",
@@ -667,14 +862,14 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
       };
   const baseMessages = approvalRequest
     ? session.messages.filter((message) => message.id !== approvalMessage?.id)
-    : input.internalContinuation
+    : internalContinuation
       ? session.messages
       : input.retryAssistantMessageId
         ? session.messages.filter((message) => message.id !== retryMessage?.id)
         : [...session.messages, userMessage];
   let nextSession = researchChatSessionSchema.parse({
     ...session,
-    title: session.messages.length || input.internalContinuation ? session.title : titleFromMessage(content),
+    title: session.messages.length || internalContinuation ? session.title : titleFromMessage(content),
     providerId,
     modelId: input.modelId === null || (input.modelId === undefined && session.modelId === null)
       ? null
@@ -718,7 +913,7 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
   const selectedNodeIds = (input.selectedNodeIds ?? []).filter((id): id is string => typeof id === "string" && id.length > 0);
   let semanticRelatedIds: string[] = [];
   let semanticCodeMatches: Array<{ ref: string; score: number; preview: string; metadata?: Record<string, string> }> = [];
-  if (bundle.project.settings.semanticIndex.enabled && content.trim()) {
+  if (turnPolicy.includeExternalRetrieval && bundle.project.settings.semanticIndex.enabled && content.trim()) {
     try {
       semanticRelatedIds = (await semanticRelatedNodeIds(input.projectRoot, bundle, content, bundle.project.settings.semanticIndex.maxRelatedNodes))
         .filter((result) => nextSession.scope.type === "project" || result.flowId === nextSession.scope.flowId)
@@ -734,18 +929,23 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
       semanticCodeMatches = [];
     }
   }
-  const fetchedWebPages = bundle.project.settings.webSearch.enabled ? await fetchResearchWebPages(content) : [];
+  const fetchedWebPages = turnPolicy.includeExternalRetrieval && bundle.project.settings.webSearch.enabled ? await fetchResearchWebPages(content) : [];
   const contextMode = chooseResearchContextMode({
     approvalRequest: Boolean(approvalRequest),
     retry: Boolean(input.retryAssistantMessageId),
-    internalContinuation: Boolean(input.internalContinuation),
+    internalContinuation,
     scopeType: nextSession.scope.type,
     referencedNodeCount: referencedNodeIds.length,
     attachmentCount: attachmentArtifacts.length + messageFilePaths.length
   });
-  const structuralContext = contextMode === "full"
-    ? await buildResearchContext(input.projectRoot, bundle, nextSession.scope, fetchedWebPages, approvedMcpServerIds, rejectedMcpServerIds, referencedNodeIds, selectedNodeIds, semanticRelatedIds)
-    : await buildCompactResearchContext(input.projectRoot, bundle, nextSession.scope, fetchedWebPages, approvedMcpServerIds, rejectedMcpServerIds, selectedNodeIds, semanticRelatedIds);
+  const rawStructuralContext = !turnPolicy.includeProjectContext
+    ? "{}"
+    : contextMode === "full"
+      ? await buildResearchContext(input.projectRoot, bundle, nextSession.scope, fetchedWebPages, approvedMcpServerIds, rejectedMcpServerIds, referencedNodeIds, selectedNodeIds, semanticRelatedIds)
+      : await buildCompactResearchContext(input.projectRoot, bundle, nextSession.scope, fetchedWebPages, approvedMcpServerIds, rejectedMcpServerIds, selectedNodeIds, semanticRelatedIds);
+  const structuralContext = !turnPolicy.includeProjectContext
+    ? omitChatArtifactReadToolsFromContext(rawStructuralContext)
+    : rawStructuralContext;
   const context = semanticCodeMatches.length
     ? `${structuralContext}\n\nLocal semantic code retrieval policy:\n${JSON.stringify(semanticRetrievalAdvisory, null, 2)}\nCandidates:\n${JSON.stringify(semanticCodeMatches.map((match) => ({ path: match.ref, score: Number(match.score.toFixed(3)), symbol: match.metadata?.symbol, startLine: match.metadata?.startLine ? Number(match.metadata.startLine) : undefined, endLine: match.metadata?.endLine ? Number(match.metadata.endLine) : undefined, preview: match.preview })), null, 2)}`
     : structuralContext;
@@ -792,7 +992,7 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
     : uniqueProviderTextAttachments(noteAttachmentScopes.flatMap((scope) =>
         textAttachmentsForNodeNotes(input.projectRoot, bundle, scope)
       )).slice(0, 8);
-  const skillsPrompt = await selectedSkillsPrompt(input.projectRoot, bundle.project.settings);
+  const skillsPrompt = turnPolicy.includeSelectedSkills ? await selectedSkillsPrompt(input.projectRoot, bundle.project.settings) : "";
   const researchMcpServers = bundle.project.settings.mcp.servers
     .filter((server) => server.enabled)
     .map((server) => approvedMcpServerIds.has(server.id) && !server.trusted
@@ -818,6 +1018,8 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
   };
   const internalResearchWebTools = archicodeInternalTools(bundle.project.settings)
     .filter((tool) => tool.providerToolName.startsWith("archicode_web_"));
+  const internalResearchConsoleTools = archicodeInternalTools(bundle.project.settings)
+    .filter((tool) => tool.providerToolName === "archicode_console_run_command");
   const rulesApprovalRejected = approvalRequest?.providerToolName === ARCHICODE_RESEARCH_RULES_TOOL_NAME &&
     approvalRequest.serverIds.some((serverId) => rejectedMcpServerIds.has(serverId));
   const internalResearchRuleTools = rulesApprovalRejected ? [] : [archicodeResearchRulesTool()];
@@ -825,15 +1027,22 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
   const mergeResolutionToolEnabled = subagentSettings?.mergeConflictResolution ?? true;
   const graphReconciliationToolEnabled = subagentSettings?.graphReconciliation ?? true;
   const sherlockResearchToolEnabled = subagentSettings?.sherlockResearch ?? true;
+  const delphiTestingToolEnabled = subagentSettings?.delphiTesting ?? true;
+  const delphiModelPreflight = effectiveDelphiModelPreflight(provider);
+  const subagentTools = researchSubagentTools({ mergeResolutionToolEnabled, graphReconciliationToolEnabled, sherlockResearchToolEnabled, delphiTestingToolEnabled });
+  // Goal state and the decision to leave memory unchanged are host-owned.
+  // The optional memory tool only adds semantic detail the host cannot infer.
+  const sinkTools = researchSinkTools();
   const researchMcpTools = [
     ...researchProjectFileTools(),
     researchContextExpansionTool(),
     researchGraphLayoutTool(),
     researchChatHistoryTool(),
-    ...researchSubagentTools({ mergeResolutionToolEnabled, graphReconciliationToolEnabled, sherlockResearchToolEnabled }),
+    ...subagentTools,
     ...internalResearchRuleTools,
     ...internalResearchWebTools,
-    ...(directProvider ? [...researchSinkTools(), ...providerMcpTools(toolVisibleMcpSettings)] : [])
+    ...internalResearchConsoleTools,
+    ...(directProvider ? [...sinkTools, ...providerMcpTools(toolVisibleMcpSettings)] : [])
   ];
   const mcpToolCalls: NonNullable<ResearchChatMessage["mcpToolCalls"]> = [];
   const subagentRuns: NonNullable<ResearchChatMessage["subagentRuns"]> = [];
@@ -842,14 +1051,25 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
     kind: SubagentRun["kind"],
     title: string,
     message: string,
-    status: "running" | "completed" | "failed" = "running"
+    status: "running" | "completed" | "blocked" | "failed" = "running"
   ): void => input.onSubagentProgress?.({ runId, kind, title, message, status });
+  const transitionInMemorySubagentRun = (
+    runId: string,
+    status: SubagentRun["status"],
+    patch: Parameters<typeof transitionSubagentRun>[2] = {}
+  ): SubagentRun | undefined => {
+    const runIndex = subagentRuns.findIndex((run) => run.id === runId);
+    if (runIndex < 0) return undefined;
+    const nextRun = transitionSubagentRun(subagentRuns[runIndex]!, status, patch);
+    subagentRuns[runIndex] = nextRun;
+    return nextRun;
+  };
   // Structured output captured from the native sink-tool calls (API providers).
   let capturedChangeSet: unknown;
   let capturedCanvasAction: ResearchCanvasAction | undefined;
   let capturedMemoryDelta: unknown;
-  let capturedMemoryDecision = false;
-  const invalidToolNames: string[] = [];
+  let capturedOrchestration = nextSession.orchestration;
+  let hostGoalCheckpointed = false;
   let approvedRuleMutationConsumed = false;
   const consumeExactRuleMutationApproval = (toolInput: { providerToolName: string; argumentsJson: string }): boolean => {
     if (approvedRuleMutationConsumed || !approvalRequest || rulesApprovalRejected) return false;
@@ -895,6 +1115,9 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
         await hydrateProviderForUse(provider),
         bundle,
         {
+          // Stopping the parent turn must also stop this inline subagent, not
+          // leave it burning provider calls whose result would be discarded.
+          signal: input.signal,
           onProgress: (message) => {
             console.log(`[graph-reconciliation] ${message}`);
             const run = subagentRuns.find((entry) => entry.id === runId);
@@ -914,14 +1137,13 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
           capturedChangeSet = output.graphChangeSet;
         }
       }
-      const run = subagentRuns.find((entry) => entry.id === runId);
+      const run = transitionInMemorySubagentRun(runId, result.status === "failed" ? "failed" : "completed", {
+        resultSummary: microRunHumanSummary(result),
+        error: result.status === "failed" ? result.error : undefined,
+        usage: result.usage,
+        diagnostics: result.diagnostics
+      });
       if (run) {
-        run.status = result.status === "failed" ? "failed" : "completed";
-        run.resultSummary = microRunHumanSummary(result);
-        run.error = result.status === "failed" ? result.error : undefined;
-        run.usage = result.usage;
-        run.diagnostics = result.diagnostics;
-        run.updatedAt = iso();
         publishSubagentProgress(runId, "graph-reconciliation", title, run.resultSummary ?? "Picasso completed.", run.status === "failed" ? "failed" : "completed");
         input.onActivity?.(
           run.status === "failed"
@@ -935,11 +1157,8 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
       return microRunResultText(result);
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : String(error);
-      const run = subagentRuns.find((entry) => entry.id === runId);
+      const run = transitionInMemorySubagentRun(runId, "failed", { error: errorMessage });
       if (run) {
-        run.status = "failed";
-        run.error = errorMessage;
-        run.updatedAt = iso();
         publishSubagentProgress(runId, "graph-reconciliation", run.title, errorMessage, "failed");
       } else {
         subagentRuns.push({
@@ -973,7 +1192,8 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
         providerToolName: pending.providerToolName,
         argumentsJson: pending.argumentsJson
       }, {
-        ruleMutationApproved: consumeExactRuleMutationApproval(pending)
+        ruleMutationApproved: consumeExactRuleMutationApproval(pending),
+        agentActionApproved: pending.providerToolName === "archicode_console_run_command"
       });
       const resultText = toolResult.resultText;
       mcpToolCalls.push({
@@ -999,7 +1219,75 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
   let streamedAnswerSoFar = "";
   // Aggregated LLM usage/cost for this assistant turn (incl. its tool loop).
   let capturedUsage: LlmUsage | undefined;
-  let memoryDecisionRepairError: string | undefined;
+  const recordObservedTurnGoalCheckpoint = (): void => {
+    const goal = capturedOrchestration.goal;
+    if (!goal || hostGoalCheckpointed || goal.status === "completed" || goal.status === "cancelled" || input.signal?.aborted) return;
+    if (subagentRuns.some((run) => run.status === "awaiting-approval")) return;
+    const observedRuns = subagentRuns.filter((run) => run.status === "completed" || run.status === "blocked" || run.status === "failed");
+    // A resumed parent trajectory is itself the task boundary: the shared
+    // runtime does not return a final answer until the model has finished its
+    // useful tool work or reached a real pause/blocker. Do not require a
+    // provider bookkeeping tool merely to close the host-visible goal.
+    if (!observedRuns.length && !internalContinuation) return;
+    const failures = observedRuns.filter((run) => run.status === "failed" || run.status === "blocked");
+    const preservesObservedBlocker = observedRuns.length === 0 && goal.status === "blocked";
+    const evidence = observedRuns.length
+      ? observedRuns.map((run) => `${run.kind} subagent ${run.id} finished with status ${run.status}.`)
+      : preservesObservedBlocker
+        ? ["The parent reported the persisted blocker without claiming new execution evidence."]
+        : ["Archi completed the resumed parent trajectory and returned its user-facing result."];
+    const blockers = failures.length
+      ? failures.map((run) => run.error ?? run.resultSummary ?? `${run.title} did not complete.`)
+      : preservesObservedBlocker
+        ? goal.blockers
+        : [];
+    const summary = (observedRuns.length
+      ? observedRuns.map((run) => `${run.title}: ${run.resultSummary ?? run.error ?? run.status}`).join(" ")
+      : preservesObservedBlocker
+        ? goal.checkpointSummary || blockers.join(" ") || "The objective remains blocked after the parent report."
+        : "The resumed parent trajectory completed and delivered its result.").slice(0, 1_000);
+    try {
+      capturedOrchestration = checkpointResearchGoal(capturedOrchestration, {
+        status: failures.length || preservesObservedBlocker ? "blocked" : "completed",
+        summary: summary || "Observed subagent work finished.",
+        currentStepId: failures.length || preservesObservedBlocker ? goal.currentStepId ?? null : null,
+        stepUpdates: (failures.length || preservesObservedBlocker
+          ? goal.steps.filter((step) => step.id === goal.currentStepId)
+          : goal.steps).map((step) => ({
+          id: step.id,
+          status: failures.length || preservesObservedBlocker ? "blocked" : "done",
+          notes: summary || undefined,
+          evidence
+        })),
+        evidence,
+        blockers,
+        waitingFor: []
+      }, iso());
+      hostGoalCheckpointed = true;
+    } catch {
+      // Keep the last valid goal state if an old/custom goal shape cannot
+      // accept this mechanical checkpoint. No provider repair call is made.
+    }
+  };
+  const explicitDelphiDelegationRequired = turnPolicy.enforceExplicitDelphiDelegation && !resumeContinuation && isExplicitDelphiAuditRequest(content) &&
+    researchMcpTools.some((tool) => isResearchSpawnDelphiTool(tool.providerToolName));
+  const existingGoalStatus = capturedOrchestration.goal?.status;
+  if (explicitDelphiDelegationRequired && (!existingGoalStatus || existingGoalStatus === "completed" || existingGoalStatus === "cancelled")) {
+    capturedOrchestration = startResearchGoal(capturedOrchestration, {
+      objective: "Run the requested test/runtime audit and report evidence-backed findings.",
+      successCriteria: [
+        "Finite build and test checks complete with recorded evidence",
+        "The requested live target is started or reused and directly audited when supported",
+        "The user receives concrete findings, blockers, and coverage limits"
+      ],
+      steps: [
+        { id: "prepare-audit", title: "Prepare the reviewed Delphi audit and runtime lifecycle" },
+        { id: "run-audit", title: "Run finite checks and direct target observation" },
+        { id: "report-findings", title: "Report evidence-backed findings and remaining blockers" }
+      ],
+      summary: "Preparing Delphi with the project's reviewed runtime and test configuration."
+    }, iso());
+  }
   const budgetedPrompt = applyResearchPromptBudget({
     modelContextTokens: researchContextPlan.modelContextTokens,
     contextMode,
@@ -1012,7 +1300,7 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
     researchHistoryTokenBudget: researchContextPlan.historyTokenBudget,
     sessionSummary: nextSession.summary,
     researchMemory: formatResearchMemoryForPrompt(nextSession.memory),
-    researchOrchestration: formatResearchOrchestrationForPrompt(nextSession.orchestration),
+    researchOrchestration: formatResearchOrchestrationForPrompt(capturedOrchestration),
     selectedSkillsPrompt: skillsPrompt,
     tools: researchMcpTools,
     imageAttachments: messageImageInputs.length + scopedNoteImages.length,
@@ -1028,7 +1316,7 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
     researchHistoryTokenBudget: budgetedPrompt.researchHistoryTokenBudget,
     sessionSummary: nextSession.summary,
     researchMemory: formatResearchMemoryForPrompt(nextSession.memory),
-    researchOrchestration: formatResearchOrchestrationForPrompt(nextSession.orchestration),
+    researchOrchestration: formatResearchOrchestrationForPrompt(capturedOrchestration),
     selectedSkillsPrompt: skillsPrompt,
     tools: budgetedPrompt.tools,
     imageAttachments: messageImageInputs.length + scopedNoteImages.length,
@@ -1037,7 +1325,12 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
     budgetNotes: budgetedPrompt.budgetNotes
   });
   const graphLockRunsAtTurnStart = activeResearchGraphLockRuns(bundle);
-  const currentTurnDirective = [
+  const currentTurnDirective = turnKind === "outcome-finalization" ? [
+    "SUBAGENT OUTCOME:",
+    "The host message contains the persisted result of the delegated work. Treat it as authoritative evidence for what ran and what did not.",
+    "Own the next decision: synthesize the result, use another available tool or subagent only when it materially advances the user's original objective, and otherwise give the user the final report. Do not repeat already-completed work or invent unsupported coverage.",
+    "A partial or blocked audit is a valid outcome. Clearly separate verified results, failures, unverified coverage, and the concrete next action. Goal and memory state are folded by the host; do not narrate bookkeeping."
+  ].join("\n") : [
     "CURRENT LIVE CANVAS STATE:",
     JSON.stringify({
       activeFlowId: input.activeFlowId ?? bundle.project.activeFlowId ?? null,
@@ -1045,8 +1338,14 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
       selectedNodeIds
     }),
     "This is transient UI state, not graph scope or permission. If and only if the user explicitly asks to select/focus graph items, switch the visible flow/detail flow, pan, center, or zoom, you must use archicode_control_canvas (or canvasAction on the local JSON path) in this turn. Prose cannot move the canvas, so never say the action is happening or will happen unless the same response contains the action. Canvas actions are reversible UI-only actions and do not need a graph review card.",
-    "CURRENT TURN COMPLETION CHECKLIST — perform this semantic check before finalizing:",
-    "1. MEMORY: Make exactly one explicit memory decision before finalizing. If this turn assigns or changes a task/goal/requirement, covers a key matter worth retaining, establishes a decision/direction, receives a durable result/fact/finding/failure, leaves anything pending/blocked/unclear/awaiting confirmation, or materially changes the cumulative summary, call archicode_update_memory now. Store a pending graph scope and its confirmation/review state. Otherwise call archicode_leave_memory_unchanged with a semantic reason. Never omit both tools.",
+    "Own the investigation and tool trajectory for this user request. Continue while useful work is available; finish only with a supported answer, a visible approval pause, or a concrete blocker.",
+    delphiTestingToolEnabled
+      ? `DELPHI MODEL PREFLIGHT: ${delphiVisionPreflightText(delphiModelPreflight)} When the user names a specific page, route, screen, or flow, preserve that exact target in spawn_delphi's objective and acceptance criteria instead of broadening it to a generic project audit.`
+      : "",
+    explicitDelphiDelegationRequired
+      ? "EXPLICIT TEST OBJECTIVE: The user asked for executable test or runtime-audit work. Own the investigation and choose useful preliminary actions yourself, but do not finish or claim coverage until you have delegated the executable audit to archicode_spawn_delphi. Put the full requested scope and acceptance criteria in that delegation."
+      : "",
+    "Goal progress and Research memory are host-observed state. Do not spend tool calls updating or narrating them.",
     "PROJECT KNOWLEDGE: Session research memory above keeps this chat coherent. Separately, use archicode_project_remember_note only for small important knowledge that should be available to future chats in this project. Use archicode_chat_create_artifact for large reports, raw research, detailed plans, comparisons, or working journals that belong to this chat. Do not duplicate ordinary conversation into either surface.",
     "GRAPH LAYOUT: For exact planning-graph node positions, sizes, spacing, or collision checks, call archicode_read_graph_layout. It reads the current loaded project graph directly. Do not inspect, list, search, or read persisted .archicode flow JSON files to recover canvas geometry.",
     "JAVASCRIPT SCRATCHPAD: Use archicode_scratchpad_repl when arithmetic, statistics, data shaping, or a small helper function would make the answer more reliable. Write standard JavaScript. Each call uses a fresh isolated runtime with no Node.js globals, project files, packages, imports, network APIs, or persistent state.",
@@ -1055,119 +1354,8 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
       : graphReconciliationToolEnabled
         ? "2. GRAPH: Decide semantic complexity from the complete request and history. Direct graph operations are allowed only for a simple quick bounded edit with obvious operations and no design synthesis. Any substantial task—especially specification/attachment decomposition, several nodes or flows, populated subflows, coordinated relationships or acceptance criteria, broad refinement, architecture, or reconciliation—requires Picasso. If the preceding conversation proposed such a scope and you understand the current reply as confirmation, call archicode_spawn_picasso now with that exact scope. Do not submit the complex change set directly and do not merely say it is queued. Graph edges cannot cross top-level flows: never instruct Picasso to create or prefer cross-flow edges. Preserve those dependencies as descriptions, acceptance criteria, or node-scoped notes, while allowing Picasso to connect every generated node with meaningful intra-flow topology."
         : "2. GRAPH: Picasso is unavailable. Direct graph operations remain limited to simple quick bounded edits; do not bypass the missing graph architect for substantial work.",
-    "3. TRUTHFUL COMPLETION: Never promise a future tool action. Statements that work is queued, being prepared, or ready require the corresponding successful tool call in this same turn."
+    "TRUTHFUL COMPLETION: Never promise a future tool action. Statements that work is queued, being prepared, or ready require the corresponding successful tool call in this same turn."
   ].join("\n");
-  const repairMissingMemoryDecision = async (assistantOutput: string): Promise<void> => {
-    if (capturedMemoryDecision || input.signal?.aborted) return;
-    const memoryDecisionTools = researchSinkTools().filter((tool) =>
-      isResearchMemoryTool(tool.providerToolName) || isResearchMemoryUnchangedTool(tool.providerToolName));
-    let repairDecisionMade = false;
-    let repairedMemoryDelta: unknown;
-    try {
-      await callResearchProvider(await hydrateProviderForUse(provider), [
-        "The visible assistant turn below completed without its required explicit memory decision. Perform only the missing semantic memory arbitration now.",
-        "Call exactly one available tool: archicode_update_memory when durable state should persist, otherwise archicode_leave_memory_unchanged with a concise reason. Do not answer the user, repeat the task, or call any other tool.",
-        `Current research memory:\n${formatResearchMemoryForPrompt(nextSession.memory).slice(0, 8_000)}`,
-        `User turn:\n${content.slice(0, 12_000)}`,
-        `Assistant result:\n${assistantOutput.slice(0, 16_000)}`,
-        subagentRuns.length
-          ? `Subagent outcomes:\n${subagentRuns.map((run) => `${run.kind}: ${run.status}${run.resultSummary ? ` — ${run.resultSummary}` : ""}${run.error ? ` — ${run.error}` : ""}`).join("\n").slice(0, 8_000)}`
-          : ""
-      ].filter(Boolean).join("\n\n"), {
-        projectRoot: input.projectRoot,
-        signal: input.signal,
-        cacheSessionId: nextSession.id,
-        webSearchEnabled: false,
-        scopeContext: "{}",
-        systemInstructionsOverride: "You are ArchiCode's isolated memory arbiter. Judge meaning, never keywords. You must call exactly one supplied memory-decision tool and produce no user-facing answer.",
-        messages: [],
-        mcpTools: memoryDecisionTools,
-        onToken: () => {},
-        isTerminalTool: () => true,
-        terminalToolCompletesTurn: () => true,
-        onUsage: (usage) => {
-          capturedUsage = mergeResearchUsage(capturedUsage, usage);
-        },
-        callMcpTool: async (toolInput) => {
-          if (isResearchMemoryTool(toolInput.providerToolName)) {
-            repairDecisionMade = true;
-            try {
-              repairedMemoryDelta = JSON.parse(toolInput.argumentsJson || "{}");
-            } catch {
-              repairedMemoryDelta = undefined;
-            }
-            return "Research memory recorded.";
-          }
-          if (isResearchMemoryUnchangedTool(toolInput.providerToolName)) {
-            repairDecisionMade = true;
-            return "Research memory intentionally left unchanged.";
-          }
-          return "Unsupported memory-decision tool.";
-        }
-      });
-      if (!repairDecisionMade) {
-        memoryDecisionRepairError = "The model omitted both memory-decision tools, including during the bounded arbitration repair.";
-        return;
-      }
-      capturedMemoryDecision = true;
-      if (repairedMemoryDelta !== undefined) capturedMemoryDelta = repairedMemoryDelta;
-    } catch (error) {
-      memoryDecisionRepairError = `Memory arbitration failed: ${error instanceof Error ? error.message : String(error)}`;
-    }
-  };
-  const repairMissingReviewCard = async (assistantOutput: string): Promise<{ output: string; capturedChangeSet?: unknown }> => {
-    const graphChangeTool = researchSinkTools().find((tool) => isResearchChangeSetTool(tool.providerToolName));
-    if (!graphChangeTool) return { output: "" };
-    let repairedChangeSet: unknown;
-    let invalidRepairToolCalls = 0;
-    try {
-      const repairOutput = await callResearchProvider(await hydrateProviderForUse(provider), [
-        "The visible assistant turn below claimed that a graph review card was prepared, but no valid graph change set was captured. Repair only that mismatch now.",
-        "If the exact operations are fully supported by the conversation and graph context, call archicode_propose_graph_change_set exactly once. Otherwise, answer honestly that no review card was created and briefly state what is still needed. Do not claim a card exists without the tool call. Do not perform or request any other tool action.",
-        `Recent conversation:\n${nextSession.messages.slice(-12).map((message) => `${message.role}: ${message.content}`).join("\n\n").slice(0, 20_000)}`,
-        `Current user turn:\n${content.slice(0, 12_000)}`,
-        `Assistant result to repair:\n${assistantOutput.slice(0, 16_000)}`
-      ].join("\n\n"), {
-        projectRoot: input.projectRoot,
-        signal: input.signal,
-        cacheSessionId: nextSession.id,
-        webSearchEnabled: false,
-        scopeContext: budgetedPrompt.scopeContext,
-        systemInstructionsOverride: "You are ArchiCode's isolated graph review-card verifier. You may only submit a valid graph proposal through the supplied tool or state truthfully that no card was created. Never invent a tool name or imply that a missing tool call succeeded.",
-        messages: [],
-        mcpTools: [graphChangeTool],
-        onToken: () => {},
-        isTerminalTool: (providerToolName) => isResearchChangeSetTool(providerToolName),
-        terminalToolCompletesTurn: (providerToolName) => isResearchChangeSetTool(providerToolName),
-        onUsage: (usage) => {
-          capturedUsage = mergeResearchUsage(capturedUsage, usage);
-        },
-        callMcpTool: async (toolInput) => {
-          if (isResearchChangeSetTool(toolInput.providerToolName)) {
-            try {
-              repairedChangeSet = JSON.parse(toolInput.argumentsJson || "{}");
-            } catch {
-              repairedChangeSet = undefined;
-            }
-            return "Graph change set captured for review.";
-          }
-          invalidRepairToolCalls += 1;
-          if (invalidRepairToolCalls >= MAX_RESEARCH_INVALID_TOOL_CALLS) {
-            throw new Error(`Review-card repair stopped after repeated unavailable tool calls: ${toolInput.providerToolName}.`);
-          }
-          return JSON.stringify({
-            status: "invalid-tool-name",
-            requestedToolName: toolInput.providerToolName,
-            message: "No tool ran. Retry using the exact available providerToolName.",
-            availableTools: [graphChangeTool.providerToolName]
-          });
-        }
-      });
-      return { output: repairOutput, capturedChangeSet: repairedChangeSet };
-    } catch {
-      return { output: "" };
-    }
-  };
   try {
     let output = await callResearchProvider(await hydrateProviderForUse(provider), content, {
       projectRoot: input.projectRoot,
@@ -1177,9 +1365,9 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
       scopeContext: budgetedPrompt.scopeContext,
       sessionSummary: nextSession.summary,
       researchMemory: formatResearchMemoryForPrompt(nextSession.memory),
-      researchOrchestration: formatResearchOrchestrationForPrompt(nextSession.orchestration),
+      researchOrchestration: formatResearchOrchestrationForPrompt(capturedOrchestration),
       currentTurnDirective,
-      messages: nextSession.messages,
+      messages: turnPolicy.includeConversationHistory ? nextSession.messages : [],
       researchMessageLimit: budgetedPrompt.researchMessageLimit,
       researchHistoryTokenBudget: budgetedPrompt.researchHistoryTokenBudget,
       researchPersonalityPrompt: personalityPrompt,
@@ -1189,6 +1377,7 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
       mergeResolutionSubagentEnabled: budgetedPrompt.tools.some((tool) => isResearchSpawnMergeTool(tool.providerToolName)),
       graphReconciliationSubagentEnabled: budgetedPrompt.tools.some((tool) => isResearchSpawnGraphReconciliationTool(tool.providerToolName)),
       sherlockResearchSubagentEnabled: budgetedPrompt.tools.some((tool) => isResearchSpawnSherlockTool(tool.providerToolName)),
+      delphiTestingSubagentEnabled: budgetedPrompt.tools.some((tool) => isResearchSpawnDelphiTool(tool.providerToolName)),
       onUsage: (usage) => {
         capturedUsage = attachResearchContextLedger(usage, contextLedger);
       },
@@ -1202,13 +1391,36 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
       },
       mcpTools: budgetedPrompt.tools,
       mcpServers: researchMcpSettings.mcp.servers,
-      isTerminalTool: isResearchSinkTool,
+      isTerminalTool: (providerToolName) =>
+        budgetedPrompt.tools.some((tool) => tool.providerToolName === providerToolName) && isResearchSinkTool(providerToolName),
+      terminalToolCompletesTurn: (providerToolName) =>
+        isResearchChangeSetTool(providerToolName) || isResearchCanvasControlTool(providerToolName),
+      validateFinalAnswer: (candidateText) => {
+        const candidate = extractArchicodeResearch(candidateText).response;
+        const validChangeSet = buildResearchTurnChangeSet(capturedChangeSet, candidate?.changeSet, bundle);
+        const failedPicasso = subagentRuns.some((run) => run.kind === "graph-reconciliation" && run.status === "failed");
+        if (explicitDelphiDelegationRequired && !subagentRuns.some((run) => run.kind === "delphi-testing")) {
+          return [
+            "The user explicitly requested executable test/runtime-audit work, but this trajectory has not delegated that work to Delphi.",
+            "Continue this same trajectory and call archicode_spawn_delphi with the requested scope and acceptance criteria. You may use other tools when useful, but source inspection or CLI metadata alone cannot complete the executable audit."
+          ].join("\n\n");
+        }
+        if (!failedPicasso && !validChangeSet && claimsPreparedGraphReviewCard(candidate?.answer ?? candidateText)) {
+          return [
+            "Your answer says a graph review card was prepared, but no valid graph change-set sink call exists in this trajectory.",
+            "Continue in this same trajectory: call archicode_propose_graph_change_set with the supported operations if the evidence is sufficient, or answer honestly that no card was created. Do not claim a card exists without the tool result."
+          ].join("\n\n");
+        }
+        if (turnKind === "outcome-finalization" && isInternalOutcomeBookkeepingNarration(visibleResearchAnswer(candidate?.answer ?? candidateText))) {
+          return "The host already owns goal and memory bookkeeping. Return the self-contained user-facing evidence report now; do not narrate internal state updates.";
+        }
+        return undefined;
+      },
       isApprovalError: (error) => error instanceof ResearchMcpApprovalRequired,
       resumeContinuation,
       callMcpTool: async (toolInput) => {
         const tool = budgetedPrompt.tools.find((item) => item.providerToolName === toolInput.providerToolName);
         if (!tool) {
-          invalidToolNames.push(toolInput.providerToolName);
           const availableToolNames = budgetedPrompt.tools.map((item) => item.providerToolName).sort();
           const message = `Unknown Research tool "${toolInput.providerToolName}". No tool was executed.`;
           mcpToolCalls.push({
@@ -1219,15 +1431,10 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
             error: message,
             createdAt: iso()
           });
-          if (invalidToolNames.length >= MAX_RESEARCH_INVALID_TOOL_CALLS) {
-            throw new ResearchInvalidToolCallLimit([...invalidToolNames], availableToolNames);
-          }
           return JSON.stringify({
             status: "invalid-tool-name",
             requestedToolName: toolInput.providerToolName,
-            attempt: invalidToolNames.length,
-            remainingAttempts: MAX_RESEARCH_INVALID_TOOL_CALLS - invalidToolNames.length,
-            message: "No tool ran. Retry using one exact providerToolName from availableTools. Aliases and guessed names are not accepted.",
+            message: "No tool ran. Use one exact providerToolName from availableTools, or choose another approach.",
             availableTools: availableToolNames
           }, null, 2);
         }
@@ -1255,17 +1462,12 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
           }
         }
         if (isResearchMemoryTool(toolInput.providerToolName)) {
-          capturedMemoryDecision = true;
           try {
             capturedMemoryDelta = JSON.parse(toolInput.argumentsJson || "{}");
           } catch {
             capturedMemoryDelta = undefined;
           }
-          return "Research memory recorded.";
-        }
-        if (isResearchMemoryUnchangedTool(toolInput.providerToolName)) {
-          capturedMemoryDecision = true;
-          return "Research memory intentionally left unchanged.";
+          return "Optional semantic memory delta captured; the host will validate and fold it.";
         }
         if (rulesApprovalRejected && toolInput.providerToolName === ARCHICODE_RESEARCH_RULES_TOOL_NAME) {
           mcpToolCalls.push({
@@ -1375,6 +1577,120 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
           });
           return `A merge-conflict resolution proposal is now awaiting the user's approval in the chat UI (conflicted files: ${args.conflictedFiles.join(", ")}${args.resolutionStrategy ? `; your proposed strategy: ${args.resolutionStrategy}` : ""}). Do not call this tool again for these files and do not claim it has run or succeeded. Tell the user you've prepared the proposal and are waiting for them to approve (or adjust) the resolution strategy in the UI.`;
         }
+        // Delphi may execute project verification and launch an explicitly
+        // selected Run App target, so Research never runs it inline. The card
+        // grants a bounded capability; chosen actions remain safety-checked.
+        if (isResearchSpawnDelphiTool(toolInput.providerToolName)) {
+          if (!delphiTestingToolEnabled) return "Delphi is disabled by project settings.";
+          const alreadyScheduled = subagentRuns.find((run) => run.kind === "delphi-testing" && (run.status === "awaiting-approval" || run.status === "running"));
+          if (alreadyScheduled) {
+            return `A Delphi audit is already scheduled in this turn as ${alreadyScheduled.id}. Do not call archicode_spawn_delphi again; finish this turn so the host can run that one audit.`;
+          }
+          let rawArgs: unknown;
+          try {
+            rawArgs = JSON.parse(toolInput.argumentsJson || "{}");
+          } catch {
+            return "REPAIRABLE_TOOL_ERROR: archicode_spawn_delphi arguments were not valid JSON. No audit was created. Correct the JSON object and call archicode_spawn_delphi again.";
+          }
+          const parsedArgs = delphiTestingInputSchema.safeParse(rawArgs);
+          if (!parsedArgs.success) {
+            const details = parsedArgs.error.issues.slice(0, 8).map((issue) => `${issue.path.join(".") || "arguments"}: ${issue.message}`).join("; ");
+            return [
+              "REPAIRABLE_TOOL_ERROR: archicode_spawn_delphi arguments did not match the Delphi request schema. No audit was created.",
+              details,
+              "Use platforms only from web, electron, flutter, android, ios, generic. Put a Run App profile id in target.profileId, not platforms. commands, when supplied, are advisory check suggestions rather than an authorization list. Correct the payload and call archicode_spawn_delphi again."
+            ].join(" ");
+          }
+          const args = parsedArgs.data;
+          const environment = await inspectDelphiTestEnvironment(input.projectRoot, args);
+          const compatibleRuntimeProfiles = compatibleDelphiRuntimeProfiles(args, environment);
+          const approvedArgs = pinDelphiRuntimeTarget(args, environment);
+          // If a supported managed adapter is required, ask for setup before
+          // launching an audit that could only perform partial CLI coverage.
+          // The approved setup card resumes this same capability-scoped audit afterward.
+          const preflightSetup = delphiManagedSetupInput(approvedArgs, environment);
+          const runnableArgs = preflightSetup ?? approvedArgs;
+          let runtimePlan: Awaited<ReturnType<typeof planDelphiRuntimeLaunch>>;
+          try {
+            runtimePlan = await planDelphiRuntimeLaunch(input.projectRoot, approvedArgs);
+          } catch (error) {
+            return `Delphi could not prepare the requested runtime target: ${error instanceof Error ? error.message : String(error)} Ask the user to choose a valid Run App profile/target before retrying.`;
+          }
+          const runCreatedAt = iso();
+          const commandSummary = environment.discoveredCommands.length
+            ? ` Delphi may choose relevant finite project checks from ${environment.discoveredCommands.length} discovered script/check option${environment.discoveredCommands.length === 1 ? "" : "s"}; every chosen action remains dynamically safety-checked.`
+            : " No project script/check was discovered; Delphi can still use applicable direct runtime adapters and report concrete coverage limitations.";
+          const definitionSummary = "";
+          const omittedCommandSummary = "";
+          const adapterSummary = environment.toolchains.map((toolchain) => `${toolchain.adapter}: ${toolchain.status}`).join(", ");
+          const visionSummary = `Vision preflight: ${delphiVisionPreflightText(delphiModelPreflight)}`;
+          const targetParts = approvedArgs.target ? [
+            approvedArgs.target.profileId ? `Run App profile ${approvedArgs.target.profileId}` : "",
+            approvedArgs.target.baseUrl,
+            approvedArgs.target.deviceId ? `device ${approvedArgs.target.deviceId}` : "",
+            approvedArgs.target.appiumServerUrl && approvedArgs.target.appiumSessionId
+              ? `Appium session ${approvedArgs.target.appiumSessionId} at ${approvedArgs.target.appiumServerUrl}`
+              : ""
+          ].filter(Boolean) : [];
+          const targetSummary = targetParts.length
+            ? ` Explicit target: ${targetParts.join("; ")}.`
+            : compatibleRuntimeProfiles.length > 1
+              ? ` Choose one or more compatible Run App targets: ${compatibleRuntimeProfiles.map((profile) => profile.label).join(", ")}.`
+              : " No live runtime/device target was supplied, so Delphi cannot claim direct UI or emulator coverage.";
+          const runtimeSummary = runtimePlan?.requiresLaunch
+            ? [
+                ` Approved target lifecycle for ${runtimePlan.profileLabel}: ${runtimePlan.commands.join(" | ")}.${runtimePlan.cleanupCommands.length && approvedArgs.target?.cleanup === "stop-if-started" ? ` Owned-target cleanup: ${runtimePlan.cleanupCommands.join(" | ")}.` : ""}`,
+                runtimePlan.occupiedPorts.length
+                  ? ` Configured port${runtimePlan.occupiedPorts.length === 1 ? "" : "s"} ${runtimePlan.occupiedPorts.join(", ")} already belong to another listener. Delphi will neither test nor stop that listener; ${runtimePlan.allowsReportedLocalFallback ? "this approval allows a localhost fallback URL reported by the exact launched runtime process" : "the audit will stop and ask before any cleanup"}.`
+                  : ""
+              ].join("")
+            : runtimePlan?.existingServiceId
+              ? ` Delphi will reuse the already-running ${runtimePlan.profileLabel} service ${runtimePlan.existingServiceId}.`
+              : "";
+          subagentRuns.push({
+            id: id("subagent-run"),
+            kind: "delphi-testing",
+            status: "awaiting-approval",
+            title: `${preflightSetup ? "Set up & audit" : "Audit"}: ${args.objective.slice(0, 100)}`,
+            argumentsJson: JSON.stringify(runnableArgs),
+            runtimeTargetSelection: compatibleRuntimeProfiles.length > 1 ? {
+              options: compatibleRuntimeProfiles.map((profile) => ({
+                profileId: profile.id,
+                label: profile.label,
+                kind: profile.kind,
+                targetRequired: profile.targetRequired,
+                defaultTargetId: profile.defaultTargetId
+              })),
+              minSelections: 1,
+              allowMultiple: true
+            } : undefined,
+            approvedRuntimeCommands: runtimePlan?.commands ?? [],
+            approvedRuntimeCleanupCommands: runtimePlan?.cleanupCommands ?? [],
+            imageInputSupport: delphiModelPreflight.imageInputSupport,
+            reviewReason: [
+              preflightSetup
+                ? `Delphi needs ${preflightSetup.setup!.adapters.join(" and ")} for the requested direct UI coverage. Approval installs it only in ArchiCode's managed cache${preflightSetup.setup!.adapters.includes("playwright") ? ` and downloads ${preflightSetup.setup!.playwrightBrowsers.join(", ")}` : ""}, then automatically resumes this same audit.`
+                : `Delphi will inspect the project and ${args.mode === "plan" ? "prepare a non-executing audit plan" : "run existing finite tests and approved direct adapter actions"}.`,
+              commandSummary,
+              definitionSummary,
+              omittedCommandSummary,
+              targetSummary,
+              runtimeSummary,
+              visionSummary,
+              approvedArgs.observation.mode === "visible" ? "Observation: visible target windows with captured evidence." : "Observation: headless with captured evidence.",
+              adapterSummary ? `Adapter preflight: ${adapterSummary}.` : "",
+              "No project dependency or source file will be changed."
+            ].filter(Boolean).join(" "),
+            progress: [],
+            createdAt: runCreatedAt,
+            updatedAt: runCreatedAt
+          });
+          return preflightSetup
+            ? "A combined Delphi managed-tool setup and test/runtime audit is awaiting the user's approval in the chat UI. Do not call Delphi again for this objective and do not claim anything ran. Approval installs the listed isolated tooling and automatically resumes the same audit."
+            : compatibleRuntimeProfiles.length > 1
+              ? "A Delphi test/runtime audit is awaiting the user's target selection in the chat UI. The user may choose one or several compatible Run App targets; do not choose for them or call Delphi again."
+              : "A Delphi test/runtime audit is awaiting the user's approval in the chat UI. Do not call Delphi again for this objective and do not claim that tests ran. Tell the user the audit is ready for review.";
+        }
         // Graph reconciliation only proposes graph edits (already gated by the
         // existing change-set review card), so a standalone call can run inline.
         if (isResearchSpawnGraphReconciliationTool(toolInput.providerToolName)) {
@@ -1405,6 +1721,17 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
               await hydrateProviderForUse(provider),
               bundle,
               {
+                // Stopping the parent turn must also stop this inline
+                // subagent, not leave it burning discarded provider calls.
+                signal: input.signal,
+                runConsoleCommand: (commandArgs) => runInternalConsoleCommand(input.projectRoot, bundle.project.settings, commandArgs, {
+                  authorization: {
+                    actor: "sherlock",
+                    capabilities: ["inspect-project"]
+                  },
+                  maxTimeoutMs: 10 * 60_000,
+                  signal: input.signal
+                }),
                 onProgress: (message) => {
                   const run = subagentRuns.find((entry) => entry.id === runId);
                   if (run) {
@@ -1415,17 +1742,28 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
                 }
               }
             );
-            const run = subagentRuns.find((entry) => entry.id === runId);
+            const sherlockOutput = result.output as SherlockResearchOutput | undefined;
+            const sherlockRunStatus: SubagentRun["status"] = result.status === "failed"
+              ? "failed"
+              : sherlockOutput?.status === "blocked"
+                ? "blocked"
+                : "completed";
+            const run = transitionInMemorySubagentRun(runId, sherlockRunStatus, {
+              resultSummary: microRunHumanSummary(result),
+              error: result.status === "failed" ? result.error : undefined,
+              usage: result.usage,
+              diagnostics: result.diagnostics
+            });
             if (run) {
-              run.status = result.status === "failed" ? "failed" : "completed";
-              run.resultSummary = microRunHumanSummary(result);
-              run.error = result.status === "failed" ? result.error : undefined;
-              run.usage = result.usage;
-              run.diagnostics = result.diagnostics;
-              run.updatedAt = iso();
-              publishSubagentProgress(runId, "sherlock-research", title, run.resultSummary ?? "Sherlock completed.", run.status === "failed" ? "failed" : "completed");
+              publishSubagentProgress(
+                runId,
+                "sherlock-research",
+                title,
+                run.resultSummary ?? (run.status === "blocked" ? "Sherlock was blocked." : "Sherlock completed."),
+                run.status === "failed" ? "failed" : run.status === "blocked" ? "blocked" : "completed"
+              );
               input.onActivity?.(
-                run.status === "failed"
+                run.status === "failed" || run.status === "blocked"
                   ? "Sherlock could not complete the investigation. Archi is taking over with the available project tools."
                   : "Sherlock completed. Archi is reviewing the evidence and continuing the investigation below.",
                 "running"
@@ -1434,11 +1772,8 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
             return microRunResultText(result);
           } catch (error) {
             const errorMessage = error instanceof Error ? error.message : String(error);
-            const run = subagentRuns.find((entry) => entry.id === runId);
+            const run = transitionInMemorySubagentRun(runId, "failed", { error: errorMessage });
             if (run) {
-              run.status = "failed";
-              run.error = errorMessage;
-              run.updatedAt = iso();
               publishSubagentProgress(runId, "sherlock-research", run.title, errorMessage, "failed");
             }
             return `Sherlock failed: ${errorMessage}`;
@@ -1450,6 +1785,18 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
             activityArgs = JSON.parse(toolInput.argumentsJson || "{}") as Record<string, unknown>;
           } catch {
             activityArgs = {};
+          }
+          if (turnKind === "outcome-finalization" && requestsRedundantOutcomeArtifactRead(toolInput.providerToolName, activityArgs)) {
+            return "The host already supplied the complete Delphi outcome evidence packet. Do not rescan .archicode artifacts; continue from the supplied checks, findings, blockers, and runtime summary. Normal source-file inspection remains available when genuinely needed.";
+          }
+          if (approvalWasRejected
+            && approvalRequest?.providerToolName === toolInput.providerToolName
+            && toolInput.providerToolName === "archicode_console_run_command"
+            && sameToolArguments(approvalRequest.argumentsJson ?? "{}", toolInput.argumentsJson)) {
+            return JSON.stringify({
+              status: "rejected",
+              message: "The user rejected this exact command. Choose another safe way to advance the same goal; do not repeat it unless the user explicitly requests it later."
+            });
           }
           input.onActivity?.(investigationToolProgressMessage(toolInput.providerToolName, activityArgs), "running");
           const isProjectFileTool = isResearchProjectFileTool(toolInput.providerToolName);
@@ -1520,24 +1867,7 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
     let parsed = extracted.response;
     let changeSet = buildResearchTurnChangeSet(capturedChangeSet, parsed?.changeSet, bundle);
     const failedPicasso = subagentRuns.find((run) => run.kind === "graph-reconciliation" && run.status === "failed");
-    if (!failedPicasso && !changeSet && claimsPreparedGraphReviewCard(parsed?.answer ?? output)) {
-      const repair = await repairMissingReviewCard(parsed?.answer ?? output);
-      const repairedChangeSet = buildResearchTurnChangeSet(repair.capturedChangeSet, undefined, bundle);
-      if (repairedChangeSet) {
-        capturedChangeSet = repair.capturedChangeSet;
-        changeSet = repairedChangeSet;
-      } else {
-        const honestRepairOutput = visibleResearchAnswer(repair.output);
-        output = honestRepairOutput && !claimsPreparedGraphReviewCard(honestRepairOutput)
-          ? honestRepairOutput
-          : "I didn’t create a valid graph review card, so nothing is awaiting review and nothing was changed. Please ask me to prepare it again.";
-        extracted = extractArchicodeResearch(output);
-        parsed = extracted.response;
-        capturedMemoryDecision = false;
-        capturedMemoryDelta = undefined;
-      }
-    }
-    await repairMissingMemoryDecision(output);
+    recordObservedTurnGoalCheckpoint();
     if (subagentRuns.length || mcpToolCalls.length) {
       input.onActivity?.("Archi finished reviewing the collected evidence and is preparing the final answer.", "completed");
     }
@@ -1561,6 +1891,9 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
           "Nothing was applied. You can retry the same request after correcting the proposal contract."
         ].join("\n\n")
       : visibleResearchAnswer(parsed?.answer ?? output);
+    if (turnKind === "outcome-finalization" && isInternalOutcomeBookkeepingNarration(visibleAnswer)) {
+      visibleAnswer = hostOutcomeReportFromContinuation(content) ?? "Delphi finished, but the parent provider did not produce a usable user-facing report. Review the Delphi card above for the recorded checks and coverage limits.";
+    }
     const graphLockRunsAfterTurn = await activeGraphLockRunsNow();
     if (changeSet && graphLockRunsAfterTurn.length) {
       visibleAnswer = [
@@ -1582,13 +1915,19 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
       canvasAction,
       changeSet
     };
+    const approvalSubagent = subagentRuns.find((run) => run.status === "awaiting-approval");
+    const turnOrchestration = changeSet
+      ? researchGoalAwaitingApproval(capturedOrchestration, { id: changeSet.id, label: changeSet.summary }, assistantCreatedAt)
+      : approvalSubagent
+        ? researchGoalAwaitingApproval(capturedOrchestration, { id: approvalSubagent.id, label: approvalSubagent.title }, assistantCreatedAt)
+        : capturedOrchestration;
     nextSession = researchChatSessionSchema.parse({
       ...nextSession,
       summary: compactSummary(nextSession.summary, failedPicasso && !changeSet ? undefined : parsed?.summary, assistantMessage.content),
       memory: nextSession.memory,
       orchestration: changeSet
-        ? trackResearchChangeSetTodo(nextSession.orchestration, changeSet, assistantMessage.id, assistantCreatedAt)
-        : nextSession.orchestration,
+        ? trackResearchChangeSetTodo(turnOrchestration, changeSet, assistantMessage.id, assistantCreatedAt)
+        : turnOrchestration,
       messages: [...nextSession.messages, assistantMessage],
       updatedAt: iso()
     });
@@ -1596,17 +1935,10 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
       userMessage,
       assistantMessage
     });
-    if (!capturedMemoryDecision && memoryDecisionRepairError) {
-      nextSession = researchChatSessionSchema.parse({
-        ...nextSession,
-        memory: researchMemorySchema.parse({
-          ...nextSession.memory,
-          lastUpdateError: memoryDecisionRepairError,
-          updatedAt: iso()
-        }),
-        updatedAt: iso()
-      });
-    }
+    nextSession = applyHostObservedResearchMemory(nextSession, {
+      userMessage,
+      assistantMessage
+    });
     if (changeSet && !graphLockRunsAfterTurn.length && shouldAutoApproveResearchChangeSet(bundle.project.settings.researchAutoApproveGraphChanges, changeSet)) {
       try {
         nextSession = (await reviewResearchGraphChangeSet({
@@ -1631,29 +1963,11 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
       }
     }
   } catch (error) {
-    if (error instanceof ResearchInvalidToolCallLimit) {
-      const requestedNames = [...new Set(error.requestedToolNames)].map((name) => `\`${name}\``).join(", ");
-      const assistantMessage: ResearchChatMessage = {
-        id: id("msg"),
-        role: "assistant",
-        content: `The selected model repeatedly requested unavailable tools (${requestedNames}), so I stopped after ${error.requestedToolNames.length} invalid attempts. No unavailable tool was executed. The exact available tool names were returned after the first invalid call; retry this message or switch models.`,
-        createdAt: iso(),
-        attachmentIds: [],
-        webUsed: bundle.project.settings.webSearch.enabled,
-        mcpToolCalls,
-        subagentRuns,
-        usage: capturedUsage,
-        error: error.message
-      };
-      nextSession = researchChatSessionSchema.parse({
-        ...nextSession,
-        messages: [...nextSession.messages, assistantMessage],
-        updatedAt: iso()
-      });
-      await persistResearchSession(input.projectRoot, nextSession);
-      return nextSession;
-    }
     if (error instanceof ResearchMcpApprovalRequired) {
+      capturedOrchestration = researchGoalAwaitingApproval(capturedOrchestration, {
+        id: error.request.providerToolName,
+        label: `${error.request.serverLabel}: ${error.request.toolName}`
+      });
       const assistantMessage: ResearchChatMessage = {
         id: id("msg"),
         role: "assistant",
@@ -1680,6 +1994,7 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
           argumentsJson: error.request.argumentsJson,
           originalContent: content,
           filePaths: messageFilePaths,
+          internalContinuation,
           providerContinuation: extractProviderContinuation(error)
         },
         subagentRuns: [],
@@ -1687,6 +2002,7 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
       };
       nextSession = researchChatSessionSchema.parse({
         ...nextSession,
+        orchestration: capturedOrchestration,
         messages: [...nextSession.messages, assistantMessage],
         updatedAt: iso()
       });
@@ -1694,43 +2010,56 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
       return nextSession;
     }
     if (isResearchCancellationError(error)) {
+      const stoppedAt = iso();
       const assistantMessage: ResearchChatMessage = {
         id: id("msg"),
         role: "assistant",
         content: streamedAnswerSoFar.trim() || "Stopped.",
-        createdAt: iso(),
+        createdAt: stoppedAt,
         attachmentIds: [],
         webUsed: bundle.project.settings.webSearch.enabled,
         mcpToolCalls,
-        subagentRuns,
+        subagentRuns: settleAbandonedSubagentRuns(subagentRuns, stoppedAt, { rejectAwaitingApprovals: true }),
         usage: capturedUsage
       };
       nextSession = researchChatSessionSchema.parse({
         ...nextSession,
+        orchestration: capturedOrchestration,
         messages: [...nextSession.messages, assistantMessage],
         updatedAt: iso()
       });
       await persistResearchSession(input.projectRoot, nextSession);
       return nextSession;
     }
+    const loopGuardFailure = researchLoopGuardFailure(error);
+    const failedPicassoRun = subagentRuns.find((run) => run.kind === "graph-reconciliation" && run.status === "failed");
     const assistantMessage: ResearchChatMessage = {
       id: id("msg"),
       role: "assistant",
-      content: provider.kind === "codex-local"
+      content: failedPicassoRun
+        ? [
+            "Picasso could not prepare a valid graph change set, so no review card was created.",
+            failedPicassoRun.error || failedPicassoRun.resultSummary || "The graph-design subagent failed validation.",
+            "Nothing was applied. Review the reported contract failure before trying a revised graph-design objective."
+          ].join("\n\n")
+        : loopGuardFailure
+        ? `ArchiCode stopped a no-progress agent loop. ${loopGuardFailure} No additional tool action was executed after the guard fired.`
+        : provider.kind === "codex-local"
         ? "Codex Local failed. Check that the Codex CLI/app bridge is installed, signed in, and reachable from the Local command setting, then try again."
         : provider.kind === "claude-local"
           ? "Claude Code Local failed. Check that the Claude Code CLI is installed, signed in, and reachable from the Local command setting, then try again."
           : "Research provider failed. Check provider settings, API keys, web capability, or rate limits, then try again.",
-    createdAt: iso(),
-    attachmentIds: [],
-    webUsed: bundle.project.settings.webSearch.enabled,
-    mcpToolCalls,
-    subagentRuns,
-    usage: capturedUsage,
-    error: error instanceof Error ? error.message : String(error)
+      createdAt: iso(),
+      attachmentIds: [],
+      webUsed: bundle.project.settings.webSearch.enabled,
+      mcpToolCalls,
+      subagentRuns: settleAbandonedSubagentRuns(subagentRuns, iso()),
+      usage: capturedUsage,
+      error: error instanceof Error ? error.message : String(error)
     };
     nextSession = researchChatSessionSchema.parse({
       ...nextSession,
+      orchestration: capturedOrchestration,
       messages: [...nextSession.messages, assistantMessage],
       updatedAt: iso()
     });
@@ -1909,7 +2238,8 @@ export async function applyResearchGraphChangeSet(input: {
   const reviewReturn = { session: reviewOutcome.session, bundle: reviewOutcome.bundle, results: reviewOutcome.results };
   const hasUnblockedSubflowWork = shouldContinueAfterResearchReview(changeSet, reviewOutcome.results);
   const hasRejectedOperations = reviewOutcome.results.some((result) => result.status === "rejected");
-  if (!hasUnblockedSubflowWork && !hasRejectedOperations) {
+  const hasUnfinishedGoal = researchGoalIsUnfinished(reviewOutcome.session);
+  if (!hasUnblockedSubflowWork && !hasRejectedOperations && !hasUnfinishedGoal) {
     const reported = await appendAssistantReportMessage(
       input.projectRoot,
       session.id,
@@ -1921,7 +2251,7 @@ export async function applyResearchGraphChangeSet(input: {
     const continued = await sendResearchChatMessage({
       projectRoot: input.projectRoot,
       sessionId: session.id,
-      content: researchChangeSetContinuationPrompt(message, changeSet, reviewOutcome.results, hasUnblockedSubflowWork),
+      content: researchChangeSetContinuationPrompt(message, changeSet, reviewOutcome.results, hasUnblockedSubflowWork, hasUnfinishedGoal),
       providerId: session.providerId,
       internalContinuation: true
     });
@@ -2039,11 +2369,15 @@ function researchChangeSetOperationDetail(operation: ResearchChangeSet["operatio
   if (operation.kind === "link-node-subflow") return `${operation.subflowId ? "Linked" : "Cleared"} detail flow for ${graphReviewNodeLabel(operation.nodeId, nodeTitles)}.`;
   if (operation.kind === "propose-run-profile") return `${operation.mode === "replace" ? "Replaced" : "Created"} run target ${operation.profile.label}.`;
   if (operation.kind === "start-agent-run") {
-    return operation.nodeId ? `Queued AI Implement for ${graphReviewNodeLabel(operation.nodeId, nodeTitles)}.` : `Queued AI Implement for ${operation.flowId}.`;
+    return operation.nodeId
+      ? `Queued AI Implement for ${graphReviewNodeLabel(operation.nodeId, nodeTitles)}. Agent: ${gaiaAgent.title}.`
+      : `Queued AI Implement for ${operation.flowId}. Agent: ${gaiaAgent.title}.`;
   }
   if (operation.kind === "start-run-profile") return `Queued run target ${operation.profileId}.`;
+  if (operation.kind === "stop-runtime-service") return `Stopped runtime service ${operation.serviceId}.`;
+  if (operation.kind === "restart-runtime-service") return `Restarted runtime service ${operation.serviceId}.`;
   if (operation.kind === "retry-run") return `Queued retry for ${operation.runId}.`;
-  if (operation.kind === "start-debugging-run") return `Queued AI Debug for ${operation.runId}.`;
+  if (operation.kind === "start-debugging-run") return `Queued AI Debug for ${operation.runId}. Agent: ${pandoraAgent.title}.`;
   if (operation.kind === "author-acceptance-tests") {
     return operation.nodeId
       ? `Queued acceptance-test regeneration for ${graphReviewNodeLabel(operation.nodeId, nodeTitles)}.`
@@ -2073,7 +2407,8 @@ function researchChangeSetContinuationPrompt(
   message: ResearchChatMessage,
   changeSet: ResearchChangeSet,
   results: ResearchGraphChangeResult[],
-  hasUnblockedSubflowWork: boolean
+  hasUnblockedSubflowWork: boolean,
+  hasUnfinishedGoal: boolean
 ): string {
   const category = researchChangeSetCategory(changeSet.operations);
   const reviewLabel = category === "queue"
@@ -2099,17 +2434,19 @@ function researchChangeSetContinuationPrompt(
           ? "Some queue actions were submitted and some were rejected. Briefly distinguish what was queued from what was not, then ask what they want changed. Do not call this a graph review."
           : null
     : failedCount > 0
-      ? "Some operations failed to apply (see their result messages above). Explain plainly what failed and why, and propose a concrete fix or retry before offering next steps. Do not suggest queueing an AI Implement run while the graph does not yet reflect the intended change, and do not claim the change is fully in place."
+      ? `Some operations failed to apply (see their result messages above). Explain plainly what failed and why, and propose a concrete fix or retry before offering next steps. Do not suggest queueing ${gaiaAgent.name} through AI Implement while the graph does not yet reflect the intended change, and do not claim the change is fully in place.`
       : rejectedCount > 0 && appliedCount === 0
         ? "The user rejected all proposed operations. Briefly acknowledge that, ask why the proposal did not look right, and ask what they'd like to change about it instead of offering to implement or continue with work that was not applied."
         : rejectedCount > 0
           ? "Some operations were applied and some were rejected. Briefly note which parts landed and which did not, ask why the rejected parts were not right, and check what they'd like to change next."
           : null;
-  const nextStepInstruction = category === "queue"
+  const nextStepInstruction = hasUnfinishedGoal
+    ? "A persisted durable goal is still unfinished. Treat this review result as a checkpoint, reactivate or adapt the relevant step, and continue the next safe unblocked work now. If the accepted action queued a build/run, inspect the resulting exact run id and checkpoint waiting for that named run instead of declaring the goal complete. If the user rejected or an operation failed, adapt the plan or record a concrete blocker; never resubmit the identical rejected action."
+    : category === "queue"
     ? "The requested queue submission is complete. Do not return another changeSet unless the user asks for another action. Briefly confirm what was queued and stop."
     : hasUnblockedSubflowWork
       ? "Continue any remaining orchestration work that was already approved or clearly unblocked by this review. If the approved direction needs another graph review card, briefly explain the next step and return the next archicodeResearch changeSet."
-      : "There is no further orchestration work already unblocked by this review, so do not return another changeSet unless the user asks for one. Instead, briefly and concisely ask the user what they'd like to do next: keep editing the graph further, queue this work as an AI Implement run now that the graph reflects it, or just keep discussing/refining the decision.";
+      : `There is no further orchestration work already unblocked by this review, so do not return another changeSet unless the user asks for one. Instead, briefly and concisely ask the user what they'd like to do next: keep editing the graph further, queue this work with ${gaiaAgent.name} through AI Implement now that the graph reflects it, or just keep discussing/refining the decision.`;
   return [
     `${reviewLabel} was just completed for your previous proposed change set.`,
     `Reviewed changeSet: ${changeSet.summary}.`,
@@ -2208,6 +2545,304 @@ async function appendAssistantReportMessage(
   });
 }
 
+async function recordObservedSubagentOutcome(
+  projectRoot: string,
+  sessionId: string,
+  outcome: {
+    kind: SubagentRun["kind"];
+    runId: string;
+    status: "completed" | "failed" | "blocked";
+    summary: string;
+  }
+): Promise<ResearchChatSession> {
+  return withResearchSessionLock(projectRoot, sessionId, async () => {
+    const store = await readChatsForMutation(projectRoot);
+    const session = store.sessions.find((item) => item.id === sessionId);
+    if (!session) throw new Error("Research chat session was not found.");
+    const updatedAt = iso();
+    const evidence = `${outcome.kind} subagent ${outcome.runId} finished with status ${outcome.status}.`;
+    const goal = session.orchestration.goal;
+    let orchestration = session.orchestration;
+    if (goal && goal.status !== "completed" && goal.status !== "cancelled" && !goal.completionEvidence.includes(evidence)) {
+      const currentStep = goal.steps.find((step) => step.id === goal.currentStepId);
+      const nextOpenStep = outcome.status === "completed"
+        ? goal.steps.find((step) => step.id !== currentStep?.id && step.status === "open")
+        : undefined;
+      const blocked = outcome.status === "failed" || outcome.status === "blocked";
+      orchestration = checkpointResearchGoal(orchestration, {
+        status: blocked ? "blocked" : "continue",
+        summary: outcome.summary,
+        currentStepId: nextOpenStep?.id ?? currentStep?.id ?? null,
+        stepUpdates: [
+          ...(currentStep ? [{
+            id: currentStep.id,
+            status: blocked ? "blocked" as const : "done" as const,
+            notes: outcome.summary,
+            evidence: [evidence]
+          }] : []),
+          ...(nextOpenStep ? [{ id: nextOpenStep.id, status: "doing" as const, evidence: [] }] : [])
+        ],
+        evidence: [evidence],
+        blockers: blocked ? [outcome.summary] : [],
+        waitingFor: []
+      }, updatedAt);
+    }
+
+    const sourceMessage = session.messages.find((message) => message.subagentRuns.some((run) => run.id === outcome.runId));
+    const existingRunRef = session.memory.runRefs.find((runRef) => runRef.runId === outcome.runId);
+    const runRef = {
+      ...(existingRunRef ?? { id: id("research-run-ref"), createdAt: updatedAt }),
+      runId: outcome.runId,
+      title: outcome.kind,
+      status: outcome.status,
+      note: outcome.summary,
+      sourceMessageIds: [...new Set([...(existingRunRef?.sourceMessageIds ?? []), ...(sourceMessage ? [sourceMessage.id] : [])])],
+      updatedAt
+    };
+    const memory = researchMemorySchema.parse({
+      ...session.memory,
+      runRefs: existingRunRef
+        ? session.memory.runRefs.map((entry) => entry.id === existingRunRef.id ? runRef : entry)
+        : [...session.memory.runRefs, runRef],
+      lastUpdateError: undefined,
+      updatedAt
+    });
+    const updatedSession = researchChatSessionSchema.parse({
+      ...session,
+      memory,
+      orchestration,
+      updatedAt
+    });
+    await persistResearchSession(projectRoot, updatedSession);
+    return updatedSession;
+  });
+}
+
+async function recordObservedApprovalPause(projectRoot: string, sessionId: string): Promise<ResearchChatSession> {
+  return withResearchSessionLock(projectRoot, sessionId, async () => {
+    const store = await readChatsForMutation(projectRoot);
+    const session = store.sessions.find((item) => item.id === sessionId);
+    if (!session) throw new Error("Research chat session was not found.");
+    const pendingRun = [...session.messages].reverse().flatMap((message) => [...message.subagentRuns].reverse())
+      .find((run) => run.status === "awaiting-approval");
+    const pendingChangeSet = [...session.messages].reverse().find((message) => message.changeSet && !message.changeSet.reviewedAt)?.changeSet;
+    const approval = pendingRun
+      ? { id: pendingRun.id, label: pendingRun.title }
+      : pendingChangeSet
+        ? { id: pendingChangeSet.id, label: pendingChangeSet.summary }
+        : undefined;
+    if (!approval) return session;
+    const updatedSession = researchChatSessionSchema.parse({
+      ...session,
+      orchestration: researchGoalAwaitingApproval(session.orchestration, approval),
+      updatedAt: iso()
+    });
+    await persistResearchSession(projectRoot, updatedSession);
+    return updatedSession;
+  });
+}
+
+function researchSessionHasPendingReview(session: ResearchChatSession): boolean {
+  const lastMessage = session.messages.at(-1);
+  return session.messages.some((message) =>
+    message.subagentRuns.some((run) => run.status === "awaiting-approval") ||
+    Boolean(message.changeSet && !message.changeSet.reviewedAt)) ||
+    Boolean(lastMessage?.mcpApprovalRequest);
+}
+
+async function continueResearchGoalAfterOutcome(
+  projectRoot: string,
+  session: ResearchChatSession,
+  outcomePrompt: string,
+  fallbackReport: string,
+  options: {
+    pauseForNewApproval?: boolean;
+    outcomeEvidenceProvided?: boolean;
+    outcomeKind?: SubagentRun["kind"];
+    outcomeRunId?: string;
+    outcomeStatus?: "completed" | "failed" | "blocked";
+    onActivity?: SendResearchChatMessageInput["onActivity"];
+    onSubagentProgress?: SendResearchChatMessageInput["onSubagentProgress"];
+  } = {}
+): Promise<ResearchChatSession> {
+  let observedSession = session;
+  if (options.outcomeKind && options.outcomeRunId && options.outcomeStatus) {
+    observedSession = await recordObservedSubagentOutcome(projectRoot, session.id, {
+      kind: options.outcomeKind,
+      runId: options.outcomeRunId,
+      status: options.outcomeStatus,
+      summary: fallbackReport.slice(0, 1_000)
+    }).catch(() => observedSession);
+  }
+  if (options.pauseForNewApproval) {
+    observedSession = await recordObservedApprovalPause(projectRoot, session.id).catch(() => observedSession);
+  }
+  if (!researchGoalIsUnfinished(observedSession) || options.pauseForNewApproval) {
+    const reported = await appendAssistantReportMessage(projectRoot, observedSession.id, fallbackReport).catch(() => observedSession);
+    const reconciled = await reconcileResearchOutcomeReportState(projectRoot, reported, options).catch(() => reported);
+    options.onActivity?.("The final report is ready in chat.", "completed");
+    return reconciled;
+  }
+  try {
+    options.onActivity?.(
+      options.outcomeKind === "delphi-testing"
+        ? "Delphi finished. Archi is reviewing the evidence and preparing the final report."
+        : "The subagent finished. Archi is reviewing the outcome and preparing the next response.",
+      "running"
+    );
+    const reported = await sendResearchChatMessage({
+      projectRoot,
+      sessionId: observedSession.id,
+      providerId: observedSession.providerId,
+      internalContinuation: true,
+      outcomeEvidenceProvided: options.outcomeEvidenceProvided,
+      onActivity: options.onActivity,
+      onSubagentProgress: options.onSubagentProgress,
+      content: [
+        "HOST DURABLE-GOAL EXTERNAL-OUTCOME RESUME.",
+        outcomePrompt,
+        options.outcomeEvidenceProvided
+          ? "The host outcome above is the complete evidence packet for this event. Use it directly. Do not list or read chat artifacts merely to restate it, and do not expose internal artifact paths to the user."
+          : "",
+        "The host has already recorded this outcome against the persisted goal. Continue the next useful unblocked step now and finish with a self-contained user-facing result. Do not repeat a rejected action unchanged."
+      ].join("\n\n")
+    });
+    if (researchSessionHasPendingReview(reported)) {
+      options.onActivity?.("Archi prepared the next review card and is waiting for your decision.", "completed");
+      return reported;
+    }
+    const reconciled = await reconcileResearchOutcomeReportState(projectRoot, reported, options);
+    options.onActivity?.("The final report is ready in chat.", "completed");
+    return reconciled;
+  } catch {
+    const reported = await appendAssistantReportMessage(projectRoot, observedSession.id, fallbackReport).catch(() => observedSession);
+    const reconciled = await reconcileResearchOutcomeReportState(projectRoot, reported, options).catch(() => reported);
+    options.onActivity?.("The final report is ready in chat.", "completed");
+    return reconciled;
+  }
+}
+
+function isPrematureReportDeliveryEvidence(value: string): boolean {
+  return /(?:user-facing|final) report (?:was |has been )?(?:delivered|shared|reported)|(?:delivered|shared) (?:the )?(?:final )?report (?:to|with) the user/i.test(value);
+}
+
+function omitChatArtifactReadToolsFromContext(context: string): string {
+  try {
+    const parsed = JSON.parse(context) as { projectFiles?: { tools?: Array<{ name?: string }> } };
+    if (!parsed.projectFiles?.tools) return context;
+    parsed.projectFiles.tools = parsed.projectFiles.tools.filter((tool) =>
+      tool.name !== "archicode_chat_list_artifacts" && tool.name !== "archicode_chat_read_artifact");
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    return context;
+  }
+}
+
+export function requestsRedundantOutcomeArtifactRead(providerToolName: string, args: Record<string, unknown>): boolean {
+  if (providerToolName === "archicode_project_read_artifact") return true;
+  const requestedPath = providerToolName === "archicode_project_list_files" || providerToolName === "archicode_project_search_files"
+    ? args.directory
+    : providerToolName === "archicode_project_read_file"
+      ? args.path
+      : undefined;
+  return typeof requestedPath === "string" && /(?:^|\/)\.archicode\/artifacts(?:\/|$)/i.test(requestedPath.trim().replaceAll("\\", "/"));
+}
+
+function removeStaleDelphiSummaryLines(summary: string): string {
+  return summary
+    .split(/(?<=[.!?])\s+|\n+/)
+    .filter((part) => !(/delphi/i.test(part) && /(?:awaiting|pending|not (?:yet )?run|blocked)/i.test(part)))
+    .join(" ")
+    .trim();
+}
+
+export async function reconcileResearchOutcomeReportState(
+  projectRoot: string,
+  reportedSession: ResearchChatSession,
+  options: {
+    outcomeKind?: SubagentRun["kind"];
+    outcomeRunId?: string;
+    outcomeStatus?: "completed" | "failed" | "blocked";
+  }
+): Promise<ResearchChatSession> {
+  return withResearchSessionLock(projectRoot, reportedSession.id, async () => {
+    const store = await readChatsForMutation(projectRoot);
+    const latest = store.sessions.find((item) => item.id === reportedSession.id) ?? reportedSession;
+    if (researchSessionHasPendingReview(latest)) return latest;
+    const reportMessage = [...latest.messages].reverse().find((message) => message.role === "assistant");
+    if (!reportMessage) return latest;
+    const updatedAt = iso();
+    const persistedEvidence = `Final evidence-backed report persisted in chat message ${reportMessage.id}.`;
+    const goal = latest.orchestration.goal;
+    const isDelphi = options.outcomeKind === "delphi-testing";
+    const delphiBlocked = options.outcomeStatus === "failed" || options.outcomeStatus === "blocked";
+    const hostFinalizedGoal = isDelphi && goal && goal.status !== "completed" && goal.status !== "cancelled"
+      ? checkpointResearchGoal(latest.orchestration, {
+          status: delphiBlocked ? "blocked" : "completed",
+          summary: delphiBlocked
+            ? `Delphi finished with unresolved coverage or an execution blocker. ${persistedEvidence}`
+            : `Delphi audit and final report completed. ${persistedEvidence}`,
+          currentStepId: delphiBlocked ? goal.currentStepId ?? null : null,
+          stepUpdates: goal.steps.map((step) => ({
+            id: step.id,
+            status: delphiBlocked && step.id !== "report-findings" ? "blocked" as const : "done" as const,
+            evidence: [persistedEvidence]
+          })),
+          evidence: [persistedEvidence],
+          blockers: delphiBlocked ? ["Delphi left requested coverage unresolved; see the persisted final report."] : [],
+          waitingFor: []
+        }, updatedAt).goal
+      : goal;
+    const reconciledGoal = hostFinalizedGoal?.status === "completed"
+      ? {
+          ...hostFinalizedGoal,
+          checkpointSummary: `Goal completed. ${persistedEvidence}`,
+          completionEvidence: [...new Set([
+            ...hostFinalizedGoal.completionEvidence.filter((entry) => !isPrematureReportDeliveryEvidence(entry)),
+            persistedEvidence
+          ])],
+          steps: hostFinalizedGoal.steps.map((step) => ({
+            ...step,
+            evidence: step.evidence.filter((entry) => !isPrematureReportDeliveryEvidence(entry))
+          })),
+          updatedAt
+        }
+      : hostFinalizedGoal;
+    const delphiMemoryMatch = (value: string | undefined): boolean => /delphi|test(?:ing)?\s*(?:\/|and)?\s*runtime audit/i.test(value ?? "");
+    const delphiOutcomeStatus = options.outcomeStatus ?? "completed";
+    const delphiSummaryLine = `Delphi audit finished with status ${delphiOutcomeStatus}; its final evidence-backed report is persisted in this chat.`;
+    const retainedDelphiSummary = removeStaleDelphiSummaryLines(latest.memory.summary);
+    const memory = isDelphi
+      ? researchMemorySchema.parse({
+          ...latest.memory,
+          summary: retainedDelphiSummary.includes(delphiSummaryLine)
+            ? retainedDelphiSummary
+            : [retainedDelphiSummary, delphiSummaryLine].filter(Boolean).join("\n"),
+          todos: latest.memory.todos.map((todo) => delphiMemoryMatch(`${todo.title} ${todo.notes ?? ""}`) && todo.status !== "cancelled"
+            ? { ...todo, status: delphiBlocked ? "blocked" : "done", notes: delphiBlocked ? "Delphi audit finished with unresolved coverage; final report persisted in chat." : "Delphi audit completed; final report persisted in chat.", updatedAt }
+            : todo),
+          runRefs: latest.memory.runRefs.map((runRef) => (
+            runRef.runId === options.outcomeRunId || runRef.runId === "delphi-testing" || delphiMemoryMatch(`${runRef.title ?? ""} ${runRef.note ?? ""}`)
+          ) ? { ...runRef, status: delphiOutcomeStatus, note: "Audit finished; final report persisted in chat.", updatedAt } : runRef),
+          lastUpdateError: undefined,
+          updatedAt
+        })
+      : latest.memory;
+    const updatedSession = researchChatSessionSchema.parse({
+      ...latest,
+      memory,
+      orchestration: {
+        ...latest.orchestration,
+        goal: reconciledGoal,
+        updatedAt: reconciledGoal === goal ? latest.orchestration.updatedAt : updatedAt
+      },
+      updatedAt
+    });
+    await persistResearchSession(projectRoot, updatedSession);
+    return updatedSession;
+  });
+}
+
 function mergeApprovalReport(
   mergeResult: MicroRunResult,
   commitOutcome: { committed: boolean; message?: string; reason?: string },
@@ -2266,6 +2901,81 @@ function graphReconciliationReport(
   return lines.join("\n\n");
 }
 
+export function delphiAuditReport(result: MicroRunResult, reportSaved = false, setupPrepared = false): string {
+  const output = result.output as DelphiTestingOutput | undefined;
+  const visuallyAnalyzedCount = result.diagnostics?.visuallyAnalyzedArtifactIds?.length ?? 0;
+  const timedOut = result.failureKind === "timeout";
+  if (result.status === "failed" && !output) {
+    return timedOut
+      ? `Delphi's audit timed out before it could return a final report: ${result.error ?? "the provider stopped responding"}.`
+      : `Delphi's audit failed to complete: ${result.error ?? "unknown error"}.`;
+  }
+  const lines = [
+    result.status === "failed"
+      ? timedOut
+        ? `Delphi timed out before returning its final report. Host-observed partial evidence was preserved: ${result.error ?? "the provider stopped responding"}.`
+        : `One or more Delphi target audits failed to complete: ${result.error ?? "unknown error"}.`
+      : "",
+    `${result.status === "failed" ? "Partial audit verdict" : "Delphi finished with verdict"}: ${output?.verdict ?? "unknown"}.`,
+    output?.summary,
+    output?.checks.length ? `${output.checks.length} check${output.checks.length === 1 ? " was" : "s were"} recorded.` : "No executable checks were recorded.",
+    output?.findings.length ? `${output.findings.length} finding${output.findings.length === 1 ? "" : "s"} require attention.` : "No structured defects were reported.",
+    output?.artifacts.length
+      ? visuallyAnalyzedCount > 0
+        ? `The selected vision-capable model inspected pixels from ${visuallyAnalyzedCount} captured screenshot${visuallyAnalyzedCount === 1 ? "" : "s"}.`
+        : "Screenshots were captured for the user's review; the selected model did not inspect their pixels."
+      : "",
+    output?.status === "needs-setup" ? "Required test tooling is not installed. Delphi returned an approval-required setup plan; nothing was installed automatically." : ""
+  ].filter(Boolean) as string[];
+  for (const [index, finding] of (output?.findings ?? []).slice(0, 8).entries()) {
+    const reproduction = finding.reproductionSteps.length
+      ? ` Reproduce: ${finding.reproductionSteps.slice(0, 3).join("; ")}`
+      : "";
+    const evidence = finding.evidence.length
+      ? ` Evidence: ${finding.evidence.slice(0, 3).join("; ")}`
+      : "";
+    lines.push(`Finding ${index + 1} [${finding.severity}/${finding.category}] ${finding.title}: ${finding.detail}${reproduction}${evidence}`.slice(0, 4_000));
+  }
+  for (const toolchain of output?.toolchains ?? []) {
+    if (toolchain.status !== "missing" || !toolchain.installPlan) continue;
+    const packages = toolchain.installPlan.packages.length ? ` Packages/components: ${toolchain.installPlan.packages.join(", ")}.` : "";
+    const actions = toolchain.installPlan.actions.length ? ` ${toolchain.installPlan.actions.join(" ")}` : "";
+    lines.push(`Setup needed for ${toolchain.adapter} (${toolchain.installPlan.scope}; separate approval required).${packages}${actions}`);
+  }
+  if (output?.blockers.length) lines.push(`Blockers: ${output.blockers.join("; ")}`);
+  if (output?.recommendedNextSteps.length) lines.push(`Next: ${output.recommendedNextSteps.join("; ")}`);
+  if (reportSaved) lines.push("A detailed structured report was saved in this chat's artifacts.");
+  if (setupPrepared) lines.push("A separate Delphi setup card is ready for approval. Approving it installs only the listed adapter components in ArchiCode's managed cache, then resumes this audit.");
+  return lines.join("\n\n");
+}
+
+function delphiManagedSetupInput(
+  args: DelphiTestingInput,
+  environment: Pick<Awaited<ReturnType<typeof inspectDelphiTestEnvironment>>, "toolchains">,
+  output?: DelphiTestingOutput
+): DelphiTestingInput | undefined {
+  if (args.mode === "plan" || args.mode === "setup") return undefined;
+  const adapters = [...environment.toolchains, ...(output?.toolchains ?? [])].flatMap((toolchain) =>
+    toolchain.status === "missing" && (toolchain.adapter === "playwright" || toolchain.adapter === "appium") && toolchain.installPlan?.scope === "managed-cache"
+      ? [toolchain.adapter]
+      : []
+  );
+  if (!adapters.length) return undefined;
+  return delphiTestingInputSchema.parse({
+    ...args,
+    mode: "setup",
+    setup: {
+      adapters: Array.from(new Set(adapters)),
+      playwrightBrowsers: ["chromium"],
+      appiumDrivers: [
+        ...(args.platforms.includes("android") ? ["uiautomator2" as const] : []),
+        ...(args.platforms.includes("ios") ? ["xcuitest" as const] : [])
+      ],
+      resumeMode: args.mode === "retest" ? "retest" : "audit"
+    }
+  });
+}
+
 function locateSubagentRun(
   session: ResearchChatSession,
   messageId: string,
@@ -2321,15 +3031,63 @@ function subagentApprovalContinuationPrompt(
  * success, then posts a synthetic internalContinuation turn so the assistant
  * narrates the outcome in its own voice — mirroring applyResearchGraphChangeSet.
  */
-export async function respondToSubagentRun(input: {
+type RespondToSubagentRunInput = {
   projectRoot: string;
   sessionId: string;
   messageId: string;
   runId: string;
   decision: "approved" | "rejected";
   resolutionStrategy?: string;
-  onProgress?: (payload: { runId: string; kind: SubagentRun["kind"]; title: string; message: string; status?: "running" | "completed" | "failed" }) => void;
-}): Promise<ResearchChatSession> {
+  runtimeTargetProfileIds?: string[];
+  onProgress?: (payload: {
+    runId: string;
+    kind: SubagentRun["kind"];
+    title: string;
+    message: string;
+    status?: "running" | "completed" | "blocked" | "failed";
+    artifact?: { id: string; label: string; path: string; mediaType: string };
+    observationAnalysis?: { artifactId: string; status: "started" | "completed" | "failed" };
+  }) => void;
+  onActivity?: SendResearchChatMessageInput["onActivity"];
+};
+
+/** Persists an honest failed state when an approval flow threw after marking its run running. */
+async function persistInterruptedSubagentRun(input: RespondToSubagentRunInput, error: unknown): Promise<void> {
+  await withResearchSessionLock(input.projectRoot, input.sessionId, async () => {
+    const store = await readChatsForMutation(input.projectRoot);
+    const session = store.sessions.find((item) => item.id === input.sessionId);
+    if (!session) return;
+    const { messageIndex, message, runIndex } = locateSubagentRun(session, input.messageId, input.runId);
+    if (!message || runIndex < 0 || message.subagentRuns[runIndex]!.status !== "running") return;
+    const failedRun = transitionSubagentRun(message.subagentRuns[runIndex]!, "failed", {
+      error: error instanceof Error ? error.message : String(error)
+    });
+    const updatedSession = researchChatSessionSchema.parse({
+      ...session,
+      messages: session.messages.map((entry, index) => index === messageIndex
+        ? { ...message, subagentRuns: message.subagentRuns.map((run, index2) => index2 === runIndex ? failedRun : run) }
+        : entry),
+      updatedAt: iso()
+    });
+    await persistResearchSession(input.projectRoot, updatedSession);
+  });
+}
+
+export async function respondToSubagentRun(input: RespondToSubagentRunInput): Promise<ResearchChatSession> {
+  // The live registry lets stale-"running" reconciliation distinguish this
+  // in-flight approval from a card orphaned by a crash or restart, and the
+  // catch guarantees no failure path can leave the card running forever.
+  try {
+    return await executeSubagentRunDecision(input);
+  } catch (error) {
+    if (input.decision === "approved") await persistInterruptedSubagentRun(input, error).catch(() => undefined);
+    throw error;
+  } finally {
+    markSubagentRunSettled(input.runId);
+  }
+}
+
+async function executeSubagentRunDecision(input: RespondToSubagentRunInput): Promise<ResearchChatSession> {
   const { session: startedSession, run: startedRun } = await withResearchSessionLock(input.projectRoot, input.sessionId, async () => {
     const store = await readChatsForMutation(input.projectRoot);
     const session = store.sessions.find((item) => item.id === input.sessionId);
@@ -2339,9 +3097,25 @@ export async function respondToSubagentRun(input: {
     const run = message.subagentRuns[runIndex];
     if (run.status !== "awaiting-approval") throw new Error("This subagent run is no longer awaiting approval.");
 
-    const updatedRun: SubagentRun = input.decision === "rejected"
-      ? { ...run, status: "rejected", updatedAt: iso() }
-      : { ...run, status: "running", proposedResolutionStrategy: input.resolutionStrategy ?? run.proposedResolutionStrategy, updatedAt: iso() };
+    const selectedRuntimeTargetProfileIds = [...new Set((input.runtimeTargetProfileIds ?? []).map((profileId) => profileId.trim()).filter(Boolean))];
+    if (input.decision === "approved" && run.runtimeTargetSelection) {
+      const allowed = new Set(run.runtimeTargetSelection.options.map((option) => option.profileId));
+      if (selectedRuntimeTargetProfileIds.length < run.runtimeTargetSelection.minSelections) {
+        throw new Error("Choose at least one Run App target for Delphi.");
+      }
+      const unknown = selectedRuntimeTargetProfileIds.filter((profileId) => !allowed.has(profileId));
+      if (unknown.length) throw new Error(`Unknown Delphi Run App target selection: ${unknown.join(", ")}.`);
+      if (!run.runtimeTargetSelection.allowMultiple && selectedRuntimeTargetProfileIds.length > 1) {
+        throw new Error("This Delphi audit accepts only one Run App target.");
+      }
+    }
+
+    const updatedRun = input.decision === "rejected"
+      ? transitionSubagentRun(run, "rejected")
+      : transitionSubagentRun(run, "running", {
+          proposedResolutionStrategy: input.resolutionStrategy ?? run.proposedResolutionStrategy,
+          selectedRuntimeTargetProfileIds: run.runtimeTargetSelection ? selectedRuntimeTargetProfileIds : run.selectedRuntimeTargetProfileIds
+        });
     const updatedMessage: ResearchChatMessage = {
       ...message,
       subagentRuns: message.subagentRuns.map((entry, index) => index === runIndex ? updatedRun : entry)
@@ -2353,14 +3127,18 @@ export async function respondToSubagentRun(input: {
   });
 
   if (input.decision === "rejected") {
-    const parsedArgs = JSON.parse(startedRun.argumentsJson || "{}") as Partial<MergeResolutionInput & GraphReconciliationInput>;
+    const parsedArgs = JSON.parse(startedRun.argumentsJson || "{}") as { conflictedFiles?: string[]; resolvedFiles?: string[] };
     const files = parsedArgs.conflictedFiles ?? parsedArgs.resolvedFiles ?? [];
-    const action = startedRun.kind === "merge-resolution" ? "merge resolution" : "graph reconciliation";
-    return appendAssistantReportMessage(
+    const action = startedRun.kind === "merge-resolution" ? "merge resolution"
+      : startedRun.kind === "delphi-testing" ? "Delphi audit"
+        : "graph reconciliation";
+    const report = `Cancelled the ${action} proposal${files.length ? ` for ${files.join(", ")}` : ""}. I did not run that subagent.`;
+    return continueResearchGoalAfterOutcome(
       input.projectRoot,
-      input.sessionId,
-      `Cancelled the ${action} proposal${files.length ? ` for ${files.join(", ")}` : ""}. I did not run that subagent.`
-    ).catch(() => startedSession);
+      startedSession,
+      `The user rejected the proposed ${action}. Nothing in that proposal ran.`,
+      report
+    );
   }
 
   // Approved: actually run the requested microrun now, outside the session lock.
@@ -2370,6 +3148,422 @@ export async function respondToSubagentRun(input: {
   if (!configuredProvider) throw new Error("Choose a provider in Settings before using Research.");
   const provider = researchProviderWithModel(configuredProvider, startedSession.modelId ?? undefined);
   const hydratedProvider = await hydrateProviderForUse(provider);
+
+  if (startedRun.kind === "delphi-testing") {
+    let args = delphiTestingInputSchema.parse(JSON.parse(startedRun.argumentsJson || "{}"));
+    const setupResults: Awaited<ReturnType<typeof installDelphiManagedTool>>[] = [];
+    const observedArtifacts: Array<{ id: string; label: string; path: string; mediaType: string }> = [];
+    const visuallyAnalyzedArtifactIds = new Set(startedRun.diagnostics?.visuallyAnalyzedArtifactIds ?? []);
+    let evidencePersistence = Promise.resolve();
+    const persistLiveEvidence = (): Promise<void> => {
+      const artifactsSnapshot = [...observedArtifacts];
+      const analyzedSnapshot = [...visuallyAnalyzedArtifactIds];
+      evidencePersistence = evidencePersistence.then(async () => {
+        await withResearchSessionLock(input.projectRoot, input.sessionId, async () => {
+          const store = await readChatsForMutation(input.projectRoot);
+          const session = store.sessions.find((item) => item.id === input.sessionId);
+          if (!session) return;
+          const { messageIndex, message, runIndex } = locateSubagentRun(session, input.messageId, input.runId);
+          if (!message || runIndex < 0 || message.subagentRuns[runIndex]!.status !== "running") return;
+          const currentRun = message.subagentRuns[runIndex]!;
+          const artifacts = Array.from(new Map([
+            ...(currentRun.artifacts ?? []),
+            ...artifactsSnapshot
+          ].map((artifact) => [artifact.id, artifact])).values());
+          const analyzedIds = Array.from(new Set([
+            ...(currentRun.diagnostics?.visuallyAnalyzedArtifactIds ?? []),
+            ...analyzedSnapshot
+          ]));
+          const updatedRun = transitionSubagentRun(currentRun, "running", {
+            artifacts,
+            diagnostics: {
+              ...currentRun.diagnostics,
+              visuallyAnalyzedArtifactIds: analyzedIds
+            }
+          });
+          const updatedMessage: ResearchChatMessage = {
+            ...message,
+            subagentRuns: message.subagentRuns.map((run, index) => index === runIndex ? updatedRun : run)
+          };
+          const updatedSession = researchChatSessionSchema.parse({
+            ...session,
+            messages: session.messages.map((entry, index) => index === messageIndex ? updatedMessage : entry),
+            updatedAt: iso()
+          });
+          await persistResearchSession(input.projectRoot, updatedSession);
+        });
+      }).catch((error) => {
+        console.warn(`[delphi-testing] Could not persist live evidence state: ${error instanceof Error ? error.message : String(error)}`);
+      });
+      return evidencePersistence;
+    };
+    const observeArtifact = (artifact: { id: string; label: string; path: string; mediaType: string }): void => {
+      if (!observedArtifacts.some((entry) => entry.id === artifact.id)) observedArtifacts.push(artifact);
+      input.onProgress?.({
+        runId: input.runId,
+        kind: "delphi-testing",
+        title: startedRun.title,
+        message: `Captured ${artifact.label}`,
+        status: "running",
+        artifact
+      });
+      void persistLiveEvidence();
+    };
+    if (args.mode === "setup") {
+      if (!args.setup) throw new Error("The Delphi setup proposal is missing its adapter plan.");
+      try {
+        for (const adapter of args.setup.adapters) {
+          setupResults.push(await installDelphiManagedTool(input.projectRoot, {
+            adapter,
+            playwrightBrowsers: adapter === "playwright" ? args.setup.playwrightBrowsers : undefined,
+            appiumDrivers: adapter === "appium" ? args.setup.appiumDrivers : undefined
+          }, {
+            onProgress: (message) => input.onProgress?.({ runId: input.runId, kind: "delphi-testing", title: startedRun.title, message, status: "running" })
+          }));
+        }
+        args = delphiTestingInputSchema.parse({
+          ...args,
+          mode: args.setup.resumeMode,
+          setup: undefined
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        input.onProgress?.({ runId: input.runId, kind: "delphi-testing", title: startedRun.title, message, status: "failed" });
+        const failedSession = await withResearchSessionLock(input.projectRoot, input.sessionId, async () => {
+          const store = await readChatsForMutation(input.projectRoot);
+          const session = store.sessions.find((item) => item.id === input.sessionId);
+          if (!session) throw new Error("Research chat session was not found.");
+          const { messageIndex, message: chatMessage, runIndex } = locateSubagentRun(session, input.messageId, input.runId);
+          if (!chatMessage || runIndex < 0) throw new Error("Subagent run was not found.");
+          const failedRun = transitionSubagentRun(chatMessage.subagentRuns[runIndex]!, "failed", {
+            resultSummary: `Delphi setup failed: ${message}`.slice(0, 1000),
+            error: message
+          });
+          const updatedMessage: ResearchChatMessage = {
+            ...chatMessage,
+            subagentRuns: chatMessage.subagentRuns.map((entry, index) => index === runIndex ? failedRun : entry)
+          };
+          const updatedSession = researchChatSessionSchema.parse({
+            ...session,
+            messages: session.messages.map((entry, index) => index === messageIndex ? updatedMessage : entry),
+            updatedAt: iso()
+          });
+          await persistResearchSession(input.projectRoot, updatedSession);
+          return updatedSession;
+        });
+        const report = `Delphi's approved managed-tool setup failed: ${message}\n\nNo project dependency or source file was changed. You can retry the setup card after addressing the reported network/tooling issue.`;
+        return continueResearchGoalAfterOutcome(
+          input.projectRoot,
+          failedSession,
+          `Delphi's approved managed-tool setup failed without changing project dependencies or source files. Failure: ${message}`,
+          report,
+          {
+            outcomeKind: "delphi-testing",
+            outcomeRunId: input.runId,
+            outcomeStatus: "failed",
+            onActivity: input.onActivity,
+            onSubagentProgress: ({ runId, kind, title, message: progressMessage, status }) => input.onProgress?.({ runId, kind, title, message: progressMessage, status })
+          }
+        );
+      }
+    }
+    const selectedProfileIds = startedRun.selectedRuntimeTargetProfileIds?.length
+      ? startedRun.selectedRuntimeTargetProfileIds
+      : args.target?.profileId
+        ? [args.target.profileId]
+        : [];
+    const selectedOptions = new Map((startedRun.runtimeTargetSelection?.options ?? []).map((option) => [option.profileId, option]));
+    const platformForRuntimeKind = (kind: string | undefined): DelphiTestingInput["platforms"][number] | undefined => {
+      const normalized = kind?.toLowerCase();
+      if (normalized === "web" || normalized === "browser") return "web";
+      if (normalized === "electron" || normalized === "desktop") return "electron";
+      if (normalized === "flutter") return "flutter";
+      if (normalized === "android") return "android";
+      if (normalized === "ios") return "ios";
+      return undefined;
+    };
+    type DelphiTargetAudit = {
+      profileId?: string;
+      label: string;
+      args: DelphiTestingInput;
+      lease?: DelphiRuntimeLease;
+      stopped: boolean;
+      result?: MicroRunResult;
+    };
+    const targetAudits: DelphiTargetAudit[] = (selectedProfileIds.length ? selectedProfileIds : [undefined]).map((profileId) => ({
+      profileId,
+      label: profileId ? selectedOptions.get(profileId)?.label ?? profileId : "Project checks",
+      args: profileId
+        ? delphiTestingInputSchema.parse({
+            ...args,
+            platforms: Array.from(new Set([
+              ...args.platforms,
+              platformForRuntimeKind(selectedOptions.get(profileId)?.kind)
+            ].filter((platform): platform is DelphiTestingInput["platforms"][number] => Boolean(platform)))),
+            target: { ...args.target, profileId, launch: "if-needed" }
+          })
+        : args,
+      stopped: false
+    }));
+    let auditResult: MicroRunResult;
+    try {
+      // Start every selected runtime before auditing any of them. This keeps
+      // combinations such as API + frontend alive together for the full pass.
+      if (args.mode !== "plan") {
+        for (const targetAudit of targetAudits) {
+          try {
+            targetAudit.lease = await acquireDelphiRuntimeTarget(input.projectRoot, targetAudit.args, {
+              onProgress: (message) => input.onProgress?.({ runId: input.runId, kind: "delphi-testing", title: startedRun.title, message: `[${targetAudit.label}] ${message}`, status: "running" })
+            });
+            if (targetAudit.lease) {
+              targetAudit.args = delphiTestingInputSchema.parse({
+                ...targetAudit.args,
+                target: {
+                  ...targetAudit.args.target,
+                  baseUrl: targetAudit.args.target?.baseUrl ?? targetAudit.lease.service.url,
+                  deviceId: targetAudit.lease.service.runTargetId ?? targetAudit.lease.service.targetId ?? targetAudit.args.target?.deviceId
+                }
+              });
+            }
+          } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            targetAudit.result = { id: id("micro"), kind: "delphi-testing", status: "failed", error: message, createdAt: iso(), completedAt: iso() };
+          }
+        }
+      }
+
+      for (const targetAudit of targetAudits) {
+        if (targetAudit.result) continue;
+        const auditArgs: DelphiTestingInput = targetAudit.args;
+        try {
+          targetAudit.result = await executeMicroRun(
+            input.projectRoot,
+            "delphi-testing",
+            { ...auditArgs, objective: `${auditArgs.objective} [Target: ${targetAudit.label}]` },
+            hydratedProvider,
+            bundle,
+            {
+              runConsoleCommand: (commandArgs) => {
+                return runInternalConsoleCommand(input.projectRoot, bundle.project.settings, commandArgs, {
+                  authorization: {
+                    actor: "delphi",
+                    capabilities: ["inspect-project", "verify-project"]
+                  },
+                  maxTimeoutMs: 10 * 60_000
+                });
+              },
+              onProgress: (message) => input.onProgress?.({ runId: input.runId, kind: "delphi-testing", title: startedRun.title, message: `[${targetAudit.label}] ${message}`, status: "running" }),
+              onArtifact: observeArtifact,
+              onObservationAnalysis: async (event) => {
+                input.onProgress?.({
+                  runId: input.runId,
+                  kind: "delphi-testing",
+                  title: startedRun.title,
+                  message: "",
+                  status: "running",
+                  observationAnalysis: { artifactId: event.artifact.id, status: event.status }
+                });
+                if (event.status === "completed") {
+                  visuallyAnalyzedArtifactIds.add(event.artifact.id);
+                  await persistLiveEvidence();
+                }
+              }
+            }
+          );
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          targetAudit.result = { id: id("micro"), kind: "delphi-testing", status: "failed", error: message, createdAt: iso(), completedAt: iso() };
+        }
+      }
+    } finally {
+      for (const targetAudit of [...targetAudits].reverse()) {
+        try {
+          targetAudit.stopped = await releaseDelphiRuntimeTarget(
+            input.projectRoot,
+            targetAudit.lease,
+            targetAudit.args,
+            (message) => input.onProgress?.({ runId: input.runId, kind: "delphi-testing", title: startedRun.title, message: `[${targetAudit.label}] ${message}`, status: "running" })
+          );
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          targetAudit.result = {
+            ...(targetAudit.result ?? { id: id("micro"), kind: "delphi-testing", createdAt: iso(), completedAt: iso() }),
+            status: "failed",
+            error: `Audit completed, but Delphi could not clean up its owned runtime target: ${message}`
+          };
+        }
+      }
+    }
+    await evidencePersistence;
+    const completedTargetResults = targetAudits.map((targetAudit) => ({
+      ...targetAudit,
+      result: targetAudit.result ?? { id: id("micro"), kind: "delphi-testing" as const, status: "failed" as const, error: "Delphi did not return a target result.", createdAt: iso(), completedAt: iso() }
+    }));
+    const outputs = completedTargetResults.flatMap((targetAudit) => targetAudit.result.output
+      ? [{ label: targetAudit.label, output: targetAudit.result.output as DelphiTestingOutput }]
+      : []);
+    const executionFailures = completedTargetResults.filter((targetAudit) => targetAudit.result.status === "failed");
+    const aggregateFailureKind = executionFailures.some((targetAudit) => targetAudit.result.failureKind === "timeout")
+      ? "timeout" as const
+      : executionFailures.length
+        ? "error" as const
+        : undefined;
+    const aggregateOutput: DelphiTestingOutput = {
+      status: outputs.some(({ output }) => output.status === "needs-setup") ? "needs-setup"
+        : executionFailures.length || outputs.some(({ output }) => output.status === "blocked") ? "blocked"
+          : "completed",
+      verdict: outputs.some(({ output }) => output.verdict === "failed") ? "failed"
+        : executionFailures.length || outputs.some(({ output }) => output.verdict === "blocked" || output.verdict === "not-run") ? "blocked"
+          : outputs.length && outputs.every(({ output }) => output.verdict === "passed") ? "passed"
+            : "not-run",
+      summary: completedTargetResults.map((targetAudit) => {
+        const output = targetAudit.result.output as DelphiTestingOutput | undefined;
+        return `${targetAudit.label}: ${output?.summary ?? targetAudit.result.error ?? "No result."}`;
+      }).join(" "),
+      attempts: outputs.reduce((sum, entry) => sum + entry.output.attempts, 0),
+      checks: outputs.flatMap(({ label, output }) => output.checks.map((check) => ({ ...check, name: `[${label}] ${check.name}` }))),
+      findings: outputs.flatMap(({ label, output }) => output.findings.map((finding) => ({ ...finding, title: `[${label}] ${finding.title}` }))),
+      toolchains: outputs.flatMap(({ output }) => output.toolchains),
+      artifacts: outputs.flatMap(({ output }) => output.artifacts),
+      blockers: [
+        ...executionFailures.map((targetAudit) => `${targetAudit.label}: ${targetAudit.result.error ?? "execution failed"}`),
+        ...outputs.flatMap(({ label, output }) => output.blockers.map((blocker) => `${label}: ${blocker}`))
+      ],
+      recommendedNextSteps: outputs.flatMap(({ label, output }) => output.recommendedNextSteps.map((step) => `${label}: ${step}`))
+    };
+    const aggregateUsage = completedTargetResults.reduce<LlmUsage | undefined>((usage, targetAudit) =>
+      targetAudit.result.usage ? mergeResearchUsage(usage, targetAudit.result.usage) : usage, undefined);
+    const targetDiagnostics = completedTargetResults.flatMap((targetAudit) => targetAudit.result.diagnostics ? [targetAudit.result.diagnostics] : []);
+    const aggregateDiagnostics: MicroRunResult["diagnostics"] = targetDiagnostics.length ? {
+      responsePreview: targetDiagnostics.map((diagnostic) => diagnostic.responsePreview).filter(Boolean).join("\n\n").slice(0, 4_000) || undefined,
+      responseRedacted: targetDiagnostics.some((diagnostic) => diagnostic.responseRedacted) || undefined,
+      responseTruncated: targetDiagnostics.some((diagnostic) => diagnostic.responseTruncated) || undefined,
+      repairAttempted: targetDiagnostics.some((diagnostic) => diagnostic.repairAttempted) || undefined,
+      validationErrors: Array.from(new Set(targetDiagnostics.flatMap((diagnostic) => diagnostic.validationErrors ?? []))) || undefined,
+      toolCallNames: Array.from(new Set(targetDiagnostics.flatMap((diagnostic) => diagnostic.toolCallNames ?? []))),
+      toolRejections: targetDiagnostics.flatMap((diagnostic) => diagnostic.toolRejections ?? []).slice(-8),
+      visuallyAnalyzedArtifactIds: Array.from(new Set(targetDiagnostics.flatMap((diagnostic) => diagnostic.visuallyAnalyzedArtifactIds ?? [])))
+    } : undefined;
+    auditResult = {
+      id: id("micro"),
+      kind: "delphi-testing",
+      status: executionFailures.length ? "failed" : "completed",
+      output: aggregateOutput,
+      error: executionFailures.length ? executionFailures.map((targetAudit) => `${targetAudit.label}: ${targetAudit.result.error ?? "execution failed"}`).join("; ") : undefined,
+      failureKind: aggregateFailureKind,
+      usage: aggregateUsage,
+      diagnostics: aggregateDiagnostics,
+      createdAt: completedTargetResults[0]?.result.createdAt ?? iso(),
+      completedAt: iso()
+    };
+    input.onProgress?.({
+      runId: input.runId,
+      kind: "delphi-testing",
+      title: startedRun.title,
+      message: "",
+      status: auditResult.status === "failed" ? "failed" : "completed"
+    });
+    input.onActivity?.("Delphi finished this pass. Archi is processing its evidence and next step.", "running");
+    const reportArtifact = await createChatArtifact(input.projectRoot, input.sessionId, {
+      title: `Delphi audit — ${args.objective.slice(0, 120)}`,
+      content: JSON.stringify({
+        managedSetup: setupResults,
+        targets: completedTargetResults.map((targetAudit) => ({
+          profileId: targetAudit.profileId,
+          label: targetAudit.label,
+          runtime: targetAudit.lease ? {
+            serviceId: targetAudit.lease.service.id,
+            targetId: targetAudit.lease.service.targetId,
+            runTargetId: targetAudit.lease.service.runTargetId,
+            url: targetAudit.lease.service.url,
+            startedByDelphi: targetAudit.lease.startedByDelphi,
+            stoppedAfterAudit: targetAudit.stopped
+          } : undefined,
+          microRun: targetAudit.result
+        })),
+        aggregate: auditResult
+      }, null, 2),
+      format: "json",
+      summary: auditResult.status === "failed" ? auditResult.error : (auditResult.output as DelphiTestingOutput | undefined)?.summary
+    }).catch(() => undefined);
+    const auditOutput = auditResult.output as DelphiTestingOutput | undefined;
+    const persistedAuditStatus: SubagentRun["status"] = auditResult.status === "failed"
+      ? "failed"
+      : auditOutput?.status === "blocked"
+        ? "blocked"
+        : "completed";
+    const runtimeSummary = completedTargetResults.flatMap((targetAudit) => targetAudit.lease ? [
+      `Runtime ${targetAudit.lease.startedByDelphi ? "started by Delphi" : "reused"}: ${targetAudit.lease.plan.profileLabel}${targetAudit.lease.service.runTargetId ? ` (${targetAudit.lease.service.runTargetId})` : ""}${targetAudit.lease.service.url ? ` at ${targetAudit.lease.service.url}` : ""}.${targetAudit.stopped ? " Delphi stopped its owned runtime/target after the audit." : " The runtime remains available."}`
+    ] : []).join("\n");
+    const setupInput = auditResult.status === "failed" || setupResults.length
+      ? undefined
+      : delphiManagedSetupInput(args, { toolchains: auditOutput?.toolchains ?? [] }, auditOutput);
+    const setupRun: SubagentRun | undefined = setupInput ? {
+      id: id("subagent-run"),
+      kind: "delphi-testing",
+      status: "awaiting-approval",
+      title: `Set up Delphi adapters for: ${args.objective.slice(0, 80)}`,
+      argumentsJson: JSON.stringify(setupInput),
+      runtimeTargetSelection: startedRun.runtimeTargetSelection,
+      selectedRuntimeTargetProfileIds: startedRun.selectedRuntimeTargetProfileIds,
+      imageInputSupport: startedRun.imageInputSupport,
+      reviewReason: [
+        `Install ${setupInput.setup!.adapters.join(" and ")} only in ArchiCode's managed tool cache.`,
+        setupInput.setup!.adapters.map((adapter) => `${adapter}: ${delphiAdapterCacheRoot(input.projectRoot, adapter)}`).join("; "),
+        setupInput.setup!.adapters.includes("playwright") ? `Download Playwright browser engines: ${setupInput.setup!.playwrightBrowsers.join(", ")}.` : "",
+        setupInput.setup!.adapters.includes("appium") && setupInput.setup!.appiumDrivers.length ? `Install Appium drivers: ${setupInput.setup!.appiumDrivers.join(", ")}.` : "",
+        setupInput.target?.launch === "if-needed" ? "After setup, Delphi will run the same previously approved Run App target lifecycle before resuming the audit." : "",
+        "This does not add project dependencies or edit source files. After setup, Delphi will resume the audit automatically."
+      ].filter(Boolean).join(" "),
+      progress: [],
+      createdAt: iso(),
+      updatedAt: iso()
+    } : undefined;
+    const finalSession = await withResearchSessionLock(input.projectRoot, input.sessionId, async () => {
+      const store = await readChatsForMutation(input.projectRoot);
+      const session = store.sessions.find((item) => item.id === input.sessionId);
+      if (!session) throw new Error("Research chat session was not found.");
+      const { messageIndex, message, runIndex } = locateSubagentRun(session, input.messageId, input.runId);
+      if (!message || runIndex < 0) throw new Error("Subagent run was not found.");
+      const completedRun = transitionSubagentRun(message.subagentRuns[runIndex]!, persistedAuditStatus, {
+        resultSummary: `${setupResults.length ? `Managed setup completed for ${setupResults.map((result) => `${result.adapter} ${result.version ?? ""}`.trim()).join(", ")}. ` : ""}${runtimeSummary ? `${runtimeSummary} ` : ""}${microRunHumanSummary(auditResult)}${reportArtifact ? " Detailed report saved in this chat's artifacts." : ""}`,
+        error: auditResult.status === "failed" ? auditResult.error : undefined,
+        failureKind: auditResult.status === "failed" ? auditResult.failureKind ?? "error" : undefined,
+        usage: auditResult.usage,
+        diagnostics: auditResult.diagnostics,
+        artifacts: observedArtifacts
+      });
+      const nextRuns = message.subagentRuns.map((entry, index) => index === runIndex ? completedRun : entry);
+      if (setupRun) nextRuns.push(setupRun);
+      const updatedMessage: ResearchChatMessage = {
+        ...message,
+        subagentRuns: nextRuns
+      };
+      const updatedSession = researchChatSessionSchema.parse({
+        ...session,
+        messages: session.messages.map((entry, index) => index === messageIndex ? updatedMessage : entry),
+        updatedAt: iso()
+      });
+      await persistResearchSession(input.projectRoot, updatedSession);
+      return updatedSession;
+    });
+    const report = [runtimeSummary, delphiAuditReport(auditResult, Boolean(reportArtifact), Boolean(setupRun))].filter(Boolean).join("\n\n");
+    return continueResearchGoalAfterOutcome(
+      input.projectRoot,
+      finalSession,
+      `The approved Delphi audit finished.\n\n${report}`,
+      report,
+      {
+        pauseForNewApproval: Boolean(setupRun),
+        outcomeEvidenceProvided: true,
+        outcomeKind: setupRun ? undefined : "delphi-testing",
+        outcomeRunId: input.runId,
+        outcomeStatus: persistedAuditStatus === "blocked" ? "blocked" : persistedAuditStatus === "failed" ? "failed" : "completed",
+        onActivity: input.onActivity,
+        onSubagentProgress: ({ runId, kind, title, message, status }) => input.onProgress?.({ runId, kind, title, message, status })
+      }
+    );
+  }
 
   if (startedRun.kind === "graph-reconciliation") {
     const args = JSON.parse(startedRun.argumentsJson || "{}") as GraphReconciliationInput;
@@ -2402,15 +3596,12 @@ export async function respondToSubagentRun(input: {
       finalChangeSet = reconciliationResult.status !== "failed" && output?.graphChangeSet
         ? buildResearchTurnChangeSet(output.graphChangeSet, undefined, bundle)
         : undefined;
-      const reconciliationRun: SubagentRun = {
-        ...message.subagentRuns[runIndex],
-        status: reconciliationResult.status === "failed" ? "failed" : "completed",
+      const reconciliationRun = transitionSubagentRun(message.subagentRuns[runIndex]!, reconciliationResult.status === "failed" ? "failed" : "completed", {
         resultSummary: microRunHumanSummary(reconciliationResult),
         error: reconciliationResult.status === "failed" ? reconciliationResult.error : undefined,
         usage: reconciliationResult.usage,
-        diagnostics: reconciliationResult.diagnostics,
-        updatedAt: iso()
-      };
+        diagnostics: reconciliationResult.diagnostics
+      });
       const updatedMessage: ResearchChatMessage = {
         ...message,
         subagentRuns: message.subagentRuns.map((entry, index) => index === runIndex ? reconciliationRun : entry),
@@ -2430,11 +3621,21 @@ export async function respondToSubagentRun(input: {
       return updatedSession;
     });
 
-    return appendAssistantReportMessage(
+    const report = graphReconciliationReport(reconciliationResult, finalChangeSet);
+    return continueResearchGoalAfterOutcome(
       input.projectRoot,
-      input.sessionId,
-      graphReconciliationReport(reconciliationResult, finalChangeSet)
-    ).catch(() => finalSession);
+      finalSession,
+      `The approved graph reconciliation finished.\n\n${report}`,
+      report,
+      {
+        pauseForNewApproval: Boolean(finalChangeSet),
+        outcomeKind: "graph-reconciliation",
+        outcomeRunId: input.runId,
+        outcomeStatus: reconciliationResult.status === "failed" ? "failed" : "completed",
+        onActivity: input.onActivity,
+        onSubagentProgress: ({ runId, kind, title, message, status }) => input.onProgress?.({ runId, kind, title, message, status })
+      }
+    );
   }
 
   const args = JSON.parse(startedRun.argumentsJson || "{}") as MergeResolutionInput;
@@ -2445,6 +3646,13 @@ export async function respondToSubagentRun(input: {
     hydratedProvider,
     bundle,
     {
+      runConsoleCommand: (commandArgs) => runInternalConsoleCommand(input.projectRoot, bundle.project.settings, commandArgs, {
+        authorization: {
+          actor: "solomon",
+          capabilities: ["inspect-project", "verify-project"]
+        },
+        maxTimeoutMs: 10 * 60_000
+      }),
       onProgress: (message) => input.onProgress?.({ runId: input.runId, kind: "merge-resolution", title: startedRun.title, message, status: "running" })
     }
   );
@@ -2524,15 +3732,12 @@ export async function respondToSubagentRun(input: {
     const commitNote = mergeCommitOutcome.committed
       ? "\n\nCommitted the resolution."
       : mergeResult.status === "failed" ? "" : `\n\nNot committed: ${mergeCommitOutcome.reason}`;
-    const mergeRun: SubagentRun = {
-      ...message.subagentRuns[runIndex],
-      status: mergeResult.status === "failed" ? "failed" : "completed",
+    const mergeRun = transitionSubagentRun(message.subagentRuns[runIndex]!, mergeResult.status === "failed" ? "failed" : "completed", {
       resultSummary: `${microRunHumanSummary(mergeResult)}${commitNote}`,
       error: mergeResult.status === "failed" ? mergeResult.error : undefined,
       usage: mergeResult.usage,
-      diagnostics: mergeResult.diagnostics,
-      updatedAt: iso()
-    };
+      diagnostics: mergeResult.diagnostics
+    });
     const nextRuns = message.subagentRuns.map((entry, index) => index === runIndex ? mergeRun : entry);
     if (finalReconciliationRun) nextRuns.push(finalReconciliationRun);
     const updatedMessage: ResearchChatMessage = { ...message, subagentRuns: nextRuns, changeSet: message.changeSet };
@@ -2546,11 +3751,21 @@ export async function respondToSubagentRun(input: {
     return updatedSession;
   });
 
-  return appendAssistantReportMessage(
+  const report = mergeApprovalReport(mergeResult, mergeCommitOutcome, finalReconciliationRun, stalenessSignal, graphReconciliationEnabled);
+  return continueResearchGoalAfterOutcome(
     input.projectRoot,
-    input.sessionId,
-    mergeApprovalReport(mergeResult, mergeCommitOutcome, finalReconciliationRun, stalenessSignal, graphReconciliationEnabled)
-  ).catch(() => finalSession);
+    finalSession,
+    `The approved merge-resolution work finished.\n\n${report}`,
+    report,
+    {
+      pauseForNewApproval: Boolean(finalReconciliationRun),
+      outcomeKind: "merge-resolution",
+      outcomeRunId: input.runId,
+      outcomeStatus: mergeResult.status === "failed" ? "failed" : "completed",
+      onActivity: input.onActivity,
+      onSubagentProgress: ({ runId, kind, title, message, status }) => input.onProgress?.({ runId, kind, title, message, status })
+    }
+  );
 }
 
 async function reviewResearchGraphChangeSet(input: {
@@ -2722,6 +3937,8 @@ async function reviewResearchGraphChangeSet(input: {
 function isBoundedGraphMutationRetry(operation: ResearchOperation): boolean {
   return operation.kind !== "start-agent-run" &&
     operation.kind !== "start-run-profile" &&
+    operation.kind !== "stop-runtime-service" &&
+    operation.kind !== "restart-runtime-service" &&
     operation.kind !== "retry-run" &&
     operation.kind !== "start-debugging-run" &&
     operation.kind !== "author-acceptance-tests" &&

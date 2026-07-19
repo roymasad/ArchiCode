@@ -160,14 +160,21 @@ export type ResearchChatActivityPayload = {
   status?: "running" | "completed" | "failed";
 };
 
+export type ResearchChatSessionUpdatedPayload = {
+  projectRoot: string;
+  session: ResearchChatSession;
+};
+
 export type ResearchSubagentProgressPayload = {
   projectRoot: string;
   sessionId: string;
   runId: string;
-  kind: "merge-resolution" | "graph-reconciliation" | "test-authoring" | "sherlock-research";
+  kind: "merge-resolution" | "graph-reconciliation" | "test-authoring" | "sherlock-research" | "delphi-testing";
   title: string;
   message: string;
-  status?: "running" | "completed" | "failed";
+  status?: "running" | "completed" | "blocked" | "failed";
+  artifact?: { id: string; label: string; path: string; mediaType: string };
+  observationAnalysis?: { artifactId: string; status: "started" | "completed" | "failed" };
 };
 
 export type ExternalProjectUpdatePayload = {
@@ -633,6 +640,7 @@ const api = {
     activeSubflowId?: string | null;
     resumeApprovalMessageId?: string;
     retryAssistantMessageId?: string;
+    internalContinuation?: boolean;
     optimisticUserMessageId?: string;
     optimisticAssistantMessageId?: string;
   }): Promise<ResearchChatSession> => ipcRenderer.invoke("archicode:send-research-chat-message", input),
@@ -659,6 +667,7 @@ const api = {
     runId: string;
     decision: "approved" | "rejected";
     resolutionStrategy?: string;
+    runtimeTargetProfileIds?: string[];
   }): Promise<ResearchChatSession> => ipcRenderer.invoke("archicode:respond-subagent-run", input),
   mapExistingCodebase: (input: {
     projectRoot: string;
@@ -728,6 +737,11 @@ const api = {
     const listener = (_event: Electron.IpcRendererEvent, payload: ResearchChatActivityPayload) => handler(payload);
     ipcRenderer.on("archicode:research-chat-activity", listener);
     return () => ipcRenderer.removeListener("archicode:research-chat-activity", listener);
+  },
+  onResearchChatSessionUpdated: (handler: (payload: ResearchChatSessionUpdatedPayload) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: ResearchChatSessionUpdatedPayload) => handler(payload);
+    ipcRenderer.on("archicode:research-chat-session-updated", listener);
+    return () => ipcRenderer.removeListener("archicode:research-chat-session-updated", listener);
   },
   onResearchSubagentProgress: (handler: (payload: ResearchSubagentProgressPayload) => void): (() => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: ResearchSubagentProgressPayload) => handler(payload);

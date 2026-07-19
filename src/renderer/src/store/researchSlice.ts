@@ -44,7 +44,7 @@ import type {
   McpServerView,
   ProjectSkill
 } from "@shared/capabilities";
-import type { ExternalProjectUpdatePayload, ProviderHealthResult, RecentProjectEntry } from "../../../preload";
+import type { ExternalProjectUpdatePayload, ProviderHealthResult, RecentProjectEntry, ResearchSubagentProgressPayload } from "../../../preload";
 import { applyNodePatch } from "@shared/schema";
 import { createSeedProject } from "@shared/fixtures";
 import { autoLayoutFlow, deleteSubflowFromFlow, duplicateNode, isSubflowIgnored, linkNodeToSubflow, reparentSubflowInFlow } from "@shared/graph";
@@ -71,7 +71,94 @@ function newResearchCanvasAction(session: ResearchChatSession, knownMessageIds: 
   ))?.canvasAction;
 }
 
-export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<ArchicodeState, "openResearchPanel" | "closeResearchPanel" | "setResearchScope" | "setResearchDraft" | "appendResearchDraftMention" | "appendResearchDraftText" | "clearResearchDraft" | "requestResearchComposerFocus" | "refreshResearchChats" | "createResearchChat" | "forkResearchMessage" | "startScopedResearchChat" | "selectResearchChat" | "archiveResearchChat" | "updateResearchChatAutoApproval" | "sendResearchMessage" | "stopResearchMessage" | "dequeueResearchMessage" | "reorderQueuedResearchMessage" | "retryResearchMessage" | "summarizeResearchChat" | "applyResearchGraphChangeSet" | "respondToSubagentRun"> => ({
+type BatchedResearchStateUpdate = (state: ArchicodeState) => Partial<ArchicodeState> | ArchicodeState;
+
+function createResearchUpdateBatch(set: StoreSet) {
+  let pendingUpdates: BatchedResearchStateUpdate[] = [];
+  const latestUpdates = new Map<string, BatchedResearchStateUpdate>();
+  let timerId: number | null = null;
+
+  const scheduleFlush = () => {
+    if (timerId === null) timerId = window.setTimeout(flush, 16);
+  };
+
+  function flush() {
+    if (timerId !== null) {
+      window.clearTimeout(timerId);
+      timerId = null;
+    }
+    if (!pendingUpdates.length && !latestUpdates.size) return;
+    const updates = [...pendingUpdates, ...latestUpdates.values()];
+    pendingUpdates = [];
+    latestUpdates.clear();
+    set((state) => {
+      let nextState = state;
+      for (const update of updates) {
+        const patch = update(nextState);
+        if (patch === nextState) continue;
+        nextState = { ...nextState, ...patch };
+      }
+      return nextState;
+    });
+  }
+
+  return {
+    schedule(update: BatchedResearchStateUpdate) {
+      pendingUpdates.push(update);
+      scheduleFlush();
+    },
+    scheduleLatest(key: string, update: BatchedResearchStateUpdate) {
+      latestUpdates.set(key, update);
+      scheduleFlush();
+    },
+    flush,
+    cancel() {
+      if (timerId !== null) window.clearTimeout(timerId);
+      timerId = null;
+      pendingUpdates = [];
+      latestUpdates.clear();
+    }
+  };
+}
+
+function mergeLiveSubagentProgress(
+  existing: LiveSubagentActivity[],
+  payload: ResearchSubagentProgressPayload
+): LiveSubagentActivity[] {
+  const found = existing.find((entry) => entry.id === payload.runId);
+  const status = payload.status ?? found?.status ?? "running";
+  if (!found) {
+    return [...existing, {
+      id: payload.runId,
+      kind: payload.kind,
+      title: payload.title,
+      status,
+      lines: payload.message ? [payload.message] : [],
+      artifacts: payload.artifact ? [payload.artifact] : [],
+      visuallyAnalyzedArtifactIds: payload.observationAnalysis?.status === "completed"
+        ? [payload.observationAnalysis.artifactId]
+        : []
+    }];
+  }
+  return existing.map((entry) => {
+    if (entry.id !== payload.runId) return entry;
+    const artifacts = entry.artifacts ?? [];
+    const visuallyAnalyzedArtifactIds = entry.visuallyAnalyzedArtifactIds ?? [];
+    return {
+      ...entry,
+      status,
+      lines: payload.message ? [...entry.lines, payload.message].slice(-30) : entry.lines,
+      artifacts: payload.artifact && !artifacts.some((artifact) => artifact.id === payload.artifact!.id)
+        ? [...artifacts, payload.artifact]
+        : artifacts,
+      visuallyAnalyzedArtifactIds: payload.observationAnalysis?.status === "completed" && !visuallyAnalyzedArtifactIds.includes(payload.observationAnalysis.artifactId)
+        ? [...visuallyAnalyzedArtifactIds, payload.observationAnalysis.artifactId]
+        : visuallyAnalyzedArtifactIds
+    };
+  });
+}
+
+export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<ArchicodeState, "openResearchPanel" | "closeResearchPanel" | "setResearchScope" | "setResearchDraft" | "appendResearchDraftMention" | "appendResearchDraftText" | "clearResearchDraft" | "requestResearchComposerFocus" | "handleResearchChatSessionUpdated" | "refreshResearchChats" | "createResearchChat" | "forkResearchMessage" | "startScopedResearchChat" | "selectResearchChat" | "archiveResearchChat" | "updateResearchChatAutoApproval" | "sendResearchMessage" | "stopResearchMessage" | "dequeueResearchMessage" | "reorderQueuedResearchMessage" | "retryResearchMessage" | "summarizeResearchChat" | "applyResearchGraphChangeSet" | "respondToSubagentRun"> => ({
   openResearchPanel: async (scope) => {
     const { rootPath, bundle } = get();
     const defaultScope = bundle ? defaultResearchScope(bundle, get().activeFlowId, get().activeSubflowId, get().selectedNodeId) : null;
@@ -80,6 +167,14 @@ export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
   },
 
   closeResearchPanel: () => set({ researchPanelOpen: false }),
+
+  handleResearchChatSessionUpdated: (payload) => set((state) => {
+    if (state.rootPath !== payload.projectRoot) return state;
+    const sessions = state.researchSessions.some((session) => session.id === payload.session.id)
+      ? state.researchSessions.map((session) => session.id === payload.session.id ? payload.session : session)
+      : [payload.session, ...state.researchSessions];
+    return { researchSessions: sessions };
+  }),
 
   setResearchScope: (researchScope) => set({ researchScope }),
 
@@ -195,6 +290,11 @@ export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
       sessionId = session?.id ?? null;
     }
     if (!sessionId) return;
+    const approvalResumeMessage = resumeApprovalMessageId
+      ? get().researchSessions.find((session) => session.id === sessionId)?.messages.find((message) => message.id === resumeApprovalMessageId)
+      : undefined;
+    const isApprovalResume = Boolean(approvalResumeMessage?.mcpApprovalRequest);
+    const internalContinuation = Boolean(approvalResumeMessage?.mcpApprovalRequest?.internalContinuation);
     // Never start a second concurrent turn on the same session while one is
     // already streaming (which would clobber persisted messages and render
     // optimistic messages out of order). Queue it instead so it sends
@@ -226,7 +326,7 @@ export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
     set((state) => ({
       researchBusySessionIds: addResearchBusySession(state.researchBusySessionIds, sessionId),
       researchBusy: true,
-      researchPendingAttachmentPaths: filePaths.length
+      researchPendingAttachmentPaths: filePaths.length && !isApprovalResume
         ? { ...state.researchPendingAttachmentPaths, [optimisticUserId]: [...filePaths] }
         : state.researchPendingAttachmentPaths,
       researchStreamStates: {
@@ -237,10 +337,10 @@ export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
         ? {
             ...session,
             modelId: modelId === null ? null : modelId?.trim() || session.modelId,
-            title: session.messages.length ? session.title : trimmed.length > 56 ? `${trimmed.slice(0, 55)}...` : trimmed,
+            title: session.messages.length || isApprovalResume ? session.title : trimmed.length > 56 ? `${trimmed.slice(0, 55)}...` : trimmed,
             messages: [
               ...session.messages,
-              {
+              ...(!isApprovalResume ? [{
                 id: optimisticUserId,
                 role: "user" as const,
                 content: trimmed,
@@ -249,7 +349,7 @@ export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
                 webUsed: false,
                 mcpToolCalls: [],
                 subagentRuns: []
-              },
+              }] : []),
               {
                 id: optimisticAssistantId,
                 role: "assistant" as const,
@@ -269,6 +369,7 @@ export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
     let disposeTokenStream: (() => void) | undefined;
     let disposeActivityStream: (() => void) | undefined;
     let disposeSubagentProgressStream: (() => void) | undefined;
+    const streamUpdates = createResearchUpdateBatch(set);
     try {
       let streamedAnswerText = "";
       let streamedThinkingText = "";
@@ -283,7 +384,7 @@ export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
         else if (!payload.reset) streamedThinkingText += payload.text;
         const visibleStreamText = streamedAnswerText || streamedThinkingText || (payload.reset ? "Archi is continuing with the collected evidence…" : thinkingPlaceholder);
         const visibleKind = streamedAnswerText ? "answer" : "thinking";
-        set((state) => ({
+        streamUpdates.scheduleLatest("token", (state) => ({
           researchStreamStates: {
             ...state.researchStreamStates,
             [optimisticAssistantId]: { kind: visibleKind }
@@ -320,7 +421,7 @@ export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
       });
       disposeActivityStream = window.archicode.onResearchChatActivity?.((payload) => {
         if (payload.projectRoot !== rootPath || payload.sessionId !== sessionId) return;
-        set((state) => {
+        streamUpdates.schedule((state) => {
           const existing = state.researchChatActivity[optimisticAssistantId] ?? { status: "running" as const, lines: [] };
           const lines = payload.message && existing.lines[existing.lines.length - 1] !== payload.message
             ? [...existing.lines, payload.message].slice(-40)
@@ -335,22 +436,14 @@ export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
       });
       disposeSubagentProgressStream = window.archicode.onResearchSubagentProgress?.((payload) => {
         if (payload.projectRoot !== rootPath || payload.sessionId !== sessionId) return;
-        set((state) => {
+        streamUpdates.schedule((state) => {
           const existing = state.researchSubagentActivity[optimisticAssistantId] ?? [];
-          const found = existing.find((entry) => entry.id === payload.runId);
-          const status = payload.status ?? found?.status ?? "running";
-          const nextRuns = found
-            ? existing.map((entry) => entry.id === payload.runId
-                ? { ...entry, status, lines: payload.message ? [...entry.lines, payload.message].slice(-30) : entry.lines }
-                : entry)
-            : [...existing, {
-              id: payload.runId,
-              kind: payload.kind,
-              title: payload.title,
-              status,
-              lines: payload.message ? [payload.message] : []
-            }];
-          return { researchSubagentActivity: { ...state.researchSubagentActivity, [optimisticAssistantId]: nextRuns } };
+          return {
+            researchSubagentActivity: {
+              ...state.researchSubagentActivity,
+              [optimisticAssistantId]: mergeLiveSubagentProgress(existing, payload)
+            }
+          };
         });
       });
       const session = await window.archicode.sendResearchChatMessage({
@@ -367,9 +460,11 @@ export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
         activeFlowId: get().activeFlowId,
         activeSubflowId: get().activeSubflowId,
         resumeApprovalMessageId,
+        internalContinuation,
         optimisticUserMessageId: optimisticUserId,
         optimisticAssistantMessageId: optimisticAssistantId
       });
+      streamUpdates.flush();
       const nextBundle = await window.archicode.loadProject(rootPath);
       const researchSessions = await window.archicode.listResearchChats(rootPath);
       set((state) => {
@@ -395,6 +490,7 @@ export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
       const canvasAction = newResearchCanvasAction(session, knownMessageIds);
       if (canvasAction) get().applyResearchCanvasAction(canvasAction);
     } catch (error) {
+      streamUpdates.cancel();
       set((state) => {
         const researchBusySessionIds = removeResearchBusySession(state.researchBusySessionIds, sessionId);
         const { [optimisticAssistantId]: _finishedStream, ...researchStreamStates } = state.researchStreamStates;
@@ -413,6 +509,7 @@ export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
       disposeTokenStream?.();
       disposeActivityStream?.();
       disposeSubagentProgressStream?.();
+      streamUpdates.cancel();
       set((state) => {
         const researchBusySessionIds = removeResearchBusySession(state.researchBusySessionIds, sessionId);
         const { [optimisticAssistantId]: _finishedStream, ...researchStreamStates } = state.researchStreamStates;
@@ -525,6 +622,7 @@ export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
     let disposeTokenStream: (() => void) | undefined;
     let disposeActivityStream: (() => void) | undefined;
     let disposeSubagentProgressStream: (() => void) | undefined;
+    const streamUpdates = createResearchUpdateBatch(set);
     try {
       let streamedAnswerText = "";
       let streamedThinkingText = "";
@@ -539,7 +637,7 @@ export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
         else if (!payload.reset) streamedThinkingText += payload.text;
         const visibleStreamText = streamedAnswerText || streamedThinkingText || (payload.reset ? "Archi is continuing with the collected evidence…" : thinkingPlaceholder);
         const visibleKind = streamedAnswerText ? "answer" : "thinking";
-        set((state) => ({
+        streamUpdates.scheduleLatest("token", (state) => ({
           researchStreamStates: {
             ...state.researchStreamStates,
             [optimisticAssistantId]: { kind: visibleKind }
@@ -576,7 +674,7 @@ export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
       });
       disposeActivityStream = window.archicode.onResearchChatActivity?.((payload) => {
         if (payload.projectRoot !== rootPath || payload.sessionId !== selectedResearchSessionId) return;
-        set((state) => {
+        streamUpdates.schedule((state) => {
           const existing = state.researchChatActivity[optimisticAssistantId] ?? { status: "running" as const, lines: [] };
           const lines = payload.message && existing.lines[existing.lines.length - 1] !== payload.message
             ? [...existing.lines, payload.message].slice(-40)
@@ -591,22 +689,14 @@ export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
       });
       disposeSubagentProgressStream = window.archicode.onResearchSubagentProgress?.((payload) => {
         if (payload.projectRoot !== rootPath || payload.sessionId !== selectedResearchSessionId) return;
-        set((state) => {
+        streamUpdates.schedule((state) => {
           const existing = state.researchSubagentActivity[optimisticAssistantId] ?? [];
-          const found = existing.find((entry) => entry.id === payload.runId);
-          const status = payload.status ?? found?.status ?? "running";
-          const nextRuns = found
-            ? existing.map((entry) => entry.id === payload.runId
-                ? { ...entry, status, lines: payload.message ? [...entry.lines, payload.message].slice(-30) : entry.lines }
-                : entry)
-            : [...existing, {
-              id: payload.runId,
-              kind: payload.kind,
-              title: payload.title,
-              status,
-              lines: payload.message ? [payload.message] : []
-            }];
-          return { researchSubagentActivity: { ...state.researchSubagentActivity, [optimisticAssistantId]: nextRuns } };
+          return {
+            researchSubagentActivity: {
+              ...state.researchSubagentActivity,
+              [optimisticAssistantId]: mergeLiveSubagentProgress(existing, payload)
+            }
+          };
         });
       });
 
@@ -623,6 +713,7 @@ export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
         retryAssistantMessageId: assistantMessageId,
         optimisticAssistantMessageId: optimisticAssistantId
       });
+      streamUpdates.flush();
       const nextBundle = await window.archicode.loadProject(rootPath);
       const researchSessions = await window.archicode.listResearchChats(rootPath);
       set((state) => {
@@ -650,6 +741,7 @@ export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
       const canvasAction = newResearchCanvasAction(updatedSession, knownMessageIds);
       if (canvasAction) get().applyResearchCanvasAction(canvasAction);
     } catch (error) {
+      streamUpdates.cancel();
       set((state) => {
         const researchBusySessionIds = removeResearchBusySession(state.researchBusySessionIds, selectedResearchSessionId);
         const { [optimisticAssistantId]: _finishedStream, ...researchStreamStates } = state.researchStreamStates;
@@ -668,6 +760,7 @@ export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
       disposeTokenStream?.();
       disposeActivityStream?.();
       disposeSubagentProgressStream?.();
+      streamUpdates.cancel();
       set((state) => {
         const researchBusySessionIds = removeResearchBusySession(state.researchBusySessionIds, selectedResearchSessionId);
         const { [optimisticAssistantId]: _finishedStream, ...researchStreamStates } = state.researchStreamStates;
@@ -812,7 +905,7 @@ export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
     }
   },
 
-  respondToSubagentRun: async (sessionId, messageId, runId, decision, resolutionStrategy) => {
+  respondToSubagentRun: async (sessionId, messageId, runId, decision, resolutionStrategy, runtimeTargetProfileIds) => {
     const { rootPath, researchSessions } = get();
     if (!rootPath || !window.archicode) return;
     // Seed a live "running" card for the approved run immediately, so the card
@@ -825,26 +918,43 @@ export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
       researchBusySessionIds: addResearchBusySession(state.researchBusySessionIds, sessionId),
       researchBusy: true,
       researchSubagentActivity: approvedRun
-        ? { ...state.researchSubagentActivity, [messageId]: [{ id: runId, kind: approvedRun.kind, title: approvedRun.title, status: "running", lines: [] }] }
+        ? { ...state.researchSubagentActivity, [messageId]: [{ id: runId, kind: approvedRun.kind, title: approvedRun.title, status: "running", lines: [], artifacts: approvedRun.artifacts ?? [], visuallyAnalyzedArtifactIds: approvedRun.diagnostics?.visuallyAnalyzedArtifactIds ?? [] }] }
         : state.researchSubagentActivity
     }));
     const clearActivity = (state: ArchicodeState) => {
       const { [messageId]: _done, ...researchSubagentActivity } = state.researchSubagentActivity;
       return researchSubagentActivity;
     };
+    const clearParentActivity = (state: ArchicodeState) => {
+      const { [messageId]: _done, ...researchChatActivity } = state.researchChatActivity;
+      return researchChatActivity;
+    };
+    const liveUpdates = createResearchUpdateBatch(set);
     const disposeProgressStream = window.archicode.onResearchSubagentProgress?.((payload) => {
       if (payload.projectRoot !== rootPath || payload.sessionId !== sessionId) return;
-      set((state) => {
+      liveUpdates.schedule((state) => {
         const existing = state.researchSubagentActivity[messageId] ?? [];
-        const found = existing.find((entry) => entry.id === payload.runId);
-        // A payload may carry live progress text, a terminal status marker, or both.
-        const status = payload.status ?? (found?.status ?? "running");
-        const nextRuns = found
-          ? existing.map((entry) => entry.id === payload.runId
-              ? { ...entry, status, lines: payload.message ? [...entry.lines, payload.message].slice(-30) : entry.lines }
-              : entry)
-          : [...existing, { id: payload.runId, kind: payload.kind, title: payload.title, status, lines: payload.message ? [payload.message] : [] }];
-        return { researchSubagentActivity: { ...state.researchSubagentActivity, [messageId]: nextRuns } };
+        return {
+          researchSubagentActivity: {
+            ...state.researchSubagentActivity,
+            [messageId]: mergeLiveSubagentProgress(existing, payload)
+          }
+        };
+      });
+    });
+    const disposeActivityStream = window.archicode.onResearchChatActivity?.((payload) => {
+      if (payload.projectRoot !== rootPath || payload.sessionId !== sessionId) return;
+      liveUpdates.schedule((state) => {
+        const existing = state.researchChatActivity[messageId] ?? { status: "running" as const, lines: [] };
+        const lines = payload.message && existing.lines[existing.lines.length - 1] !== payload.message
+          ? [...existing.lines, payload.message].slice(-40)
+          : existing.lines;
+        return {
+          researchChatActivity: {
+            ...state.researchChatActivity,
+            [messageId]: { status: payload.status ?? existing.status, lines }
+          }
+        };
       });
     });
     try {
@@ -854,8 +964,10 @@ export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
         messageId,
         runId,
         decision,
-        resolutionStrategy
+        resolutionStrategy,
+        runtimeTargetProfileIds
       });
+      liveUpdates.flush();
       const nextBundle = await window.archicode.loadProject(rootPath);
       const nextSessions = await window.archicode.listResearchChats(rootPath);
       set((state) => {
@@ -868,21 +980,26 @@ export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
           researchBusySessionIds,
           researchBusy: researchBusySessionIds.length > 0,
           researchSubagentActivity: clearActivity(state),
+          researchChatActivity: clearParentActivity(state),
           error: null
         };
       });
     } catch (error) {
+      liveUpdates.cancel();
       set((state) => {
         const researchBusySessionIds = removeResearchBusySession(state.researchBusySessionIds, sessionId);
         return {
           researchBusySessionIds,
           researchBusy: researchBusySessionIds.length > 0,
           researchSubagentActivity: clearActivity(state),
+          researchChatActivity: clearParentActivity(state),
           error: error instanceof Error ? error.message : String(error)
         };
       });
     } finally {
       disposeProgressStream?.();
+      disposeActivityStream?.();
+      liveUpdates.cancel();
     }
   },
 

@@ -31,4 +31,11 @@ describe("project-scoped tool argument repair", () => {
     expect(isRepairableProjectToolError("archicode_console_run_command", error)).toBe(true);
     expect(repairableProjectToolResult("archicode_console_run_command", error)).toContain("Retry the same finite command");
   });
+
+  it("redirects rejected read-only CLI execution attempts to Delphi without failing chat", () => {
+    const error = new Error("npm run is not allowed in the read-only CLI tool.");
+
+    expect(isRepairableProjectToolError("archicode_project_inspect_cli", error)).toBe(true);
+    expect(repairableProjectToolResult("archicode_project_inspect_cli", error)).toContain("archicode_spawn_delphi");
+  });
 });

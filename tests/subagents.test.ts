@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { access, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { exec } from "node:child_process";
@@ -78,7 +78,7 @@ function graphReconciliationOutputText(withChangeSet = true): string {
   });
 }
 
-async function setupSubagentProject(subagents?: Partial<{ mergeConflictResolution: boolean; graphReconciliation: boolean; sherlockResearch: boolean }>) {
+async function setupSubagentProject(subagents?: Partial<{ mergeConflictResolution: boolean; graphReconciliation: boolean; sherlockResearch: boolean; delphiTesting: boolean }>) {
   const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-subagents-project-"));
   setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-subagents-storage-")));
   const bundle = await ensureProject(projectRoot);
@@ -92,7 +92,8 @@ async function setupSubagentProject(subagents?: Partial<{ mergeConflictResolutio
         subagents: {
           mergeConflictResolution: subagents.mergeConflictResolution ?? true,
           graphReconciliation: subagents.graphReconciliation ?? true,
-          sherlockResearch: subagents.sherlockResearch ?? true
+          sherlockResearch: subagents.sherlockResearch ?? true,
+          delphiTesting: subagents.delphiTesting ?? true
         }
       } : {})
     },
@@ -138,12 +139,12 @@ async function createAwaitingApprovalRun(
   return { session, message, run };
 }
 
-describe("Research chat subagent tools (merge resolution / graph reconciliation)", () => {
+describe("Research chat subagent tools", () => {
   afterEach(() => {
     vi.unstubAllGlobals();
   });
 
-  it("advertises both subagent tools by default", async () => {
+  it("advertises all subagent tools by default", async () => {
     const { projectRoot, session } = await setupSubagentProject();
     const fetchMock = vi.fn().mockResolvedValue(streamingAnthropicResponse([{ type: "text", text: "No conflicts to resolve." }]));
     vi.stubGlobal("fetch", fetchMock);
@@ -154,6 +155,7 @@ describe("Research chat subagent tools (merge resolution / graph reconciliation)
     expect(names).toContain("archicode_spawn_merge_resolution_agent");
     expect(names).toContain("archicode_spawn_picasso");
     expect(names).toContain("archicode_spawn_sherlock");
+    expect(names).toContain("archicode_spawn_delphi");
   });
 
   it("runs Sherlock inline and stores only a compact activity summary in chat", async () => {
@@ -165,6 +167,12 @@ describe("Research chat subagent tools (merge resolution / graph reconciliation)
         id: "tu-sherlock",
         name: "archicode_spawn_sherlock",
         input: { objective: "Find where project settings are validated", mode: "codebase" }
+      }]))
+      .mockResolvedValueOnce(streamingAnthropicResponse([{
+        type: "tool_use",
+        id: "tu-sherlock-cli",
+        name: "archicode_console_run_command",
+        input: { command: "pwd" }
       }]))
       .mockResolvedValueOnce(streamingAnthropicResponse([{
         type: "tool_use",
@@ -193,8 +201,183 @@ describe("Research chat subagent tools (merge resolution / graph reconciliation)
     expect(run).toMatchObject({ status: "completed", kind: "sherlock-research" });
     expect(run?.resultSummary).toContain("Settings are validated");
     expect(run?.resultSummary).not.toContain("src/shared/schema.ts");
+    expect(run?.progress.some((message) => message.includes("Running guarded investigation command: pwd"))).toBe(true);
     expect(activities).toContain("Sherlock completed. Archi is reviewing the evidence and continuing the investigation below.");
     expect(activities.at(-1)).toContain("preparing the final answer");
+  });
+
+  it("creates an approval-gated Delphi audit without executing it inline", async () => {
+    const { projectRoot, session } = await setupSubagentProject();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(streamingAnthropicResponse([{
+        type: "tool_use",
+        id: "tu-delphi",
+        name: "archicode_spawn_delphi",
+        input: { objective: "Audit the checkout flow", mode: "audit", platforms: ["web"], commands: ["npm run test:e2e"] }
+      }]))
+      .mockResolvedValue(streamingAnthropicResponse([{ type: "text", text: "Delphi's audit is ready for approval." }]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const updated = await sendResearchChatMessage({
+      projectRoot,
+      sessionId: session.id,
+      content: "Have Delphi audit checkout"
+    });
+    const run = updated.messages.flatMap((message) => message.subagentRuns).find((item) => item.kind === "delphi-testing");
+
+    expect(run).toMatchObject({ kind: "delphi-testing", status: "awaiting-approval" });
+    expect(["supported", "unsupported", "unknown"]).toContain(run?.imageInputSupport);
+    expect(JSON.parse(run!.argumentsJson)).toMatchObject({ mode: "setup", commands: ["npm run test:e2e"] });
+    expect(run?.reviewReason).toContain("No project script/check was discovered");
+    // Parent suggestions remain context for Delphi, not a command authorization
+    // list shown as if the user were approving an exact execution script.
+    expect(run?.reviewReason).not.toContain("npm run test:e2e");
+    expect(fetchMock.mock.calls.every((call) => !String(call[1]?.body ?? "").includes("You are Delphi"))).toBe(true);
+  });
+
+  it("lists an exact Run App lifecycle in Delphi's approval card without launching it", async () => {
+    const { projectRoot, session } = await setupSubagentProject();
+    const bundle = await ensureProject(projectRoot);
+    await updateProjectSettings(projectRoot, {
+      ...bundle.project.settings,
+      runTargetProfiles: [{
+        id: "desktop-audit",
+        label: "Desktop Audit",
+        kind: "electron",
+        runCommand: "node -e \"require('fs').writeFileSync('research-delphi-launched.txt','yes'); setInterval(() => {}, 1000)\"",
+        stopCommand: "node -e \"console.log('stop desktop audit')\"",
+        targetRequired: false,
+        diagnosticCommands: [],
+        recoveryCommands: [],
+        retryAfterRecovery: true,
+        timeoutSeconds: 5
+      }]
+    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(streamingAnthropicResponse([{
+        type: "tool_use",
+        id: "tu-delphi-runtime",
+        name: "archicode_spawn_delphi",
+        input: {
+          objective: "Audit the desktop app",
+          mode: "audit",
+          platforms: ["electron"],
+          target: { profileId: "desktop-audit", launch: "if-needed", cleanup: "stop-if-started" }
+        }
+      }]))
+      .mockResolvedValue(streamingAnthropicResponse([{ type: "text", text: "Delphi's runtime audit is ready for approval." }]));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const updated = await sendResearchChatMessage({ projectRoot, sessionId: session.id, content: "Start and audit the desktop app" });
+    const run = updated.messages.flatMap((message) => message.subagentRuns).find((item) => item.kind === "delphi-testing");
+
+    expect(run).toMatchObject({ status: "awaiting-approval", kind: "delphi-testing" });
+    expect(run?.reviewReason).toContain("Desktop Audit");
+    expect(run?.reviewReason).toContain("research-delphi-launched.txt");
+    expect(run?.reviewReason).toContain("stop desktop audit");
+    await expect(access(path.join(projectRoot, "research-delphi-launched.txt"))).rejects.toThrow();
+  });
+
+  it("runs an approved Delphi audit through the guarded command path", async () => {
+    const { projectRoot, session } = await setupSubagentProject();
+    const configured = await ensureProject(projectRoot);
+    await updateProjectSettings(projectRoot, {
+      ...configured.project.settings,
+      autoApproveShellCommands: false
+    });
+    await writeFile(path.join(projectRoot, "delphi-research-check.cjs"), "console.log('delphi-research-ok');\n", "utf8");
+    await writeFile(path.join(projectRoot, "package.json"), JSON.stringify({
+      name: "delphi-research-fixture",
+      private: true,
+      scripts: { "test:delphi": "node delphi-research-check.cjs" }
+    }), "utf8");
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(streamingAnthropicResponse([{
+        type: "tool_use",
+        id: "tu-delphi-approved",
+        name: "archicode_spawn_delphi",
+        input: { objective: "Run the Delphi research fixture", mode: "audit", platforms: ["generic"] }
+      }]))
+      .mockResolvedValue(streamingAnthropicResponse([{ type: "text", text: "Delphi's audit is ready for approval." }]));
+    vi.stubGlobal("fetch", fetchMock);
+    const proposed = await sendResearchChatMessage({ projectRoot, sessionId: session.id, content: "Audit the fixture" });
+    const message = proposed.messages.find((item) => item.subagentRuns.some((run) => run.kind === "delphi-testing"));
+    const run = message?.subagentRuns.find((item) => item.kind === "delphi-testing");
+    if (!message || !run) throw new Error("Expected Delphi approval card.");
+    expect(JSON.parse(run.argumentsJson)).toMatchObject({ commands: [] });
+    expect(run.reviewReason).toContain("1 discovered script/check option");
+
+    fetchMock.mockReset()
+      .mockResolvedValueOnce(streamingAnthropicResponse([{
+        type: "tool_use",
+        id: "tu-delphi-inspect",
+        name: "delphi_inspect_test_environment",
+        input: {}
+      }]))
+      .mockResolvedValueOnce(streamingAnthropicResponse([{
+        type: "tool_use",
+        id: "tu-delphi-run",
+        name: "archicode_console_run_command",
+        input: { command: "npm run test:delphi" }
+      }]))
+      .mockResolvedValue(streamingAnthropicResponse([{ type: "text", text: JSON.stringify({
+        status: "completed",
+        verdict: "passed",
+        summary: "The approved Delphi research fixture passed.",
+        attempts: 1,
+        checks: [{ name: "Research fixture", status: "passed", command: "npm run test:delphi", outputSummary: "delphi-research-ok", evidence: ["exit code 0"] }],
+        findings: [],
+        toolchains: [{ adapter: "generic", status: "ready", evidence: ["Finite project test detected."] }],
+        artifacts: [],
+        blockers: [],
+        recommendedNextSteps: []
+      }) }]));
+
+    const completed = await respondToSubagentRun({
+      projectRoot,
+      sessionId: session.id,
+      messageId: message.id,
+      runId: run.id,
+      decision: "approved"
+    });
+    const completedRun = completed.messages.flatMap((item) => item.subagentRuns).find((item) => item.id === run.id);
+
+    expect(completedRun).toMatchObject({ kind: "delphi-testing", status: "completed" });
+    expect(completedRun?.resultSummary).toContain("Verdict: passed");
+    expect(completed.messages.at(-1)?.content).toContain("Delphi finished with verdict: passed");
+  });
+
+  it("preflights missing Playwright into one managed-cache setup-and-audit card", async () => {
+    const { projectRoot, session } = await setupSubagentProject();
+    await writeFile(path.join(projectRoot, "package.json"), JSON.stringify({ name: "web-without-playwright", private: true }), "utf8");
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(streamingAnthropicResponse([{
+        type: "tool_use",
+        id: "tu-delphi-web-setup",
+        name: "archicode_spawn_delphi",
+        input: {
+          objective: "Audit the checkout page",
+          mode: "audit",
+          platforms: ["web"],
+          target: { baseUrl: "http://127.0.0.1:4173" }
+        }
+      }]))
+      .mockResolvedValue(streamingAnthropicResponse([{ type: "text", text: "The web audit is ready for approval." }]));
+    vi.stubGlobal("fetch", fetchMock);
+    const proposed = await sendResearchChatMessage({ projectRoot, sessionId: session.id, content: "Audit checkout" });
+    const message = proposed.messages.find((item) => item.subagentRuns.some((run) => run.kind === "delphi-testing"));
+    const run = message?.subagentRuns.find((item) => item.kind === "delphi-testing");
+    if (!message || !run) throw new Error("Expected Delphi approval card.");
+
+    expect(run).toMatchObject({ status: "awaiting-approval", kind: "delphi-testing" });
+    expect(JSON.parse(run.argumentsJson)).toMatchObject({
+      mode: "setup",
+      observation: { mode: "visible", capture: "key-steps" },
+      setup: { adapters: ["playwright"], playwrightBrowsers: ["chromium"], resumeMode: "audit" }
+    });
+    expect(run.reviewReason).toContain("managed cache");
+    expect(run.reviewReason).toContain("automatically resumes this same audit");
+    expect(fetchMock.mock.calls.every((call) => !String(call[1]?.body ?? "").includes("You are Delphi"))).toBe(true);
   });
 
   it("runs Picasso inline and captures its proposal in the normal review card", async () => {
@@ -327,8 +510,8 @@ describe("Research chat subagent tools (merge resolution / graph reconciliation)
     expect(fetchMock).toHaveBeenCalledTimes(5);
   });
 
-  it("does not advertise either subagent tool when explicitly disabled", async () => {
-    const { projectRoot, session } = await setupSubagentProject({ mergeConflictResolution: false, graphReconciliation: false });
+  it("does not advertise disabled mutation/testing subagent tools", async () => {
+    const { projectRoot, session } = await setupSubagentProject({ mergeConflictResolution: false, graphReconciliation: false, delphiTesting: false });
     const fetchMock = vi.fn().mockResolvedValue(streamingAnthropicResponse([{ type: "text", text: "No conflicts to resolve." }]));
     vi.stubGlobal("fetch", fetchMock);
 
@@ -337,6 +520,7 @@ describe("Research chat subagent tools (merge resolution / graph reconciliation)
     const names = toolNames(fetchMock, 0);
     expect(names).not.toContain("archicode_spawn_merge_resolution_agent");
     expect(names).not.toContain("archicode_spawn_picasso");
+    expect(names).not.toContain("archicode_spawn_delphi");
   });
 
   it("keeps manual graph reconciliation available even when merge-conflict resolution is disabled", async () => {
@@ -529,8 +713,10 @@ describe("Research chat subagent tools (merge resolution / graph reconciliation)
       .mockResolvedValueOnce(streamingAnthropicResponse([{
         type: "tool_use",
         id: "tu-spawn-reconcile",
-        name: "archicode_spawn_graph_reconciliation_agent",
+        name: "archicode_spawn_picasso",
         input: {
+          objective: "Reconcile the graph after the merged source changes.",
+          mode: "reconcile",
           resolvedFiles: ["src/shared.ts"],
           resolutionSummary: "Combined both sides of the conflict.",
           verificationResult: "tests passed"
@@ -565,7 +751,7 @@ describe("Research chat subagent tools (merge resolution / graph reconciliation)
       .mockResolvedValueOnce(streamingAnthropicResponse([{
         type: "tool_use",
         id: "tu-spawn-invalid-picasso",
-        name: "archicode_spawn_graph_reconciliation_agent",
+        name: "archicode_spawn_picasso",
         input: { objective: "Create a detail subflow", mode: "design", scope: { flowId: "flow-main", nodeIds: ["node-project"] } }
       }]))
       .mockResolvedValueOnce(streamingAnthropicResponse([{

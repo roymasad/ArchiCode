@@ -256,10 +256,12 @@ export type ResearchStreamState = {
 // graph-reconciliation card that does not yet exist in the persisted message.
 export type LiveSubagentActivity = {
   id: string;
-  kind: "merge-resolution" | "graph-reconciliation" | "test-authoring" | "sherlock-research";
+  kind: "merge-resolution" | "graph-reconciliation" | "test-authoring" | "sherlock-research" | "delphi-testing";
   title: string;
-  status: "running" | "completed" | "failed";
+  status: "running" | "completed" | "blocked" | "failed";
   lines: string[];
+  artifacts: Array<{ id: string; label: string; path: string; mediaType: string }>;
+  visuallyAnalyzedArtifactIds: string[];
 };
 
 export type LiveResearchActivity = {
@@ -439,6 +441,7 @@ export type ArchicodeState = {
   appendResearchDraftText: (text: string) => void;
   clearResearchDraft: () => void;
   requestResearchComposerFocus: () => void;
+  handleResearchChatSessionUpdated: (payload: { projectRoot: string; session: ResearchChatSession }) => void;
   refreshResearchChats: () => Promise<void>;
   createResearchChat: (scope?: ResearchChatScope, modelId?: string) => Promise<ResearchChatSession | null>;
   forkResearchMessage: (messageId: string) => Promise<void>;
@@ -472,7 +475,8 @@ export type ArchicodeState = {
     messageId: string,
     runId: string,
     decision: "approved" | "rejected",
-    resolutionStrategy?: string
+    resolutionStrategy?: string,
+    runtimeTargetProfileIds?: string[]
   ) => Promise<void>;
   refreshPatchProposals: () => Promise<void>;
   applyPatchProposal: (proposalArtifactId: string, decisions: PatchOperationDecision[]) => Promise<void>;

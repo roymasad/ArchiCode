@@ -32,6 +32,7 @@ import {
   XCircle
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { ReactNode, TextareaHTMLAttributes } from "react";
 import { nodeFlagSchema, nodeStageSchema, type Artifact, type Note, type NodeFlag, type NodeStage, type ProjectSettings } from "@shared/schema";
 import type {
@@ -44,6 +45,7 @@ import type {
   Flow,
   FlowEdge
 } from "@shared/schema";
+import { gaiaAgent } from "@shared/agentIdentities";
 import { subflowDepth } from "@shared/graph";
 import { getActiveFlow, getSelectedEdge, getSelectedNode, useArchicodeStore } from "../store/useArchicodeStore";
 import { builtInNodeTypes } from "../utils/nodeTypes";
@@ -398,7 +400,42 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
     selectProjectFile,
     theme,
     error
-  } = useArchicodeStore();
+  } = useArchicodeStore(useShallow((state) => ({
+    bundle: state.bundle,
+    activeFlowId: state.activeFlowId,
+    selectedNodeId: state.selectedNodeId,
+    selectedNodeIds: state.selectedNodeIds,
+    selectedEdgeId: state.selectedEdgeId,
+    updateNode: state.updateNode,
+    updateSettings: state.updateSettings,
+    saveFlow: state.saveFlow,
+    selectNodes: state.selectNodes,
+    setActiveFlow: state.setActiveFlow,
+    setNodeLinkedSubflow: state.setNodeLinkedSubflow,
+    setActiveSubflow: state.setActiveSubflow,
+    rememberEdgeLabel: state.rememberEdgeLabel,
+    updateSelectedEdge: state.updateSelectedEdge,
+    updateSelectedEdgePatch: state.updateSelectedEdgePatch,
+    deleteSelectedEdge: state.deleteSelectedEdge,
+    addNote: state.addNote,
+    updateNoteResolved: state.updateNoteResolved,
+    updateNotePinned: state.updateNotePinned,
+    deleteNote: state.deleteNote,
+    purgeResolvedNotes: state.purgeResolvedNotes,
+    purgeSystemNotes: state.purgeSystemNotes,
+    attachNodeReferenceFiles: state.attachNodeReferenceFiles,
+    runAgent: state.runAgent,
+    dismissRunError: state.dismissRunError,
+    authorAcceptanceTests: state.authorAcceptanceTests,
+    clearAcceptanceTests: state.clearAcceptanceTests,
+    runAcceptanceChecks: state.runAcceptanceChecks,
+    enhanceNodeField: state.enhanceNodeField,
+    startScopedResearchChat: state.startScopedResearchChat,
+    setWorkbenchView: state.setWorkbenchView,
+    selectProjectFile: state.selectProjectFile,
+    theme: state.theme,
+    error: state.error
+  })));
   const [isGeneratingChecks, setIsGeneratingChecks] = useState(false);
   const [isRunningChecks, setIsRunningChecks] = useState(false);
   const [isClearingChecks, setIsClearingChecks] = useState(false);
@@ -2295,7 +2332,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
               </DialogContent>
             </DialogRoot>
 
-            <Field label="Build module" hint="This tells ArchiCode which runnable part of the project this node belongs to when it needs to build, run, or test work for this feature. In a single-target project, Auto usually just works. In a multi-target project, Auto leaves it open until AI Implement can confidently map the node once. Choose None to opt out, or pick a specific module to lock the node to that target manually.">
+            <Field label="Build module" hint="This tells ArchiCode which runnable part of the project this node belongs to when it needs to build, run, or test work for this feature. In a single-target project, Auto usually just works. In a multi-target project, Auto leaves it open until Gaia's AI Implement run can confidently map the node once. Choose None to opt out, or pick a specific module to lock the node to that target manually.">
               <Select
                 value={moduleProfileSelectValue}
                 onValueChange={(value) => {
@@ -3261,7 +3298,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
             <div className="scoped-action-block">
               <div className="scoped-action-label">
                 <span>Node-scoped AI</span>
-                <Tooltip content="Runs AI implementation with this node as the anchor. The agent still reads related graph context, but prioritizes this node's stage, notes, acceptance criteria, artifacts, and connected edges.">
+                <Tooltip content={`${gaiaAgent.title}. Runs AI implementation with this node as the anchor. Gaia still reads related graph context, but prioritizes this node's stage, notes, acceptance criteria, artifacts, and connected edges.`}>
                   <HelpCircle size={14} className="hint-icon" aria-label="Node-scoped AI help" />
                 </Tooltip>
               </div>
@@ -3288,7 +3325,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
               </div>
             </div>
             <div className="record-list">
-              {nodeRuns.length === 0 ? <EmptyState title="No node runs">AI Implement from this node to create node-scoped run history.</EmptyState> : null}
+              {nodeRuns.length === 0 ? <EmptyState title="No node runs">Use AI Implement to ask Gaia for a node-scoped run.</EmptyState> : null}
               {nodeRuns.map((run) => (
                 <article key={run.id} className="record-card">
                   <StatusPill tone={statusTone(run.status)}>{run.status}</StatusPill>

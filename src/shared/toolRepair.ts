@@ -54,6 +54,11 @@ export function normalizeProjectToolArguments(
 
 export function isRepairableProjectToolError(providerToolName: string, error: unknown): boolean {
   if (!isProjectScopedTool(providerToolName)) return false;
+  // The inspection CLI is deliberately restrictive. A rejected verb, flag,
+  // path, or unavailable local executable is an expected tool-level outcome,
+  // not a provider failure. Return it to the model so it can correct the
+  // inspection or delegate executable testing to Delphi.
+  if (providerToolName.endsWith("_inspect_cli")) return true;
   const message = error instanceof Error ? error.message : String(error);
   return [
     /Use a project-relative path, not an absolute path\./i,
@@ -99,7 +104,8 @@ function projectToolRepairHints(providerToolName: string): string[] {
   if (providerToolName.endsWith("_inspect_cli")) {
     return [
       "Use a project-relative cwd like '.' or 'src'.",
-      "Keep command args structured and project-relative."
+      "Keep command args structured and project-relative.",
+      "This tool is inspection-only. For test commands, builds, live browser/app control, or emulator audits, call archicode_spawn_delphi instead of retrying them here."
     ];
   }
   return [

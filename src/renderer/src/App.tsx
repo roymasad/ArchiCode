@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { PointerEvent as ReactPointerEvent, ReactNode } from "react";
+import { useShallow } from "zustand/react/shallow";
+import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from "react";
 import { ChevronLeft, ChevronRight, Dock, FolderOpen, GitBranch, MessageSquare, PictureInPicture2, Plus, SlidersHorizontal, Sparkles } from "lucide-react";
 import { FlowCanvas } from "./components/FlowCanvas";
 import { BuildQuestionCheck } from "./components/BuildQuestionCheck";
@@ -167,7 +168,11 @@ function isSupportedGitRemoteUrl(value: string): boolean {
 }
 
 function WelcomeScreen({ onReturnToProject }: { onReturnToProject?: () => void }) {
-  const { openProjectFolder, cloneGitRepository, createProjectFromTemplate } = useArchicodeStore();
+  const { openProjectFolder, cloneGitRepository, createProjectFromTemplate } = useArchicodeStore(useShallow((state) => ({
+    openProjectFolder: state.openProjectFolder,
+    cloneGitRepository: state.cloneGitRepository,
+    createProjectFromTemplate: state.createProjectFromTemplate
+  })));
   const [gitImportOpen, setGitImportOpen] = useState(false);
   const [gitUrl, setGitUrl] = useState("");
   const [gitCloneBusy, setGitCloneBusy] = useState(false);
@@ -458,6 +463,7 @@ export function App() {
     theme,
     uiScale,
     handleRunUpdated,
+    handleResearchChatSessionUpdated,
     handleExternalProjectUpdated,
     researchPanelOpen,
     openResearchPanel,
@@ -474,7 +480,35 @@ export function App() {
     openProjectSettings,
     loadGlobalSpeechSettings,
     loadGlobalTtsSettings
-  } = useArchicodeStore();
+  } = useArchicodeStore(useShallow((state) => ({
+    load: state.load,
+    loading: state.loading,
+    error: state.error,
+    appNotice: state.appNotice,
+    bundle: state.bundle,
+    rootPath: state.rootPath,
+    gitStatus: state.gitStatus,
+    theme: state.theme,
+    uiScale: state.uiScale,
+    handleRunUpdated: state.handleRunUpdated,
+    handleResearchChatSessionUpdated: state.handleResearchChatSessionUpdated,
+    handleExternalProjectUpdated: state.handleExternalProjectUpdated,
+    researchPanelOpen: state.researchPanelOpen,
+    openResearchPanel: state.openResearchPanel,
+    closeResearchPanel: state.closeResearchPanel,
+    workbenchView: state.workbenchView,
+    setWorkbenchView: state.setWorkbenchView,
+    showDirectUndoNotice: state.showDirectUndoNotice,
+    dismissAppNotice: state.dismissAppNotice,
+    toggleTheme: state.toggleTheme,
+    reload: state.reload,
+    createResearchChat: state.createResearchChat,
+    loadKeybindings: state.loadKeybindings,
+    keybindings: state.keybindings,
+    openProjectSettings: state.openProjectSettings,
+    loadGlobalSpeechSettings: state.loadGlobalSpeechSettings,
+    loadGlobalTtsSettings: state.loadGlobalTtsSettings
+  })));
   const [activityOpen, setActivityOpen] = useState(true);
   const [leftPanelWidth, setLeftPanelWidth] = useState(defaultSidePanelWidth);
   const [rightPanelWidth, setRightPanelWidth] = useState(defaultSidePanelWidth);
@@ -493,6 +527,7 @@ export function App() {
   const dismissedErrorMessageRef = useRef<string | null>(null);
   const manualActivityOverrideRef = useRef(false);
   const focusModeSnapshotRef = useRef<FocusModeSnapshot | null>(null);
+  const appShellRef = useRef<HTMLElement | null>(null);
   const hasProject = Boolean(bundle);
   const activityNeedsAttention = Boolean(bundle && (
     bundle.runs.some(isRunBlockingNewChange) ||
@@ -541,6 +576,11 @@ export function App() {
     if (!window.archicode?.onRunUpdated) return;
     return window.archicode.onRunUpdated(handleRunUpdated);
   }, [handleRunUpdated]);
+
+  useEffect(() => {
+    if (!window.archicode?.onResearchChatSessionUpdated) return;
+    return window.archicode.onResearchChatSessionUpdated(handleResearchChatSessionUpdated);
+  }, [handleResearchChatSessionUpdated]);
 
   useEffect(() => {
     if (!window.archicode?.onExternalProjectUpdated) return;
@@ -882,16 +922,21 @@ export function App() {
 
   const startHorizontalResize = (side: "left" | "right") => (event: ReactPointerEvent<HTMLDivElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId);
+    let nextWidth = side === "left" ? leftPanelWidth : rightPanelWidth;
     const onMove = (moveEvent: PointerEvent) => {
       if (side === "left") {
-        setLeftPanelWidth(Math.min(520, Math.max(220, moveEvent.clientX)));
+        nextWidth = Math.min(520, Math.max(220, moveEvent.clientX));
+        appShellRef.current?.style.setProperty("--left-panel-width", `${nextWidth}px`);
       } else {
-        setRightPanelWidth(Math.min(640, Math.max(280, window.innerWidth - moveEvent.clientX)));
+        nextWidth = Math.min(640, Math.max(280, window.innerWidth - moveEvent.clientX));
+        appShellRef.current?.style.setProperty("--right-panel-width", `${nextWidth}px`);
       }
     };
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      if (side === "left") setLeftPanelWidth(nextWidth);
+      else setRightPanelWidth(nextWidth);
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
@@ -899,12 +944,16 @@ export function App() {
 
   const startActivityResize = (event: ReactPointerEvent<HTMLDivElement>) => {
     event.currentTarget.setPointerCapture(event.pointerId);
+    let nextHeight = activityHeight;
+    const activityPanel = appShellRef.current?.querySelector<HTMLElement>(".dock-slot-activity .activity-panel") ?? null;
     const onMove = (moveEvent: PointerEvent) => {
-      setActivityHeight(Math.min(560, Math.max(140, window.innerHeight - moveEvent.clientY)));
+      nextHeight = Math.min(560, Math.max(140, window.innerHeight - moveEvent.clientY));
+      if (activityPanel) activityPanel.style.height = `${nextHeight}px`;
     };
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      setActivityHeight(nextHeight);
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
@@ -955,19 +1004,24 @@ export function App() {
     const startX = event.clientX;
     const startY = event.clientY;
     const initial = panelLayouts[panel];
+    const floatingPanel = event.currentTarget.closest<HTMLElement>(".floating-panel");
+    let nextX = initial.x;
+    let nextY = initial.y;
     const onMove = (moveEvent: PointerEvent) => {
-      setPanelLayouts((current) => ({
-        ...current,
-        [panel]: {
-          ...current[panel],
-          x: clamp(initial.x + moveEvent.clientX - startX, 8, window.innerWidth - 180),
-          y: clamp(initial.y + moveEvent.clientY - startY, 38, window.innerHeight - 120)
-        }
-      }));
+      nextX = clamp(initial.x + moveEvent.clientX - startX, 8, window.innerWidth - 180);
+      nextY = clamp(initial.y + moveEvent.clientY - startY, 38, window.innerHeight - 120);
+      if (floatingPanel) {
+        floatingPanel.style.left = `${nextX}px`;
+        floatingPanel.style.top = `${nextY}px`;
+      }
     };
     const onUp = () => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
+      setPanelLayouts((current) => ({
+        ...current,
+        [panel]: { ...current[panel], x: nextX, y: nextY }
+      }));
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
@@ -1036,18 +1090,21 @@ export function App() {
   return (
     <TooltipProvider>
       <main
+        ref={appShellRef}
         className={chatFocusActive ? "app-shell chat-focus-mode" : "app-shell"}
         style={{
+          "--left-panel-width": `${leftPanelWidth}px`,
+          "--right-panel-width": `${rightPanelWidth}px`,
           gridTemplateColumns: chatFocusActive
             ? "0px 0px 0px 0px minmax(0, 1fr)"
             : [
-                sidebarDocked ? `${leftPanelWidth}px` : "0px",
+                sidebarDocked ? "var(--left-panel-width)" : "0px",
                 sidebarDocked ? "4px" : "0px",
                 "minmax(0, 1fr)",
                 inspectorDocked ? "4px" : "0px",
-                inspectorDocked ? `${rightPanelWidth}px` : "0px"
+                inspectorDocked ? "var(--right-panel-width)" : "0px"
               ].join(" ")
-        }}
+        } as CSSProperties}
       >
         {sidebarDocked ? (
           <DockedPanel panel="sidebar" label="Project Sidebar" renderDetachButton={renderDetachButton} panelActionInContent>
@@ -1159,7 +1216,7 @@ export function App() {
               propertiesLabelShineKey={propertiesLabelShineKey}
               panelAction={chatFocusActive ? undefined : renderDockedSidePanelActions("inspector", "Right Sidebar")}
               chatFocusMode={chatFocusActive}
-              onToggleChatFocusMode={() => void toggleChatFocusMode()}
+              onToggleChatFocusMode={toggleChatFocusMode}
             />
           </DockedPanel>
         ) : null}
@@ -1212,7 +1269,7 @@ export function App() {
               activeTab={rightSidebarTab}
               onActiveTabChange={selectRightSidebarTab}
               propertiesLabelShineKey={propertiesLabelShineKey}
-              onToggleChatFocusMode={() => void toggleChatFocusMode()}
+              onToggleChatFocusMode={toggleChatFocusMode}
             />
           </FloatingPanel>
         ) : null}

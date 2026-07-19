@@ -1,6 +1,7 @@
 import type { ProjectSettings } from "./schema";
+import { gaiaAgent, pandoraAgent } from "./agentIdentities";
 
-export const archicodeCapabilityVersion = "2026-07-14.1";
+export const archicodeCapabilityVersion = "2026-07-17.3";
 
 export type ArchicodeCapabilityDigest = {
   version: string;
@@ -28,7 +29,7 @@ export function archicodeCapabilityDigest(): ArchicodeCapabilityDigest {
     workflow: [
       "Open or create a project, or map an existing codebase into flows, nodes, subflows, groups, and labeled edges.",
       "Use scoped Research chats to understand the project, refine architecture and requirements, and prepare reviewed graph or queue actions.",
-      "Use AI Implement, Build, Run App, acceptance checks, and AI Debug to change and verify the target codebase while keeping graph truth current.",
+      `Use AI Implement with ${gaiaAgent.name}, Build, Run App, acceptance checks, and AI Debug with ${pandoraAgent.name} to change and verify the target codebase while keeping graph truth current.`,
       "Review structural graph changes, run targets, source proposals, permissions, plans, diffs, and generated artifacts before risky changes are applied."
     ],
     researchChat: {
@@ -37,10 +38,11 @@ export function archicodeCapabilityDigest(): ArchicodeCapabilityDigest {
         "Perform reversible visual canvas actions when explicitly requested: select one or more nodes or groups, switch the visible flow/detail flow, fit targets, center, pan, and zoom.",
         "Propose reviewed updates to project metadata, flows, nodes, subflows, edges, notes, acceptance checks, implementation-scope hints, run targets, and implementation/build/debug queue actions; Research can create node groups and assign nodes to them, while group renaming/color/deletion remains a direct user control.",
         "Help sync graph truth after external source edits and monitor queued work without pretending a proposal is already complete.",
-        "Delegate substantial investigation to Sherlock, read-only graph assessment or proposal-only graph design to Picasso, and approval-gated merge-conflict resolution to Solomon when those capabilities are enabled."
+        "Inspect configured Run App profiles, discover read-only emulator/simulator/device targets, inspect live runtime status and logs, and prepare approval-gated start, stop, or restart actions for exact runtime targets.",
+        "Delegate substantial investigation to Sherlock, evidence-backed test/visual/runtime audits to Delphi, read-only graph assessment or proposal-only graph design to Picasso, and approval-gated merge-conflict resolution to Solomon when those capabilities are enabled. Delphi can reuse or approval-gated start an explicit Run App profile, including desktop targets and Android/iOS emulators, wait for readiness, audit it, and stop only the runtime/target it started."
       ],
       cannot: [
-        "Edit target source files directly; normal implementation belongs to AI Implement or AI Debug runs.",
+        `Edit target source files directly; normal implementation belongs to ${gaiaAgent.title} through AI Implement, while focused repairs belong to ${pandoraAgent.title} through AI Debug.`,
         "Silently apply review-gated graph, source, runtime, provider, security, MCP, or skill changes.",
         "Treat implementation-scope hints, visual placement, groups, or freeform edge labels as permissions or a hidden typed dependency system."
       ]
@@ -54,7 +56,8 @@ export function archicodeCapabilityDigest(): ArchicodeCapabilityDigest {
     ],
     implementationAndRuntime: [
       "Sequential write-capable Agent Work Queue with planning, code, review, verification, retry, cancellation, failure classification, artifacts, todos, and permission gates.",
-      "Project/flow/multi-node/no-scope implementation scopes, fast/high implementation effort, module-aware run targets, finite build verification, acceptance-test authoring/execution, runtime services, bug incidents, and AI Debug.",
+      `Project/flow/multi-node/no-scope implementation scopes with ${gaiaAgent.name}, fast/high implementation effort, module-aware run targets, finite build verification, acceptance-test authoring/execution, runtime services, bug incidents, and AI Debug recovery with ${pandoraAgent.name}.`,
+      "Delphi can run existing finite project checks; control explicit web targets through Playwright; audit Android targets through ADB; capture iOS simulator evidence through simctl; use existing Appium sessions for richer mobile interaction; persist screenshots; and propose separately approved Playwright/Appium downloads in ArchiCode's managed cache without adding project dependencies.",
       "Manual/offline, Codex App Local, Claude Local, OpenAI-compatible, and Anthropic-compatible provider paths with model-aware context budgets and usage/cost tracking when providers report it."
     ],
     workspaceAndIntegrations: [
@@ -74,7 +77,8 @@ export function archicodeCurrentProjectOptions(settings: ProjectSettings): Recor
   const subagents = settings.agentTools.subagents ?? {
     mergeConflictResolution: true,
     graphReconciliation: true,
-    sherlockResearch: true
+    sherlockResearch: true,
+    delphiTesting: true
   };
   return {
     appearance: {
@@ -96,7 +100,8 @@ export function archicodeCurrentProjectOptions(settings: ProjectSettings): Recor
       subagents: {
         solomonMergeResolution: subagents.mergeConflictResolution,
         picassoGraphDesign: subagents.graphReconciliation,
-        sherlockResearch: subagents.sherlockResearch
+        sherlockResearch: subagents.sherlockResearch,
+        delphiTesting: subagents.delphiTesting
       }
     },
     context: {

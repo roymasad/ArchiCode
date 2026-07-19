@@ -153,6 +153,11 @@ export function ProjectMemoryNotesPanel({ projectRoot, refreshKey }: { projectRo
     }
   };
 
+  // Keep the chat status row focused on actionable state. The component stays
+  // mounted and continues loading/refreshing, then appears as soon as a note
+  // exists (or when an error needs to be surfaced).
+  if (!notes.length && !error) return null;
+
   const label = `Project memory notes: ${notes.length}${error ? ", unavailable" : ""}`;
   return (
     <PopoverRoot>

@@ -1,4 +1,5 @@
 import { AlertCircle, CheckCircle2, MessageSquare, Play, X } from "lucide-react";
+import { useShallow } from "zustand/react/shallow";
 import { useArchicodeStore } from "../store/useArchicodeStore";
 import { Button, DialogContent, DialogRoot, StatusPill } from "./ui";
 
@@ -8,7 +9,12 @@ export function BuildQuestionCheck() {
     selectNode,
     dismissQuestionCheck,
     continueQuestionBlockedRun
-  } = useArchicodeStore();
+  } = useArchicodeStore(useShallow((state) => ({
+    buildQuestionCheck: state.buildQuestionCheck,
+    selectNode: state.selectNode,
+    dismissQuestionCheck: state.dismissQuestionCheck,
+    continueQuestionBlockedRun: state.continueQuestionBlockedRun
+  })));
 
   return (
     <DialogRoot open={Boolean(buildQuestionCheck)} onOpenChange={(open) => {

@@ -8,12 +8,45 @@ import { addNote, attachNodeReferences } from "../src/main/storage/notes";
 import { readArtifactText } from "../src/main/storage/patches";
 import { ensureEmptyCodebaseProject, ensureProject, loadProject, saveFlow, setGlobalMcpSettingsStore, updateNode, updateProjectSettings } from "../src/main/storage/projectStore";
 import { reportBug } from "../src/main/storage/runEngine";
-import { researchGraphOperationKinds, runSchema, type ProjectSettings } from "../src/shared/schema";
+import { listRuntimeServices } from "../src/main/storage/runtimeServices";
+import { delphiTestingInputSchema, researchChatSessionSchema, researchGraphOperationKinds, runSchema, subagentRunSchema, type ProjectSettings, type ResearchChatSession } from "../src/shared/schema";
 import { isResearchThinkingPhrase } from "../src/shared/researchPersonality";
-import { applyResearchGraphChangeSet, mapExistingCodebase, sendResearchChatMessage, setGlobalResearchPersonalityResolver, setGlobalResearchVerbosityResolver } from "../src/main/research";
-import { createResearchChat, listResearchChats, renameResearchChat, setResearchStorageRoot, updateResearchChatAutoApproval } from "../src/main/research/chatStore";
-import { buildResearchGraphLayoutToolResult, researchToolInspectCli } from "../src/main/research/inspectionTools";
+import { applyResearchGraphChangeSet, cancelResearchChatMessage, delphiAuditReport, effectiveDelphiModelPreflight, mapExistingCodebase, reconcileResearchOutcomeReportState, requestsRedundantOutcomeArtifactRead, respondToSubagentRun, resumeResearchGoalsForRunUpdate, sendResearchChatMessage, setGlobalResearchPersonalityResolver, setGlobalResearchVerbosityResolver } from "../src/main/research";
+import { createResearchChat, listResearchChats, markSubagentRunLive, markSubagentRunSettled, persistResearchSession, renameResearchChat, setResearchStorageRoot, transitionSubagentRun, updateResearchChatAutoApproval } from "../src/main/research/chatStore";
+import { buildResearchGraphLayoutToolResult, researchToolInspectCli, researchToolReadFile } from "../src/main/research/inspectionTools";
+import { deriveResearchTurnKind, researchTurnPolicy } from "../src/main/research/turnPolicy";
 import { ARCHICODE_RESEARCH_RULES_SERVER_ID, ARCHICODE_RESEARCH_RULES_TOOL_NAME } from "../src/main/internalTools";
+
+vi.mock("node:dns/promises", () => ({
+  lookup: async () => [{ address: "93.184.216.34", family: 4 }]
+}));
+
+/**
+ * Cross-provider lifecycle invariants that must hold whenever a Research turn
+ * has returned control to the caller. Awaiting-approval is intentionally
+ * allowed: it is an honest durable pause, while `running` requires a live owner.
+ */
+function expectTerminalResearchLifecycleInvariants(session: ResearchChatSession): void {
+  const runs = session.messages.flatMap((message) => message.subagentRuns);
+  expect(runs.filter((run) => run.status === "running").map((run) => run.id)).toEqual([]);
+
+  const ids = runs.map((run) => run.id);
+  expect(new Set(ids).size).toBe(ids.length);
+  const runsById = new Map(runs.map((run) => [run.id, run]));
+  const correctiveRunsByAncestor = new Map<string, string[]>();
+  for (const run of runs) {
+    const ancestorId = run.approvalInheritedFromRunId;
+    if (!ancestorId) continue;
+    expect(runsById.has(ancestorId)).toBe(true);
+    expect(ancestorId).not.toBe(run.id);
+    const siblings = correctiveRunsByAncestor.get(ancestorId) ?? [];
+    siblings.push(run.id);
+    correctiveRunsByAncestor.set(ancestorId, siblings);
+  }
+  for (const siblingIds of correctiveRunsByAncestor.values()) {
+    expect(siblingIds).toHaveLength(1);
+  }
+}
 
 async function createFakeResearchCodex(
   root: string,
@@ -132,6 +165,33 @@ process.stdin.on("end", () => {
   if (step.stderr) process.stderr.write(step.stderr);
   if (step.output && outIndex >= 0) fs.writeFileSync(process.argv[outIndex + 1], step.output, "utf8");
   process.exit(typeof step.exitCode === "number" ? step.exitCode : 0);
+});
+`, "utf8");
+  await chmod(commandPath, 0o755);
+  return commandPath;
+}
+
+async function createMarkedStepResearchCodex(
+  root: string,
+  steps: Array<{ output: string; delayMs?: number; markerPath?: string }>
+): Promise<string> {
+  const commandPath = path.join(root, "fake-marked-research-codex.cjs");
+  const callCountPath = path.join(root, "fake-marked-research-codex-count.txt");
+  await writeFile(commandPath, `#!/usr/bin/env node
+const fs = require("fs");
+const outIndex = process.argv.indexOf("--output-last-message");
+process.stdin.resume();
+process.stdin.on("end", () => {
+  const countPath = ${JSON.stringify(callCountPath)};
+  const steps = ${JSON.stringify(steps)};
+  const count = fs.existsSync(countPath) ? Number(fs.readFileSync(countPath, "utf8")) || 0 : 0;
+  fs.writeFileSync(countPath, String(count + 1), "utf8");
+  const step = steps[Math.min(count, steps.length - 1)] || {};
+  if (step.markerPath) fs.writeFileSync(step.markerPath, "started", "utf8");
+  setTimeout(() => {
+    if (outIndex >= 0) fs.writeFileSync(process.argv[outIndex + 1], step.output || "", "utf8");
+    process.exit(0);
+  }, step.delayMs || 0);
 });
 `, "utf8");
   await chmod(commandPath, 0o755);
@@ -317,28 +377,43 @@ function streamingChatCompletionResponse(text: string): Response {
 // SSE mock for an OpenAI Chat Completions turn that streams tool calls.
 function streamingChatCompletionToolCallsResponse(
   toolCalls: Array<{ id: string; name: string; arguments: string }>,
-  text = ""
+  text = "",
+  reasoningState?: { reasoning?: string; reasoning_content?: string; reasoning_details?: unknown[] },
+  usage?: { prompt_tokens?: number; completion_tokens?: number; completion_tokens_details?: { reasoning_tokens?: number } }
 ): Response {
   const chunks: string[] = [];
   if (text) chunks.push(`data: ${JSON.stringify({ choices: [{ delta: { content: text } }] })}\n\n`);
+  if (reasoningState) chunks.push(`data: ${JSON.stringify({ choices: [{ delta: reasoningState }] })}\n\n`);
   toolCalls.forEach((toolCall, index) => {
     chunks.push(`data: ${JSON.stringify({
       choices: [{ delta: { tool_calls: [{ index, id: toolCall.id, type: "function", function: { name: toolCall.name, arguments: toolCall.arguments } }] } }]
     })}\n\n`);
   });
+  if (usage) chunks.push(`data: ${JSON.stringify({ choices: [], usage })}\n\n`);
   chunks.push("data: [DONE]\n\n");
   return sseResponse(chunks);
 }
 
 // SSE mock for an Anthropic Messages turn with text and/or tool_use blocks.
 function streamingAnthropicResponse(
-  parts: Array<{ type: "text"; text: string } | { type: "tool_use"; id: string; name: string; input: unknown }>
+  parts: Array<
+    | { type: "text"; text: string }
+    | { type: "thinking"; thinking: string; signature: string }
+    | { type: "redacted_thinking"; data: string }
+    | { type: "tool_use"; id: string; name: string; input: unknown }
+  >
 ): Response {
   const chunks: string[] = [];
   parts.forEach((part, index) => {
     if (part.type === "text") {
       chunks.push(`event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index, content_block: { type: "text", text: "" } })}\n\n`);
       chunks.push(`event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index, delta: { type: "text_delta", text: part.text } })}\n\n`);
+    } else if (part.type === "thinking") {
+      chunks.push(`event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index, content_block: { type: "thinking", thinking: "", signature: "" } })}\n\n`);
+      chunks.push(`event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index, delta: { type: "thinking_delta", thinking: part.thinking } })}\n\n`);
+      chunks.push(`event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index, delta: { type: "signature_delta", signature: part.signature } })}\n\n`);
+    } else if (part.type === "redacted_thinking") {
+      chunks.push(`event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index, content_block: { type: "redacted_thinking", data: part.data } })}\n\n`);
     } else {
       chunks.push(`event: content_block_start\ndata: ${JSON.stringify({ type: "content_block_start", index, content_block: { type: "tool_use", id: part.id, name: part.name, input: {} } })}\n\n`);
       chunks.push(`event: content_block_delta\ndata: ${JSON.stringify({ type: "content_block_delta", index, delta: { type: "input_json_delta", partial_json: JSON.stringify(part.input) } })}\n\n`);
@@ -384,6 +459,189 @@ describe("research chat workflow", () => {
     setGlobalResearchPersonalityResolver(null);
     setGlobalResearchVerbosityResolver(null);
     setGlobalMcpSettingsStore(null);
+  });
+
+  it("derives one explicit Research turn policy from lifecycle inputs", () => {
+    const cases = [
+      [{}, "user"],
+      [{ internalContinuation: true }, "goal-continuation"],
+      [{ approvalResume: true }, "approval-resume"],
+      [{ internalContinuation: true, outcomeEvidenceProvided: true }, "outcome-finalization"]
+    ] as const;
+
+    for (const [input, expectedKind] of cases) {
+      const kind = deriveResearchTurnKind(input);
+      expect(kind).toBe(expectedKind);
+      expect(researchTurnPolicy(kind).kind).toBe(expectedKind);
+    }
+    expect(researchTurnPolicy("outcome-finalization")).toMatchObject({
+      includeExternalRetrieval: false,
+      includeProjectContext: true,
+      includeConversationHistory: true,
+      includeSelectedSkills: false,
+      enforceExplicitDelphiDelegation: false
+    });
+    expect(researchTurnPolicy("user")).toMatchObject({
+      includeExternalRetrieval: true,
+      includeProjectContext: true,
+      includeConversationHistory: true,
+      includeSelectedSkills: true,
+      enforceExplicitDelphiDelegation: true
+    });
+  });
+
+  it("validates Research subagent status transitions through one owner", () => {
+    const now = new Date().toISOString();
+    const awaiting = subagentRunSchema.parse({
+      id: "transition-run",
+      kind: "delphi-testing",
+      status: "awaiting-approval",
+      title: "Audit",
+      argumentsJson: "{}",
+      progress: [],
+      createdAt: now,
+      updatedAt: now
+    });
+    const running = transitionSubagentRun(awaiting, "running", { selectedRuntimeTargetProfileIds: ["web"] });
+    expect(running).toMatchObject({ status: "running", selectedRuntimeTargetProfileIds: ["web"] });
+    const completed = transitionSubagentRun(running, "completed", { resultSummary: "Verified." });
+    expect(completed).toMatchObject({ status: "completed", resultSummary: "Verified." });
+    expect(() => transitionSubagentRun(completed, "running")).toThrow("Invalid subagent run transition completed -> running");
+  });
+
+  it("includes concrete Delphi finding details in the parent outcome packet", () => {
+    const now = new Date().toISOString();
+    const report = delphiAuditReport({
+      id: "micro-delphi-finding",
+      kind: "delphi-testing",
+      status: "completed",
+      output: {
+        status: "completed",
+        verdict: "failed",
+        summary: "The audit found one navigation defect.",
+        attempts: 1,
+        checks: [{ name: "About navigation", status: "failed", evidence: ["URL remained on /"] }],
+        findings: [{
+          title: "About link does not navigate",
+          severity: "high",
+          category: "functional",
+          detail: "Clicking the About link leaves the browser on the landing page.",
+          reproductionSteps: ["Open /", "Click About"],
+          evidence: ["Expected /about; observed /"]
+        }],
+        toolchains: [],
+        artifacts: [],
+        blockers: [],
+        recommendedNextSteps: []
+      },
+      createdAt: now,
+      completedAt: now
+    });
+
+    expect(report).toContain("Finding 1 [high/functional] About link does not navigate");
+    expect(report).toContain("Clicking the About link leaves the browser on the landing page");
+    expect(report).toContain("Reproduce: Open /; Click About");
+    expect(report).toContain("Evidence: Expected /about; observed /");
+  });
+
+  it("reports a timed-out Delphi audit as partial when host evidence survived", () => {
+    const report = delphiAuditReport({
+      id: "micro-delphi-timeout",
+      kind: "delphi-testing",
+      status: "failed",
+      failureKind: "timeout",
+      error: "Local provider call produced no output for 5 minutes.",
+      output: {
+        status: "blocked",
+        verdict: "blocked",
+        summary: "The provider stopped before the final report.",
+        attempts: 2,
+        checks: [{ name: "Playwright live target flow", status: "passed", evidence: ["Captured landing-desktop"] }],
+        findings: [],
+        toolchains: [],
+        artifacts: [{ id: "capture-1", label: "landing-desktop", path: ".archicode/artifacts/delphi/capture.png", mediaType: "image/png" }],
+        blockers: ["Provider timeout"],
+        recommendedNextSteps: []
+      },
+      createdAt: new Date().toISOString(),
+      completedAt: new Date().toISOString()
+    });
+
+    expect(report).toContain("timed out before returning its final report");
+    expect(report).toContain("Host-observed partial evidence was preserved");
+    expect(report).toContain("1 check was recorded");
+    expect(report).not.toContain("No executable checks were recorded");
+  });
+
+  it("host-finalizes a completed Delphi goal after persisting the final report", async () => {
+    const { projectRoot } = await setupProject();
+    const baseSession = await createResearchChat({ projectRoot, scope: { type: "project", projectId: "project-delphi-finalize" } });
+    const now = new Date().toISOString();
+    const seeded = researchChatSessionSchema.parse({
+      ...baseSession,
+      memory: { ...baseSession.memory, lastUpdateError: "stale optional-memory warning", updatedAt: now },
+      orchestration: {
+        ...baseSession.orchestration,
+        goal: {
+          id: "goal-delphi-finalize",
+          objective: "Run the requested test/runtime audit and report evidence-backed findings.",
+          status: "active",
+          steps: [
+            { id: "prepare-audit", title: "Prepare audit", status: "done", evidence: ["Approved"], createdAt: now, updatedAt: now },
+            { id: "run-audit", title: "Run audit", status: "doing", evidence: ["Checks completed"], createdAt: now, updatedAt: now },
+            { id: "report-findings", title: "Report findings", status: "open", evidence: [], createdAt: now, updatedAt: now }
+          ],
+          currentStepId: "run-audit",
+          completionEvidence: [],
+          blockers: [],
+          waitingFor: [],
+          continuationCount: 1,
+          createdAt: now,
+          updatedAt: now
+        },
+        updatedAt: now
+      },
+      messages: [{
+        id: "assistant-delphi-final-report",
+        role: "assistant",
+        content: "Build, runtime, and browser checks passed.",
+        createdAt: now,
+        attachmentIds: [],
+        webUsed: false,
+        mcpToolCalls: [],
+        subagentRuns: []
+      }],
+      updatedAt: now
+    });
+    await persistResearchSession(projectRoot, seeded);
+
+    const reconciled = await reconcileResearchOutcomeReportState(projectRoot, seeded, {
+      outcomeKind: "delphi-testing",
+      outcomeRunId: "delphi-run-finalize",
+      outcomeStatus: "completed"
+    });
+
+    expect(reconciled.orchestration.goal?.status).toBe("completed");
+    expect(reconciled.orchestration.goal?.steps.every((step) => step.status === "done")).toBe(true);
+    expect(reconciled.orchestration.goal?.completionEvidence).toContain("Final evidence-backed report persisted in chat message assistant-delphi-final-report.");
+    expect(reconciled.memory.lastUpdateError).toBeUndefined();
+  });
+
+  it("hides the legacy optional-memory fallback notice because persistence succeeded", async () => {
+    const { projectRoot } = await setupProject();
+    const baseSession = await createResearchChat({ projectRoot, scope: { type: "project", projectId: "project-memory-notice" } });
+    const seeded = researchChatSessionSchema.parse({
+      ...baseSession,
+      memory: {
+        ...baseSession.memory,
+        lastUpdateError: "The model omitted its optional semantic memory decision. Host-observed subagent status and evidence were preserved without an extra provider repair call."
+      }
+    });
+    await persistResearchSession(projectRoot, seeded);
+
+    const reloaded = (await listResearchChats(projectRoot)).find((session) => session.id === seeded.id)!;
+
+    expect(reloaded.memory.lastUpdateError).toBeUndefined();
   });
 
   it("uses and persists a model selected for an individual chat", async () => {
@@ -555,7 +813,7 @@ describe("research chat workflow", () => {
     };
     const { projectRoot, promptPath } = await setupProject(localResearchSinkTurn(
       "I prepared the requested graph review card.",
-      [graphChangeSink(proposedChangeSet), memoryUnchangedSink()]
+      [graphChangeSink(proposedChangeSet)]
     ), true);
     await writeActiveResearchLockRun(projectRoot, { flowId: "flow-not-in-chat" });
     const session = await createResearchChat({
@@ -1426,7 +1684,7 @@ describe("research chat workflow", () => {
     expect(await readFile(promptPath!, "utf8")).toContain("Prose cannot move the canvas");
   });
 
-  it("repairs an omitted direct-provider memory decision with model-owned arbitration", async () => {
+  it("does not spend a second provider round repairing an omitted memory decision", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-memory-skip-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
     const bundle = await ensureProject(projectRoot);
@@ -1439,19 +1697,9 @@ describe("research chat workflow", () => {
         : { ...provider, enabled: false })
     });
 
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(streamingAnthropicResponse([
-        { type: "text", text: "Yes — I would add a Contact Page as a sibling to Landing Page and About Page." }
-      ]))
-      .mockResolvedValueOnce(streamingAnthropicResponse([{
-        type: "tool_use",
-        id: "tu-repair-memory",
-        name: "archicode_update_memory",
-        input: {
-          summary: "The user assigned a Contact Page graph task.",
-          todos: [{ title: "Add the Contact Page", status: "awaiting-approval", notes: "Scope still needs graph review confirmation." }]
-        }
-      }]));
+    const fetchMock = vi.fn().mockResolvedValueOnce(streamingAnthropicResponse([
+      { type: "text", text: "Yes — I would add a Contact Page as a sibling to Landing Page and About Page." }
+    ]));
     vi.stubGlobal("fetch", fetchMock);
 
     const session = await createResearchChat({ projectRoot, scope: { type: "project", projectId: bundle.project.id } });
@@ -1461,9 +1709,9 @@ describe("research chat workflow", () => {
       content: "we need to add a new contact page to the website"
     });
 
-    expect(fetchMock.mock.calls.length).toBe(2);
-    expect(updated.memory.summary).toContain("Contact Page graph task");
-    expect(updated.memory.todos[0]?.title).toBe("Add the Contact Page");
+    expect(fetchMock.mock.calls.length).toBe(1);
+    expect(updated.memory.summary).toBe("Yes — I would add a Contact Page as a sibling to Landing Page and About Page.");
+    expect(updated.memory.todos).toEqual([]);
     expect(updated.memory.lastUpdateError).toBeUndefined();
   });
 
@@ -2814,7 +3062,7 @@ describe("research chat workflow", () => {
     expect(answered.memory.links[0]?.url).toBe("https://example.com/onboarding");
   });
 
-  it("repairs an omitted Claude Local memory decision", async () => {
+  it("does not launch a Claude Local repair turn for an omitted memory decision", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-claude-project-"));
     const storageRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-claude-storage-"));
     setResearchStorageRoot(storageRoot);
@@ -2848,10 +3096,9 @@ describe("research chat workflow", () => {
       content: "Can you help me plan the contact page?"
     });
 
-    expect(answered.memory).toMatchObject({
-      summary: expect.stringContaining("plan the Contact Page"),
-      lastUpdateError: undefined
-    });
+    expect(answered.memory.summary).toBe("Discussed the contact page.");
+    expect(answered.memory.todos).toEqual([]);
+    expect(answered.memory.lastUpdateError).toBeUndefined();
   });
 
   it("tracks active orchestration todos from graph review cards", async () => {
@@ -3097,8 +3344,8 @@ describe("research chat workflow", () => {
     const prompts = (await readFile(promptPath!, "utf8")).split("--- prompt boundary ---").map((part) => part.trim()).filter(Boolean);
     expect(prompts.some((prompt) => prompt.includes("long-term compass for future research turns"))).toBe(true);
     expect(prompts.some((prompt) => prompt.includes("concise cumulative meeting notes"))).toBe(true);
-    expect(prompts.some((prompt) => prompt.includes("never omit both tools"))).toBe(true);
-    expect(prompts.some((prompt) => prompt.includes("Never use keyword matching"))).toBe(true);
+    expect(prompts.some((prompt) => prompt.includes("ArchiCode folds conversation summary, approvals, tool results, subagent outcomes, and goal progress"))).toBe(true);
+    expect(prompts.some((prompt) => prompt.includes("never omit both tools"))).toBe(false);
   });
 
   it("infers graph ref kinds in research memory deltas", async () => {
@@ -3934,7 +4181,7 @@ describe("research chat workflow", () => {
     expect(prompt).toContain("\"projectConventions\"");
     expect(prompt).toContain("\"path\":\"AGENTS.md\"");
     expect(prompt).toContain("Always run npm test before handoff.");
-    expect(prompt).toContain("\"capabilityVersion\":\"2026-07-14.1\"");
+    expect(prompt).toContain("\"capabilityVersion\":\"2026-07-17.3\"");
     expect(prompt).toContain("\"currentProjectOptions\"");
     expect(prompt).toContain("\"codeReviewMode\":\"auto-apply\"");
     expect(prompt).toContain("fork/archive/cancel/export Research chats");
@@ -4016,7 +4263,7 @@ describe("research chat workflow", () => {
     expect(prompt).toContain("archicode_read_graph_layout");
     expect(prompt).toContain("archicode_read_chat_history");
     expect(prompt).toContain("\"reusableTools\"");
-    expect(prompt).toContain("archicode_project_inspect_cli");
+    expect(prompt).toContain("archicode_console_run_command");
     expect(prompt).toContain("archicode_project_read_artifact");
     expect(prompt).toContain("archicode_project_list_runtime_services");
     expect(prompt).toContain("archicode_spawn_sherlock");
@@ -4079,6 +4326,56 @@ describe("research chat workflow", () => {
     expect(progress.some((event) => event.status === "completed")).toBe(true);
     expect(updated.messages.at(-1)?.subagentRuns).toMatchObject([
       { kind: "sherlock-research", status: "completed" }
+    ]);
+  });
+
+  it("preserves a genuine Sherlock blocker as blocked in live and persisted status", async () => {
+    const { projectRoot } = await setupProject([
+      JSON.stringify({
+        archicodeResearchTurn: {
+          toolCalls: [{
+            id: "sherlock-1",
+            providerToolName: "archicode_spawn_sherlock",
+            arguments: { objective: "Inspect a required source path", mode: "codebase" }
+          }]
+        }
+      }),
+      JSON.stringify({
+        archicodeResearchTurn: {
+          toolCalls: [{
+            id: "sherlock-list-1",
+            providerToolName: "archicode_project_list_files",
+            arguments: { path: "src/missing-security-module", recursive: true }
+          }]
+        }
+      }),
+      JSON.stringify({
+        status: "blocked",
+        blockers: ["The requested source path does not exist in the project."],
+        summary: "The assigned path could not be inspected.",
+        findings: [],
+        sources: [],
+        openQuestions: [],
+        recommendedNextSteps: ["Confirm the intended source path."]
+      }),
+      "Sherlock could not inspect the requested missing path, so I am reporting the concrete blocker."
+    ]);
+    const session = await createResearchChat({
+      projectRoot,
+      scope: { type: "project", projectId: "project-seed" }
+    });
+    const progress: Array<{ kind: string; status?: string; message: string }> = [];
+
+    const updated = await sendResearchChatMessage({
+      projectRoot,
+      sessionId: session.id,
+      content: "Ask Sherlock to inspect the required path.",
+      onSubagentProgress: (event) => progress.push(event)
+    });
+
+    expect(progress.some((event) => event.kind === "sherlock-research" && event.status === "blocked")).toBe(true);
+    expect(updated.messages.at(-1)?.subagentRuns).toMatchObject([
+      { kind: "sherlock-research", status: "blocked", resultSummary: expect.stringContaining("could not be inspected") }
     ]);
   });
 
@@ -4216,8 +4513,9 @@ describe("research chat workflow", () => {
     expect(prompt).toContain("\"Context7\"");
     expect(prompt).toContain("\"permissionMode\":\"ask\"");
     expect(prompt).toContain("enabled MCP servers are visible to research");
-    expect(prompt).toContain("Project files and read-only CLI inspection are available through structured tools in this chat");
-    expect(prompt).toContain("Use the project list/search/read/inspect tools on demand");
+    expect(prompt).toContain("use the guarded console when a bounded project command materially advances the goal");
+    expect(prompt).toContain("Safe in-scope commands execute; risky or uncertain commands pause for approval");
+    expect(prompt).toContain("Application-source implementation remains delegated to graph/build runs");
     expect(prompt).toContain("\"activityPanels\"");
     expect(prompt).toContain("\"scopedRunCounts\"");
     expect(prompt).toContain("\"runtimeServices\"");
@@ -4258,13 +4556,13 @@ describe("research chat workflow", () => {
     expect(prompt).toContain("Never say or imply that you will use Picasso");
     expect(prompt).toContain("unless you actually call spawn_picasso in that turn");
     expect(prompt).toContain("An explicit request to use Picasso does not itself replace confirmation");
-    expect(prompt).toContain("CURRENT TURN COMPLETION CHECKLIST");
-    expect(prompt).toContain("If this turn assigns or changes a task/goal/requirement");
-    expect(prompt).toContain("archicode_leave_memory_unchanged");
-    expect(prompt).toContain("Never omit both tools");
-    expect(prompt).toContain("receives a durable result/fact/finding/failure");
-    expect(prompt).toContain("leaves anything pending/blocked/unclear/awaiting confirmation");
-    expect(prompt).toContain("Store a pending graph scope and its confirmation/review state");
+    expect(prompt).toContain("own the investigation and tool trajectory until the objective is satisfied");
+    expect(prompt).toContain("Subagents own their delegated tactics");
+    expect(prompt).toContain("ArchiCode derives host-visible goal and memory state from persisted events");
+    expect(prompt).toContain("do not spend tool calls on bookkeeping");
+    expect(prompt).not.toContain("CURRENT TURN COMPLETION CHECKLIST");
+    expect(prompt).not.toContain("archicode_leave_memory_unchanged");
+    expect(prompt).not.toContain("Never omit both tools");
     expect(prompt).toContain("Direct graph operations are allowed only for a simple quick bounded edit");
     expect(prompt).toContain("specification/attachment decomposition");
     expect(prompt).toContain("call archicode_spawn_picasso now with that exact scope");
@@ -4519,7 +4817,7 @@ describe("research chat workflow", () => {
     expect(assistant?.content).toBe("I retried it as a pending graph update for ArchiCode to apply through review.");
     expect(assistant?.changeSet?.operations).toHaveLength(1);
     expect(assistant?.content).not.toContain("\"archicodeResearch\"");
-    expect(answered.memory.summary).toBe("");
+    expect(answered.memory.summary).toBe("Retry the pending graph update.");
   });
 
   it("reads bounded planning-graph geometry from the current project bundle", async () => {
@@ -4553,6 +4851,21 @@ describe("research chat workflow", () => {
     }));
     expect(result.missingNodeIds).toEqual(["missing-node"]);
     expect(() => buildResearchGraphLayoutToolResult(bundle, JSON.stringify({ allLayers: true, subflowId: null }))).toThrow(/cannot be combined/);
+  });
+
+  it("reads from startLine through the bounded remainder when endLine is omitted", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-read-range-"));
+    await mkdir(path.join(projectRoot, "src"), { recursive: true });
+    await writeFile(path.join(projectRoot, "src", "main.ts"), "first\nsecond\nthird", "utf8");
+
+    const result = await researchToolReadFile(projectRoot, { path: "src/main.ts", startLine: 2 }) as {
+      text: string;
+      startLine: number;
+      endLine: number;
+      totalLines: number;
+    };
+
+    expect(result).toMatchObject({ text: "second\nthird", startLine: 2, endLine: 3, totalLines: 3 });
   });
 
   it("lets direct research providers inspect graph layout and project files through built-in tools", async () => {
@@ -4597,17 +4910,18 @@ describe("research chat workflow", () => {
       .map((tool: { function: { name: string; parameters: Record<string, unknown> } }) => [tool.function.name, tool.function.parameters]));
     const readArtifactSchema = projectToolSchemas.get("archicode_project_read_artifact") as Record<string, unknown>;
     const listRunsSchema = projectToolSchemas.get("archicode_project_list_runs") as Record<string, unknown>;
-    const inspectCliSchema = projectToolSchemas.get("archicode_project_inspect_cli") as Record<string, unknown>;
+    const consoleSchema = allToolSchemas.get("archicode_console_run_command") as Record<string, unknown>;
     const graphLayoutSchema = allToolSchemas.get("archicode_read_graph_layout") as Record<string, unknown>;
     expect([...projectToolSchemas.values()].every((schema) => (schema as Record<string, unknown>).additionalProperties === false)).toBe(true);
     expect(readArtifactSchema.type).toBe("object");
     expect((readArtifactSchema.properties as Record<string, unknown>).artifactId).toBeTruthy();
     expect((readArtifactSchema.properties as Record<string, unknown>).path).toBeTruthy();
     expect((listRunsSchema.properties as Record<string, Record<string, unknown>>).status.enum).toContain("needs-permission");
-    expect(inspectCliSchema.type).toBe("object");
-    expect(inspectCliSchema.required).toEqual(["command"]);
-    expect((inspectCliSchema.properties as Record<string, Record<string, unknown>>).command.enum).toContain("git");
-    expect((inspectCliSchema.properties as Record<string, Record<string, unknown>>).command.enum).toContain("rg");
+    expect(consoleSchema.type).toBe("object");
+    expect(consoleSchema.required).toEqual(["command"]);
+    expect((consoleSchema.properties as Record<string, Record<string, unknown>>).command.type).toBe("string");
+    expect((consoleSchema.properties as Record<string, Record<string, unknown>>).command.enum).toBeUndefined();
+    expect(projectToolSchemas.has("archicode_project_inspect_cli")).toBe(false);
     expect(graphLayoutSchema.type).toBe("object");
     expect(graphLayoutSchema.additionalProperties).toBe(false);
     expect((graphLayoutSchema.properties as Record<string, Record<string, unknown>>).subflowId.type).toEqual(["string", "null"]);
@@ -4628,6 +4942,835 @@ describe("research chat workflow", () => {
     expect(toolText).toContain("positionMeaning");
   });
 
+  it("preflights the effective Delphi model override instead of assuming the parent chat model capability", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-delphi-model-preflight-"));
+    const bundle = await ensureProject(projectRoot);
+    const provider = bundle.project.settings.providers.find((entry) => entry.kind === "openai-compatible")!;
+    const configuredProvider = {
+      ...provider,
+      model: "openai/gpt-4o",
+      detectedAvailableModels: ["openai/gpt-4o", "deepseek/deepseek-v4-pro"],
+      detectedModelCapabilities: {
+        "openai/gpt-4o": { supportsImageInput: true },
+        "deepseek/deepseek-v4-pro": { supportsImageInput: false }
+      },
+      subagentModelPolicies: {
+        ...provider.subagentModelPolicies,
+        delphi: {
+          ...provider.subagentModelPolicies.delphi,
+          modelOverride: "deepseek/deepseek-v4-pro"
+        }
+      }
+    };
+
+    expect(effectiveDelphiModelPreflight(configuredProvider)).toEqual({
+      modelId: "deepseek/deepseek-v4-pro",
+      imageInputSupport: "unsupported",
+      capabilitySource: "detected"
+    });
+  });
+
+  it("lets the chat auto-approve toggle cover medium-risk parent commands without a static CLI allowlist", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-delphi-cli-recovery-"));
+    setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
+    const bundle = await ensureProject(projectRoot);
+    await writeFile(path.join(projectRoot, "package.json"), JSON.stringify({
+      name: "parent-guarded-console",
+      private: true,
+      scripts: { inspect: "node --version" }
+    }), "utf8");
+    process.env.OPENAI_RESEARCH_TEST_KEY = "test";
+    await updateProjectSettings(projectRoot, {
+      ...bundle.project.settings,
+      autoApproveShellCommands: false,
+      researchAutoApproveGraphChanges: { enabled: true, includeDestructive: false },
+      webSearch: { ...bundle.project.settings.webSearch, enabled: false },
+      runTargetProfiles: [{
+        id: "web-local-browser",
+        label: "Local Browser",
+        kind: "web",
+        runCommand: "npm run dev",
+        url: "http://localhost:5173",
+        ports: [5173],
+        targetRequired: false,
+        diagnosticCommands: [],
+        recoveryCommands: [],
+        retryAfterRecovery: true,
+        timeoutSeconds: 120
+      }],
+      providers: bundle.project.settings.providers.map((provider) => provider.kind === "openai-compatible"
+        ? { ...provider, enabled: true, apiKeyEnv: "OPENAI_RESEARCH_TEST_KEY", openAiEndpointMode: "chat-completions" as const }
+        : { ...provider, enabled: false })
+    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([{
+        id: "call-project-inspect",
+        name: "archicode_console_run_command",
+        arguments: JSON.stringify({ command: "npm run inspect" })
+      }]))
+      .mockImplementation(() => Promise.resolve(streamingChatCompletionResponse("The project inspection command completed through the guarded project console.")));
+    vi.stubGlobal("fetch", fetchMock);
+    const session = await createResearchChat({ projectRoot, scope: { type: "project", projectId: bundle.project.id } });
+
+    const answered = await sendResearchChatMessage({
+      projectRoot,
+      sessionId: session.id,
+      content: "Run the project's inspection command and tell me whether it completes."
+    });
+
+    const assistant = answered.messages.at(-1)!;
+    const initialBody = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string);
+    const continuationBody = JSON.parse(fetchMock.mock.calls[1]![1]!.body as string);
+    const consoleToolText = JSON.stringify(continuationBody.messages.filter((message: { role?: string }) => message.role === "tool"));
+    expect(assistant.error).toBeUndefined();
+    expect(assistant.content).toContain("inspection command completed");
+    expect(assistant.mcpApprovalRequest).toBeUndefined();
+    expect(assistant.content).not.toContain("Research provider failed");
+    expect(assistant.mcpToolCalls).toContainEqual(expect.objectContaining({
+      toolName: "run_command",
+      status: "succeeded"
+    }));
+    expect(assistant.subagentRuns).toEqual([]);
+    expect(consoleToolText).toContain("succeeded");
+    expect(consoleToolText).toContain("\\\"exitCode\\\": 0");
+    expect(JSON.stringify(initialBody)).toContain("archicode_console_run_command");
+    expect(JSON.stringify(initialBody)).not.toContain("archicode_project_inspect_cli");
+    expect(initialBody.tool_choice).toBeUndefined();
+    expect(initialBody.parallel_tool_calls).toBeUndefined();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns malformed Codex Local Delphi arguments for correction instead of failing the provider", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-local-delphi-repair-"));
+    const storageRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-storage-"));
+    const promptPath = path.join(projectRoot, "captured-prompts.txt");
+    setResearchStorageRoot(storageRoot);
+    const bundle = await ensureProject(projectRoot);
+    await writeFile(path.join(projectRoot, "package.json"), JSON.stringify({
+      name: "local-delphi-repair",
+      private: true,
+      scripts: { typecheck: "tsc --noEmit", dev: "vite" }
+    }), "utf8");
+    const malformed = JSON.stringify({
+      archicodeResearchTurn: {
+        toolCalls: [{
+          id: "bad-delphi",
+          providerToolName: "archicode_spawn_delphi",
+          arguments: {
+            objective: "Audit the live website",
+            platforms: ["web-local-browser"],
+            commands: [{ command: "npm run typecheck" }]
+          }
+        }]
+      }
+    });
+    const corrected = JSON.stringify({
+      archicodeResearchTurn: {
+        toolCalls: [{
+          id: "fixed-delphi",
+          providerToolName: "archicode_spawn_delphi",
+          arguments: {
+            objective: "Audit the live website",
+            platforms: ["web"],
+            target: { profileId: "web-local-browser", launch: "if-needed", cleanup: "stop-if-started" },
+            commands: ["npm run typecheck"]
+          }
+        }]
+      }
+    });
+    const finish = JSON.stringify({
+      archicodeResearchTurn: {
+        answer: "The corrected Delphi audit is ready for approval.",
+        toolCalls: [{
+          id: "memory-after-repair",
+          providerToolName: "archicode_update_memory",
+          arguments: { summary: "A corrected Delphi audit is awaiting approval." }
+        }]
+      }
+    });
+    const commandPath = await createFakeResearchCodex(projectRoot, [malformed, corrected, finish], promptPath);
+    await updateProjectSettings(projectRoot, {
+      ...bundle.project.settings,
+      webSearch: { ...bundle.project.settings.webSearch, enabled: false },
+      runTargetProfiles: [{
+        id: "web-local-browser",
+        label: "Local Browser",
+        kind: "web",
+        runCommand: "npm run dev",
+        url: "http://localhost:5173",
+        ports: [5173],
+        targetRequired: false,
+        diagnosticCommands: [],
+        recoveryCommands: [],
+        retryAfterRecovery: true,
+        timeoutSeconds: 120
+      }],
+      providers: bundle.project.settings.providers.map((provider) => provider.kind === "codex-local"
+        ? { ...provider, enabled: true, localCommand: commandPath, model: "gpt-5.6-terra" }
+        : { ...provider, enabled: false })
+    });
+    const session = await createResearchChat({ projectRoot, scope: { type: "project", projectId: bundle.project.id } });
+
+    const answered = await sendResearchChatMessage({
+      projectRoot,
+      sessionId: session.id,
+      content: "Run and test the current website in a live browser."
+    });
+
+    const assistant = answered.messages.at(-1)!;
+    const delphiRun = assistant.subagentRuns.find((run) => run.kind === "delphi-testing");
+    const prompts = await readFile(promptPath, "utf8");
+    expect(assistant.error).toBeUndefined();
+    expect(assistant.content).toContain("corrected Delphi audit is ready for approval");
+    expect(delphiRun).toMatchObject({ status: "awaiting-approval" });
+    expect(delphiTestingInputSchema.parse(JSON.parse(delphiRun!.argumentsJson))).toMatchObject({
+      platforms: ["web"],
+      commands: ["npm run typecheck"],
+      target: { profileId: "web-local-browser" }
+    });
+    expect(prompts).toContain("REPAIRABLE_TOOL_ERROR");
+    expect(prompts).toContain("Put a Run App profile id in target.profileId, not platforms");
+    expect(prompts).not.toContain("Codex Local failed");
+  });
+
+  it("returns an omitted Delphi delegation to the same Anthropic trajectory instead of forcing a provider-specific first tool", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-anthropic-delphi-route-"));
+    setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
+    const bundle = await ensureProject(projectRoot);
+    await writeFile(path.join(projectRoot, "package.json"), JSON.stringify({
+      name: "anthropic-delphi-route",
+      private: true,
+      scripts: { test: "vitest run" }
+    }), "utf8");
+    process.env.ANTHROPIC_RESEARCH_TEST_KEY = "test";
+    await updateProjectSettings(projectRoot, {
+      ...bundle.project.settings,
+      providers: bundle.project.settings.providers.map((provider) => provider.kind === "anthropic-compatible"
+        ? { ...provider, enabled: true, apiKeyEnv: "ANTHROPIC_RESEARCH_TEST_KEY" }
+        : { ...provider, enabled: false })
+    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(streamingAnthropicResponse([{
+        type: "text",
+        text: "The project appears ready, so I am done."
+      }]))
+      .mockResolvedValueOnce(streamingAnthropicResponse([{
+        type: "tool_use",
+        id: "toolu-delphi-route",
+        name: "archicode_spawn_delphi",
+        input: { objective: "Run the existing tests and audit the current app", mode: "audit", platforms: ["generic"] }
+      }]))
+      .mockResolvedValueOnce(streamingAnthropicResponse([{
+        type: "text",
+        text: "Delphi's audit is ready for your approval."
+      }]));
+    vi.stubGlobal("fetch", fetchMock);
+    const session = await createResearchChat({ projectRoot, scope: { type: "project", projectId: bundle.project.id } });
+
+    const answered = await sendResearchChatMessage({
+      projectRoot,
+      sessionId: session.id,
+      content: "Run and test the current app, including a runtime audit."
+    });
+    const firstBody = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string);
+    const correctionBody = JSON.parse(fetchMock.mock.calls[1]![1]!.body as string);
+
+    expect(firstBody.tool_choice).toBeUndefined();
+    expect(JSON.stringify(correctionBody.messages)).toContain("has not delegated that work to Delphi");
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(answered.messages.at(-1)?.subagentRuns).toContainEqual(expect.objectContaining({
+      kind: "delphi-testing",
+      status: "awaiting-approval"
+    }));
+  });
+
+  it("asks the user to choose one or several compatible Delphi runtime targets", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-delphi-target-choice-"));
+    setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
+    const bundle = await ensureProject(projectRoot);
+    process.env.OPENAI_RESEARCH_TEST_KEY = "test";
+    await updateProjectSettings(projectRoot, {
+      ...bundle.project.settings,
+      webSearch: { ...bundle.project.settings.webSearch, enabled: false },
+      runTargetProfiles: [
+        {
+          id: "monorepo-api",
+          label: "Monorepo API",
+          kind: "api",
+          runCommand: "npm run dev:api",
+          targetRequired: false,
+          diagnosticCommands: [],
+          recoveryCommands: [],
+          retryAfterRecovery: true,
+          timeoutSeconds: 120
+        },
+        {
+          id: "monorepo-web",
+          label: "Monorepo Web",
+          kind: "web",
+          runCommand: "npm run dev:web",
+          targetRequired: false,
+          diagnosticCommands: [],
+          recoveryCommands: [],
+          retryAfterRecovery: true,
+          timeoutSeconds: 120
+        }
+      ],
+      providers: bundle.project.settings.providers.map((provider) => provider.kind === "openai-compatible"
+        ? { ...provider, enabled: true, apiKeyEnv: "OPENAI_RESEARCH_TEST_KEY", openAiEndpointMode: "chat-completions" as const }
+        : { ...provider, enabled: false })
+    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([{
+        id: "call-delphi-target-choice",
+        name: "archicode_spawn_delphi",
+        arguments: JSON.stringify({ objective: "Run and test the monorepo services", mode: "audit", platforms: ["generic"] })
+      }]))
+      .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([{
+        id: "call-memory-target-choice",
+        name: "archicode_leave_memory_unchanged",
+        arguments: JSON.stringify({ reason: "The target choice is awaiting user input." })
+      }], "Choose the Run App targets Delphi should test."));
+    vi.stubGlobal("fetch", fetchMock);
+    const session = await createResearchChat({ projectRoot, scope: { type: "project", projectId: bundle.project.id } });
+
+    const answered = await sendResearchChatMessage({
+      projectRoot,
+      sessionId: session.id,
+      content: "Run and test this monorepo."
+    });
+    const message = answered.messages.at(-1)!;
+    const delphiRun = message.subagentRuns.find((run) => run.kind === "delphi-testing")!;
+
+    expect(delphiRun.runtimeTargetSelection).toMatchObject({
+      allowMultiple: true,
+      minSelections: 1,
+      options: [
+        { profileId: "monorepo-api", label: "Monorepo API", kind: "api" },
+        { profileId: "monorepo-web", label: "Monorepo Web", kind: "web" }
+      ]
+    });
+    expect(delphiRun.reviewReason).toContain("Choose one or more compatible Run App targets");
+    await expect(respondToSubagentRun({
+      projectRoot,
+      sessionId: answered.id,
+      messageId: message.id,
+      runId: delphiRun.id,
+      decision: "approved",
+      runtimeTargetProfileIds: []
+    })).rejects.toThrow("Choose at least one Run App target");
+  });
+
+  it("starts and audits every selected Delphi runtime target under one approval", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-delphi-multi-target-run-"));
+    setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
+    await writeFile(path.join(projectRoot, "package.json"), JSON.stringify({
+      private: true,
+      scripts: { test: "node -e \"console.log('multi-target-check-ok')\"" }
+    }), "utf8");
+    const bundle = await ensureProject(projectRoot);
+    process.env.OPENAI_RESEARCH_TEST_KEY = "test";
+    await updateProjectSettings(projectRoot, {
+      ...bundle.project.settings,
+      webSearch: { ...bundle.project.settings.webSearch, enabled: false },
+      runTargetProfiles: [
+        {
+          id: "service-api",
+          label: "Service API",
+          kind: "generic",
+          runCommand: "node -e \"console.log('api-ready'); setInterval(() => {}, 1000)\"",
+          runtimeReadyPattern: "api-ready",
+          targetRequired: false,
+          diagnosticCommands: [],
+          recoveryCommands: [],
+          retryAfterRecovery: true,
+          timeoutSeconds: 10
+        },
+        {
+          id: "service-web",
+          label: "Service Web",
+          kind: "generic",
+          runCommand: "node -e \"console.log('web-ready'); setInterval(() => {}, 1000)\"",
+          runtimeReadyPattern: "web-ready",
+          targetRequired: false,
+          diagnosticCommands: [],
+          recoveryCommands: [],
+          retryAfterRecovery: true,
+          timeoutSeconds: 10
+        }
+      ],
+      providers: bundle.project.settings.providers.map((provider) => provider.kind === "openai-compatible"
+        ? { ...provider, enabled: true, apiKeyEnv: "OPENAI_RESEARCH_TEST_KEY", openAiEndpointMode: "chat-completions" as const }
+        : { ...provider, enabled: false })
+    });
+    let parentTurn = 0;
+    let delphiTurn = 0;
+    const parentToolNamesByTurn: string[][] = [];
+    const parentRequestBodies: string[] = [];
+    const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
+      const body = String(init?.body ?? "");
+      if (body.includes("You are Delphi")) {
+        delphiTurn += 1;
+        if (delphiTurn === 1 || delphiTurn === 4) {
+          return streamingChatCompletionToolCallsResponse([{
+            id: `inspect-target-${delphiTurn}`,
+            name: "delphi_inspect_test_environment",
+            arguments: "{}"
+          }]);
+        }
+        if (delphiTurn === 2) {
+          return streamingChatCompletionToolCallsResponse([{
+            id: "run-shared-finite-check",
+            name: "archicode_console_run_command",
+            arguments: JSON.stringify({ command: "npm run test" })
+          }]);
+        }
+        const firstTarget = delphiTurn === 3;
+        return streamingChatCompletionResponse(JSON.stringify({
+          status: firstTarget ? "completed" : "blocked",
+          verdict: firstTarget ? "passed" : "not-run",
+          summary: firstTarget ? "The shared finite check passed while both targets were running." : "The second selected runtime started successfully; no additional finite command was repeated.",
+          attempts: firstTarget ? 1 : 0,
+          checks: firstTarget ? [{ name: "Shared finite check", status: "passed", command: "npm run test", evidence: ["exit code 0"] }] : [],
+          findings: [],
+          toolchains: [{ adapter: "generic", status: "ready", evidence: ["Selected runtime profile started."] }],
+          artifacts: [],
+          blockers: firstTarget ? [] : ["No direct generic-target adapter action was available."],
+          recommendedNextSteps: []
+        }));
+      }
+      parentTurn += 1;
+      const parentRequest = JSON.parse(body) as { tools?: Array<{ function?: { name?: string } }> };
+      parentRequestBodies.push(body);
+      parentToolNamesByTurn.push((parentRequest.tools ?? []).flatMap((tool) => tool.function?.name ? [tool.function.name] : []));
+      if (parentTurn === 1) {
+        return streamingChatCompletionToolCallsResponse([{
+          id: "spawn-multi-target-delphi",
+          name: "archicode_spawn_delphi",
+          arguments: JSON.stringify({ objective: "Run and test both services", mode: "audit", platforms: ["generic"] })
+        }]);
+      }
+      if (parentTurn === 2) {
+        return streamingChatCompletionToolCallsResponse([{
+          id: "remember-multi-target-card",
+          name: "archicode_update_memory",
+          arguments: JSON.stringify({
+            summary: "The Delphi audit is awaiting approval.",
+            todos: [{ title: "Run Delphi test/runtime audit", status: "awaiting-approval", notes: "Waiting for target selection." }],
+            runRefs: [{ runId: "delphi-testing", title: "Delphi audit", status: "awaiting-approval", note: "Pending approval." }]
+          })
+        }], "Choose which service targets Delphi should test.");
+      }
+      return streamingChatCompletionResponse([
+        "Delphi audit finished. Delphi finished with verdict: blocked.",
+        "Service API started and the shared finite check passed. Service Web also started, but direct generic-target adapter coverage was unavailable."
+      ].join(" "));
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const session = await createResearchChat({ projectRoot, scope: { type: "project", projectId: bundle.project.id } });
+    const prepared = await sendResearchChatMessage({ projectRoot, sessionId: session.id, content: "Run and test this multi-service project." });
+    const preparedMessage = prepared.messages.at(-1)!;
+    const delphiRun = preparedMessage.subagentRuns.find((run) => run.kind === "delphi-testing")!;
+    const parentActivity: string[] = [];
+
+    const completed = await respondToSubagentRun({
+      projectRoot,
+      sessionId: prepared.id,
+      messageId: preparedMessage.id,
+      runId: delphiRun.id,
+      decision: "approved",
+      runtimeTargetProfileIds: ["service-api", "service-web"],
+      onActivity: (message) => parentActivity.push(message)
+    });
+    const completedRun = completed.messages.flatMap((message) => message.subagentRuns).find((run) => run.id === delphiRun.id)!;
+    const services = await listRuntimeServices(projectRoot);
+
+    expect(completedRun.selectedRuntimeTargetProfileIds).toEqual(["service-api", "service-web"]);
+    expect(completedRun.status).toBe("blocked");
+    expect(completedRun.resultSummary).toContain("Service API");
+    expect(completedRun.resultSummary).toContain("Service Web");
+    expect(services.filter((service) => service.profileId === "service-api" || service.profileId === "service-web").every((service) => service.status === "stopped")).toBe(true);
+    expect(delphiTurn).toBe(5);
+    expect(parentTurn).toBe(3);
+    expect(parentActivity).toContain("Delphi finished. Archi is reviewing the evidence and preparing the final report.");
+    expect(parentActivity.at(-1)).toBe("The final report is ready in chat.");
+    expect(parentRequestBodies[2]).toContain("HOST DURABLE-GOAL EXTERNAL-OUTCOME RESUME");
+    expect(parentRequestBodies[2]).toContain("The host outcome above is the complete evidence packet for this event");
+    const finalReportMessage = [...completed.messages].reverse().find((message) => message.role === "assistant")!;
+    expect(completed.messages.filter((message) => message.role === "assistant")).toHaveLength(2);
+    expect(finalReportMessage.content).toContain("Delphi audit finished.");
+    expect(finalReportMessage.content).toContain("Delphi finished with verdict: blocked.");
+    expect(finalReportMessage.content).not.toMatch(/need to update memory|checkpoint is recorded/i);
+    expect(completed.orchestration.goal?.status).toBe("blocked");
+    expect(completed.orchestration.goal?.checkpointSummary).toContain(finalReportMessage.id);
+    expect(completed.orchestration.goal?.completionEvidence).not.toContain(`Final evidence-backed report persisted in chat message ${finalReportMessage.id}.`);
+    expect(completed.memory.summary).not.toContain("awaiting approval");
+    expect(completed.memory.todos.find((todo) => todo.title === "Run Delphi test/runtime audit")?.status).toBe("blocked");
+    expect(completed.memory.runRefs.find((runRef) => runRef.runId === "delphi-testing")?.status).toBe("blocked");
+    expect(completed.memory.runRefs.find((runRef) => runRef.runId === delphiRun.id)).toMatchObject({
+      title: "delphi-testing",
+      status: "blocked"
+    });
+  });
+
+  it("rejects approval cards created by a parent turn the user stops", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-cancel-corrective-"));
+    setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
+    const markerPath = path.join(projectRoot, "second-round-started.txt");
+    const command = await createMarkedStepResearchCodex(projectRoot, [
+      {
+        output: localResearchSinkTurn("Preparing a fresh audit approval.", [
+          { providerToolName: "archicode_spawn_delphi", arguments: { objective: "Audit the remaining untested coverage", mode: "audit", platforms: ["generic"] } }
+        ])
+      },
+      {
+        output: JSON.stringify({ archicodeResearch: { answer: "Never delivered.", summary: "" } }),
+        delayMs: 15_000,
+        markerPath
+      }
+    ]);
+    const bundle = await ensureProject(projectRoot);
+    await updateProjectSettings(projectRoot, {
+      ...bundle.project.settings,
+      providers: bundle.project.settings.providers.map((provider) => provider.id === "codex-local"
+        ? { ...provider, enabled: true, localCommand: command, localSandbox: "workspace-write" as const }
+        : { ...provider, enabled: false })
+    });
+    const baseSession = await createResearchChat({ projectRoot, scope: { type: "project", projectId: "project-cancel" } });
+    const now = new Date().toISOString();
+    const priorArgs = delphiTestingInputSchema.parse({ objective: "Audit the project", mode: "audit", platforms: ["generic"] });
+    const seeded = researchChatSessionSchema.parse({
+      ...baseSession,
+      orchestration: {
+        ...baseSession.orchestration,
+        goal: { id: "goal-cancel", objective: "Audit and report", status: "active", steps: [], createdAt: now, updatedAt: now },
+        updatedAt: now
+      },
+      messages: [{
+        id: "assistant-prior-delphi",
+        role: "assistant",
+        content: "Prior audit finished blocked before browser coverage.",
+        createdAt: now,
+        attachmentIds: [],
+        webUsed: false,
+        mcpToolCalls: [],
+        subagentRuns: [{
+          id: "delphi-approved-run",
+          kind: "delphi-testing",
+          status: "blocked",
+          title: "Approved Delphi audit",
+          argumentsJson: JSON.stringify(priorArgs),
+          approvedRuntimeCommands: [],
+          approvedRuntimeCleanupCommands: [],
+          progress: [],
+          createdAt: now,
+          updatedAt: now
+        }]
+      }]
+    });
+    await persistResearchSession(projectRoot, seeded);
+
+    const turn = sendResearchChatMessage({
+      projectRoot,
+      sessionId: seeded.id,
+      content: "HOST DURABLE-GOAL EXTERNAL-OUTCOME RESUME.\nThe approved Delphi audit finished blocked before browser coverage.",
+      internalContinuation: true,
+      outcomeEvidenceProvided: true
+    });
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      try {
+        await readFile(markerPath, "utf8");
+        break;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+    expect(cancelResearchChatMessage(seeded.id)).toBe(true);
+    const result = await turn;
+
+    expectTerminalResearchLifecycleInvariants(result);
+    const finalAssistant = result.messages.at(-1)!;
+    expect(finalAssistant.role).toBe("assistant");
+    expect(finalAssistant.content).toBe("Stopped.");
+    const allRuns = result.messages.flatMap((message) => message.subagentRuns);
+    const newAudit = allRuns.find((run) => run.kind === "delphi-testing" && run.id !== "delphi-approved-run");
+    expect(newAudit?.status).toBe("rejected");
+    expect(newAudit?.approvalInheritedFromRunId).toBeUndefined();
+    expect(allRuns.some((run) => run.status === "running" || run.status === "awaiting-approval")).toBe(false);
+    expect(result.orchestration.goal?.continuationCount).toBe(0);
+    const reloaded = (await listResearchChats(projectRoot)).find((item) => item.id === seeded.id)!;
+    expect(reloaded.messages.flatMap((message) => message.subagentRuns).some((run) => run.status === "running")).toBe(false);
+  }, 30_000);
+
+  it("does not auto-start a fresh Delphi approval card from a turn that ended in a provider failure", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-error-corrective-"));
+    setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
+    const command = await createScriptedResearchCodex(projectRoot, [
+      {
+        exitCode: 0,
+        output: localResearchSinkTurn("Preparing a fresh audit approval.", [
+          { providerToolName: "archicode_spawn_delphi", arguments: { objective: "Audit the remaining untested coverage", mode: "audit", platforms: ["generic"] } }
+        ])
+      },
+      { exitCode: 1, stderr: "provider transport blew up" }
+    ]);
+    const bundle = await ensureProject(projectRoot);
+    await updateProjectSettings(projectRoot, {
+      ...bundle.project.settings,
+      providers: bundle.project.settings.providers.map((provider) => provider.id === "codex-local"
+        ? { ...provider, enabled: true, localCommand: command, localSandbox: "workspace-write" as const }
+        : { ...provider, enabled: false })
+    });
+    const baseSession = await createResearchChat({ projectRoot, scope: { type: "project", projectId: "project-error-corrective" } });
+    const now = new Date().toISOString();
+    const priorArgs = delphiTestingInputSchema.parse({ objective: "Audit the project", mode: "audit", platforms: ["generic"] });
+    const seeded = researchChatSessionSchema.parse({
+      ...baseSession,
+      orchestration: {
+        ...baseSession.orchestration,
+        goal: { id: "goal-error-corrective", objective: "Audit and report", status: "active", steps: [], createdAt: now, updatedAt: now },
+        updatedAt: now
+      },
+      messages: [{
+        id: "assistant-prior-delphi",
+        role: "assistant",
+        content: "Prior audit finished blocked before browser coverage.",
+        createdAt: now,
+        attachmentIds: [],
+        webUsed: false,
+        mcpToolCalls: [],
+        subagentRuns: [{
+          id: "delphi-approved-run",
+          kind: "delphi-testing",
+          status: "blocked",
+          title: "Approved Delphi audit",
+          argumentsJson: JSON.stringify(priorArgs),
+          approvedRuntimeCommands: [],
+          approvedRuntimeCleanupCommands: [],
+          progress: [],
+          createdAt: now,
+          updatedAt: now
+        }]
+      }]
+    });
+    await persistResearchSession(projectRoot, seeded);
+
+    const result = await sendResearchChatMessage({
+      projectRoot,
+      sessionId: seeded.id,
+      content: "HOST DURABLE-GOAL EXTERNAL-OUTCOME RESUME.\nThe approved Delphi audit finished blocked before browser coverage.",
+      internalContinuation: true,
+      outcomeEvidenceProvided: true
+    });
+
+    expectTerminalResearchLifecycleInvariants(result);
+    const finalAssistant = result.messages.at(-1)!;
+    expect(finalAssistant.error).toContain("exit code 1");
+    expect(finalAssistant.content).toContain("Codex Local failed");
+    const allRuns = result.messages.flatMap((message) => message.subagentRuns);
+    const newAudit = allRuns.find((run) => run.kind === "delphi-testing" && run.id !== "delphi-approved-run");
+    // The valid card created before the provider failure stays visible for the
+    // user to decide, but the host never starts a new audit implicitly.
+    expect(newAudit?.status).toBe("awaiting-approval");
+    expect(newAudit?.approvalInheritedFromRunId).toBeUndefined();
+    expect(allRuns.some((run) => run.status === "running")).toBe(false);
+    expect(result.messages.filter((message) => message.role === "assistant")).toHaveLength(2);
+  }, 20_000);
+
+  it("stops an inline Sherlock micro-run when the parent turn is cancelled", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-cancel-sherlock-"));
+    setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
+    const markerPath = path.join(projectRoot, "sherlock-round-started.txt");
+    const command = await createMarkedStepResearchCodex(projectRoot, [
+      {
+        output: localResearchSinkTurn("Bringing in Sherlock.", [
+          { providerToolName: "archicode_spawn_sherlock", arguments: { objective: "Investigate the flaky navigation handling", mode: "codebase" } }
+        ])
+      },
+      {
+        output: JSON.stringify({ archicodeResearch: { answer: "Never delivered.", summary: "" } }),
+        delayMs: 20_000,
+        markerPath
+      }
+    ]);
+    const bundle = await ensureProject(projectRoot);
+    await updateProjectSettings(projectRoot, {
+      ...bundle.project.settings,
+      providers: bundle.project.settings.providers.map((provider) => provider.id === "codex-local"
+        ? { ...provider, enabled: true, localCommand: command, localSandbox: "workspace-write" as const }
+        : { ...provider, enabled: false })
+    });
+    const session = await createResearchChat({ projectRoot, scope: { type: "flow", flowId: "flow-main" } });
+
+    const turn = sendResearchChatMessage({
+      projectRoot,
+      sessionId: session.id,
+      content: "Investigate the flaky navigation handling in depth."
+    });
+    const deadline = Date.now() + 10_000;
+    while (Date.now() < deadline) {
+      try {
+        await readFile(markerPath, "utf8");
+        break;
+      } catch {
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+    expect(cancelResearchChatMessage(session.id)).toBe(true);
+    const cancelledAt = Date.now();
+    const result = await turn;
+
+    expectTerminalResearchLifecycleInvariants(result);
+    // The 20s Sherlock provider call must have been aborted, not awaited out.
+    expect(Date.now() - cancelledAt).toBeLessThan(10_000);
+    const sherlockRun = result.messages.flatMap((message) => message.subagentRuns).find((run) => run.kind === "sherlock-research")!;
+    expect(sherlockRun.status).toBe("failed");
+    expect(sherlockRun.error).toMatch(/cancel|abort/i);
+    expect(result.messages.at(-1)?.content).toBe("Stopped.");
+  }, 30_000);
+
+  it("continues past obsolete bookkeeping calls when the model corrects its trajectory", async () => {
+    const { projectRoot } = await setupProject([
+      localResearchSinkTurn("Recording progress.", [
+        { providerToolName: "archicode_checkpoint_goal", arguments: { status: "continue", summary: "First checkpoint after the outcome." } }
+      ]),
+      localResearchSinkTurn("Recording progress again.", [
+        { providerToolName: "archicode_checkpoint_goal", arguments: { status: "continue", summary: "Second checkpoint with no new work." } }
+      ]),
+      localResearchSinkTurn("Wrapping up.", [memoryUnchangedSink()]),
+      JSON.stringify({ archicodeResearch: { answer: "The finite checks passed; browser coverage remains blocked with the recorded evidence.", summary: "Outcome reported." } })
+    ]);
+    const baseSession = await createResearchChat({ projectRoot, scope: { type: "project", projectId: "project-checkpoint-guard" } });
+    const now = new Date().toISOString();
+    const seeded = researchChatSessionSchema.parse({
+      ...baseSession,
+      orchestration: {
+        ...baseSession.orchestration,
+        goal: { id: "goal-checkpoint-guard", objective: "Audit and report", status: "active", steps: [], createdAt: now, updatedAt: now },
+        updatedAt: now
+      }
+    });
+    await persistResearchSession(projectRoot, seeded);
+
+    const result = await sendResearchChatMessage({
+      projectRoot,
+      sessionId: seeded.id,
+      content: "HOST DURABLE-GOAL EXTERNAL-OUTCOME RESUME.\nThe approved Delphi audit finished.",
+      internalContinuation: true,
+      outcomeEvidenceProvided: true
+    });
+
+    expectTerminalResearchLifecycleInvariants(result);
+    expect(result.orchestration.goal?.status).toBe("completed");
+    expect(result.orchestration.goal?.continuationCount).toBe(0);
+    expect(result.messages.at(-1)?.content).toContain("browser coverage remains blocked");
+  }, 20_000);
+
+  it("stops an exact consecutive no-progress tool loop in the shared runtime", async () => {
+    const repeatedCheckpoint = { status: "continue", summary: "No new work was performed." };
+    const { projectRoot } = await setupProject([
+      localResearchSinkTurn("Recording progress.", [
+        { providerToolName: "archicode_checkpoint_goal", arguments: repeatedCheckpoint }
+      ]),
+      localResearchSinkTurn("Recording the same state again.", [
+        { providerToolName: "archicode_checkpoint_goal", arguments: repeatedCheckpoint }
+      ]),
+      localResearchSinkTurn("Still recording progress.", [
+        { providerToolName: "archicode_checkpoint_goal", arguments: repeatedCheckpoint }
+      ])
+    ]);
+    const baseSession = await createResearchChat({ projectRoot, scope: { type: "project", projectId: "project-checkpoint-loop-limit" } });
+    const now = new Date().toISOString();
+    const seeded = researchChatSessionSchema.parse({
+      ...baseSession,
+      orchestration: {
+        ...baseSession.orchestration,
+        goal: { id: "goal-checkpoint-loop-limit", objective: "Audit and report", status: "active", steps: [], createdAt: now, updatedAt: now },
+        updatedAt: now
+      }
+    });
+    await persistResearchSession(projectRoot, seeded);
+
+    const result = await sendResearchChatMessage({
+      projectRoot,
+      sessionId: seeded.id,
+      content: "HOST DURABLE-GOAL EXTERNAL-OUTCOME RESUME.\nThe approved Delphi audit finished.",
+      internalContinuation: true,
+      outcomeEvidenceProvided: true
+    });
+
+    expectTerminalResearchLifecycleInvariants(result);
+    const finalAssistant = result.messages.at(-1)!;
+    expect(result.orchestration.goal?.continuationCount).toBe(0);
+    expect(finalAssistant.error).toContain("Consecutive identical tool-call loop detected");
+    expect(finalAssistant.content).toContain("ArchiCode stopped a no-progress agent loop");
+    expect(finalAssistant.mcpToolCalls).toHaveLength(2);
+    expect(result.messages.filter((message) => message.role === "assistant")).toHaveLength(1);
+  }, 20_000);
+
+  it("reconciles impossible running subagent cards to an honest failed state on load", async () => {
+    const { projectRoot } = await setupProject();
+    const baseSession = await createResearchChat({ projectRoot, scope: { type: "project", projectId: "project-stale-running" } });
+    const now = new Date().toISOString();
+    const runShape = {
+      kind: "delphi-testing" as const,
+      status: "running" as const,
+      title: "Audit",
+      argumentsJson: "{}",
+      progress: ["Captured browser-1-goto evidence"],
+      createdAt: now,
+      updatedAt: now
+    };
+    const seeded = researchChatSessionSchema.parse({
+      ...baseSession,
+      messages: [{
+        id: "assistant-stale-running",
+        role: "assistant",
+        content: "Stopped.",
+        createdAt: now,
+        attachmentIds: [],
+        webUsed: false,
+        mcpToolCalls: [],
+        subagentRuns: [
+          { ...runShape, id: "stale-running-run" },
+          { ...runShape, id: "live-running-run" }
+        ]
+      }]
+    });
+    markSubagentRunLive("live-running-run");
+    try {
+      await persistResearchSession(projectRoot, seeded);
+      const reloaded = (await listResearchChats(projectRoot)).find((item) => item.id === seeded.id)!;
+      const runs = reloaded.messages.flatMap((message) => message.subagentRuns);
+      const stale = runs.find((run) => run.id === "stale-running-run")!;
+      const live = runs.find((run) => run.id === "live-running-run")!;
+
+      expect(stale.status).toBe("failed");
+      expect(stale.error).toMatch(/no live work/);
+      expect(stale.progress).toEqual(["Captured browser-1-goto evidence"]);
+      expect(live.status).toBe("running");
+    } finally {
+      markSubagentRunSettled("live-running-run");
+    }
+  });
+
+  it("blocks redundant Delphi artifact rescans without blocking source inspection", () => {
+    expect(requestsRedundantOutcomeArtifactRead("archicode_project_list_files", {
+      directory: ".archicode/artifacts",
+      recursive: true
+    })).toBe(true);
+    expect(requestsRedundantOutcomeArtifactRead("archicode_project_read_file", {
+      path: ".archicode/artifacts/chats/session/report.json"
+    })).toBe(true);
+    expect(requestsRedundantOutcomeArtifactRead("archicode_project_read_artifact", {
+      artifactId: "artifact-delphi-report"
+    })).toBe(true);
+    expect(requestsRedundantOutcomeArtifactRead("archicode_project_read_file", {
+      path: "src/components/AppHeader.vue"
+    })).toBe(false);
+  });
+
   it("recovers an unknown tool name with the exact allowlist after switching chat models", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-tool-recovery-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
@@ -4640,11 +5783,7 @@ describe("research chat workflow", () => {
         : { ...provider, enabled: false })
     });
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([{
-        id: "call-first-memory",
-        name: "archicode_leave_memory_unchanged",
-        arguments: JSON.stringify({ reason: "No durable state changed." })
-      }], "First model answered."))
+      .mockResolvedValueOnce(streamingChatCompletionResponse("First model answered."))
       .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([{
         id: "call-guessed-layout",
         name: "archicode_project_read_graph_layout",
@@ -4655,11 +5794,7 @@ describe("research chat workflow", () => {
         name: "archicode_read_graph_layout",
         arguments: JSON.stringify({ flowId: "flow-main", maxResults: 5 })
       }]))
-      .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([{
-        id: "call-second-memory",
-        name: "archicode_leave_memory_unchanged",
-        arguments: JSON.stringify({ reason: "The layout inspection added no durable state." })
-      }], "Recovered after exact tool-name feedback."));
+      .mockResolvedValueOnce(streamingChatCompletionResponse("Recovered after exact tool-name feedback."));
     vi.stubGlobal("fetch", fetchMock);
     const session = await createResearchChat({
       projectRoot,
@@ -4698,7 +5833,216 @@ describe("research chat workflow", () => {
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
-  it("stops repeated unknown Research tool calls with a precise non-provider error", async () => {
+  it("keeps a multi-step Research investigation in one provider trajectory without synthetic host turns", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-durable-goal-"));
+    setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
+    const bundle = await ensureProject(projectRoot);
+    process.env.OPENAI_RESEARCH_TEST_KEY = "test";
+    await updateProjectSettings(projectRoot, {
+      ...bundle.project.settings,
+      webSearch: { ...bundle.project.settings.webSearch, enabled: false },
+      providers: bundle.project.settings.providers.map((provider) => provider.kind === "openai-compatible"
+        ? { ...provider, enabled: true, apiKeyEnv: "OPENAI_RESEARCH_TEST_KEY", openAiEndpointMode: "chat-completions" as const }
+        : { ...provider, enabled: false })
+    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([{
+        id: "inspect-phase-files",
+        name: "archicode_project_list_files",
+        arguments: JSON.stringify({ directory: ".", recursive: false })
+      }]))
+      .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([{
+        id: "inspect-phase-content",
+        name: "archicode_project_search_files",
+        arguments: JSON.stringify({ query: "phase", maxResults: 5 })
+      }]))
+      .mockResolvedValueOnce(streamingChatCompletionResponse("Both requested phases were inspected and verified from the collected project evidence."));
+    vi.stubGlobal("fetch", fetchMock);
+    const session = await createResearchChat({ projectRoot, scope: { type: "project", projectId: bundle.project.id } });
+
+    const answered = await sendResearchChatMessage({
+      projectRoot,
+      sessionId: session.id,
+      content: "Complete both phases and verify the result."
+    });
+
+    expect(answered.orchestration.goal).toBeUndefined();
+    expect(answered.messages.filter((message) => message.role === "assistant")).toHaveLength(1);
+    expect(answered.messages.at(-1)?.content).toContain("Both requested phases were inspected and verified");
+    expect(answered.messages.at(-1)?.mcpToolCalls.filter((call) => call.status === "succeeded")).toHaveLength(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
+  it("wakes a durable goal only when its exact named run finishes", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-goal-run-wake-"));
+    const storageRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-storage-"));
+    setResearchStorageRoot(storageRoot);
+    const bundle = await ensureProject(projectRoot);
+    process.env.OPENAI_RESEARCH_TEST_KEY = "test";
+    await updateProjectSettings(projectRoot, {
+      ...bundle.project.settings,
+      webSearch: { ...bundle.project.settings.webSearch, enabled: false },
+      providers: bundle.project.settings.providers.map((provider) => provider.kind === "openai-compatible"
+        ? { ...provider, enabled: true, apiKeyEnv: "OPENAI_RESEARCH_TEST_KEY", openAiEndpointMode: "chat-completions" as const }
+        : { ...provider, enabled: false })
+    });
+    const session = await createResearchChat({ projectRoot, scope: { type: "project", projectId: bundle.project.id } });
+    const storagePath = researchStorageFile(storageRoot, projectRoot);
+    const stored = JSON.parse(await readFile(storagePath, "utf8")) as { sessions: Array<Record<string, unknown>> };
+    const storedSession = stored.sessions.find((item) => item.id === session.id)!;
+    storedSession.orchestration = {
+      todos: [],
+      updatedAt: "2026-07-18T00:00:00.000Z",
+      goal: {
+        id: "goal-run-wake",
+        objective: "Wait for and verify the implementation run",
+        successCriteria: ["The exact implementation run succeeds"],
+        status: "waiting",
+        steps: [{
+          id: "wait-run",
+          title: "Wait for implementation",
+          status: "waiting",
+          evidence: [],
+          createdAt: "2026-07-18T00:00:00.000Z",
+          updatedAt: "2026-07-18T00:00:00.000Z"
+        }],
+        currentStepId: "wait-run",
+        checkpointSummary: "Waiting for run-target-123",
+        completionEvidence: [],
+        blockers: [],
+        waitingFor: [{ kind: "run", id: "run-target-123", label: "Implementation run" }],
+        continuationCount: 0,
+        createdAt: "2026-07-18T00:00:00.000Z",
+        updatedAt: "2026-07-18T00:00:00.000Z"
+      }
+    };
+    await writeFile(storagePath, JSON.stringify(stored), "utf8");
+    const fetchMock = vi.fn().mockResolvedValueOnce(streamingChatCompletionResponse(
+      "The implementation run succeeded and the goal is complete."
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+    const run = runSchema.parse({
+      id: "run-target-123",
+      flowId: "flow-main",
+      providerId: "provider-openai",
+      status: "succeeded",
+      phase: "complete",
+      effort: "high",
+      promptSummary: "Implement the requested target",
+      permission: { decision: "allowed" },
+      todos: [],
+      logs: [{ at: "2026-07-18T00:01:00.000Z", stream: "system", text: "Verification passed." }],
+      createdAt: "2026-07-18T00:00:00.000Z"
+    });
+
+    expect(await resumeResearchGoalsForRunUpdate(projectRoot, { ...run, id: "another-run" })).toEqual([]);
+    const resumed = await resumeResearchGoalsForRunUpdate(projectRoot, run);
+
+    expect(resumed).toHaveLength(1);
+    expect(resumed[0]?.orchestration.goal?.status).toBe("completed");
+    expect(resumed[0]?.messages.at(-1)?.content).toContain("goal is complete");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("resumes an unfinished durable goal after its graph approval is applied", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-goal-review-resume-"));
+    const storageRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-storage-"));
+    setResearchStorageRoot(storageRoot);
+    const bundle = await ensureProject(projectRoot);
+    process.env.OPENAI_RESEARCH_TEST_KEY = "test";
+    await updateProjectSettings(projectRoot, {
+      ...bundle.project.settings,
+      webSearch: { ...bundle.project.settings.webSearch, enabled: false },
+      providers: bundle.project.settings.providers.map((provider) => provider.kind === "openai-compatible"
+        ? { ...provider, enabled: true, apiKeyEnv: "OPENAI_RESEARCH_TEST_KEY", openAiEndpointMode: "chat-completions" as const }
+        : { ...provider, enabled: false })
+    });
+    const session = await createResearchChat({ projectRoot, scope: { type: "project", projectId: bundle.project.id } });
+    const storagePath = researchStorageFile(storageRoot, projectRoot);
+    const stored = JSON.parse(await readFile(storagePath, "utf8")) as { sessions: Array<Record<string, any>> };
+    const storedSession = stored.sessions.find((item) => item.id === session.id)!;
+    const changeSet = {
+      id: "goal-review-change",
+      summary: "Add the approved durable-goal node",
+      operations: [{
+        kind: "create-node",
+        flowId: "flow-main",
+        node: {
+          id: "node-durable-goal-review",
+          type: "task",
+          title: "Durable goal review",
+          description: "Created after the approval pause."
+        }
+      }],
+      createdAt: "2026-07-18T00:00:00.000Z"
+    };
+    storedSession.messages.push({
+      id: "goal-review-message",
+      role: "assistant",
+      content: "The durable-goal graph update is ready for review.",
+      createdAt: "2026-07-18T00:00:00.000Z",
+      attachmentIds: [],
+      webUsed: false,
+      mcpToolCalls: [],
+      subagentRuns: [],
+      changeSet
+    });
+    storedSession.orchestration = {
+      todos: [{
+        id: "goal-review-todo",
+        title: changeSet.summary,
+        status: "awaiting-approval",
+        changeSetId: changeSet.id,
+        messageId: "goal-review-message",
+        operationIndexes: [0],
+        createdAt: "2026-07-18T00:00:00.000Z"
+      }],
+      updatedAt: "2026-07-18T00:00:00.000Z",
+      goal: {
+        id: "goal-review-resume",
+        objective: "Apply and verify the approved graph update",
+        successCriteria: ["The approved node exists in the graph"],
+        status: "awaiting-approval",
+        steps: [{
+          id: "apply-review",
+          title: "Apply the graph review",
+          status: "awaiting-approval",
+          evidence: [],
+          createdAt: "2026-07-18T00:00:00.000Z",
+          updatedAt: "2026-07-18T00:00:00.000Z"
+        }],
+        currentStepId: "apply-review",
+        checkpointSummary: "Waiting for graph approval",
+        completionEvidence: [],
+        blockers: [],
+        waitingFor: [{ kind: "approval", id: changeSet.id, label: changeSet.summary }],
+        continuationCount: 0,
+        createdAt: "2026-07-18T00:00:00.000Z",
+        updatedAt: "2026-07-18T00:00:00.000Z"
+      }
+    };
+    await writeFile(storagePath, JSON.stringify(stored), "utf8");
+    const fetchMock = vi.fn().mockResolvedValueOnce(streamingChatCompletionResponse(
+      "The approved node was added and verified; the goal is complete."
+    ));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const reviewed = await applyResearchGraphChangeSet({
+      projectRoot,
+      sessionId: session.id,
+      messageId: "goal-review-message",
+      changeSetId: changeSet.id,
+      decisions: [{ operationIndex: 0, decision: "accepted" }]
+    });
+
+    expect(reviewed.results[0]?.status).toBe("applied");
+    expect(reviewed.session.orchestration.goal?.status).toBe("completed");
+    expect(reviewed.session.messages.at(-1)?.content).toContain("goal is complete");
+    expect((await loadProject(projectRoot)).flows[0]?.nodes.some((node) => node.id === "node-durable-goal-review")).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops an exact consecutive unknown-tool loop with a precise host error", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-tool-limit-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
     const bundle = await ensureProject(projectRoot);
@@ -4717,7 +6061,12 @@ describe("research chat workflow", () => {
       }]))
       .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([{
         id: "call-invalid-two",
-        name: "archicode_graph_layout_read",
+        name: "archicode_project_read_graph_layout",
+        arguments: "{}"
+      }]))
+      .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([{
+        id: "call-invalid-three",
+        name: "archicode_project_read_graph_layout",
         arguments: "{}"
       }]));
     vi.stubGlobal("fetch", fetchMock);
@@ -4733,16 +6082,17 @@ describe("research chat workflow", () => {
     });
 
     const assistant = answered.messages.at(-1)!;
-    expect(assistant.content).toContain("repeatedly requested unavailable tools");
-    expect(assistant.content).toContain("No unavailable tool was executed");
+    expect(assistant.content).toContain("ArchiCode stopped a no-progress agent loop");
+    expect(assistant.content).toContain("Consecutive identical tool-call loop detected");
+    expect(assistant.content).toContain("No additional tool action was executed after the guard fired");
     expect(assistant.content).not.toContain("Research provider failed");
-    expect(assistant.error).toContain("stopped after 2 invalid tool calls");
+    expect(assistant.error).toContain("stopped on attempt 3");
     expect(assistant.mcpToolCalls).toHaveLength(2);
     expect(assistant.mcpToolCalls.every((call) => call.status === "failed")).toBe(true);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
-  it("repairs a claimed graph review card when the provider omitted its change-set tool call", async () => {
+  it("continues the same trajectory when a claimed graph card has not yet been submitted", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-card-repair-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
     const bundle = await ensureProject(projectRoot);
@@ -4791,8 +6141,12 @@ describe("research chat workflow", () => {
 
     const repairBody = JSON.parse(fetchMock.mock.calls[1]![1]!.body as string);
     const repairToolNames = repairBody.tools.map((tool: { function?: { name?: string } }) => tool.function?.name);
+    const repairTranscript = JSON.stringify(repairBody.messages);
     const assistant = answered.messages.at(-1)!;
-    expect(repairToolNames).toEqual(["archicode_propose_graph_change_set"]);
+    expect(repairToolNames).toContain("archicode_propose_graph_change_set");
+    expect(repairToolNames).toContain("archicode_project_read_file");
+    expect(repairTranscript).toContain("invalid-tool-name");
+    expect(repairTranscript).toContain("archicode_propose_graph_change_set");
     expect(assistant.changeSet?.summary).toBe("Add the confirmed review node");
     expect(assistant.changeSet?.operations).toHaveLength(1);
     expect(fetchMock).toHaveBeenCalledTimes(2);
@@ -4815,12 +6169,7 @@ describe("research chat workflow", () => {
         name: "archicode_leave_memory_unchanged",
         arguments: JSON.stringify({ reason: "No durable state changed." })
       }], "I created the graph review card and it is ready."))
-      .mockResolvedValueOnce(streamingChatCompletionResponse("No review card was created because the requested operations are not yet clear."))
-      .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([{
-        id: "call-honest-memory",
-        name: "archicode_leave_memory_unchanged",
-        arguments: JSON.stringify({ reason: "No graph proposal was created." })
-      }]));
+      .mockResolvedValueOnce(streamingChatCompletionResponse("No review card was created because the requested operations are not yet clear."));
     vi.stubGlobal("fetch", fetchMock);
     const session = await createResearchChat({
       projectRoot,
@@ -4836,7 +6185,7 @@ describe("research chat workflow", () => {
     const assistant = answered.messages.at(-1)!;
     expect(assistant.content).toBe("No review card was created because the requested operations are not yet clear.");
     expect(assistant.changeSet).toBeUndefined();
-    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("lets Research read current flow violations without requesting mutation approval", async () => {
@@ -4949,15 +6298,11 @@ describe("research chat workflow", () => {
       .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([
         { id: "call-memory-badge", name: "archicode_update_memory", arguments: "{\"summary\":\"The launch badge must be a blue octagon.\"}" }
       ], "Noted the blue octagon decision."))
-      .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([
-        { id: "call-memory-skip-second", name: "archicode_leave_memory_unchanged", arguments: "{\"reason\":\"The unrelated transition added no durable state.\"}" }
-      ], "Second turn noted."))
+      .mockResolvedValueOnce(streamingChatCompletionResponse("Second turn noted."))
       .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([
         { id: "call-history", name: "archicode_read_chat_history", arguments: "{\"mode\":\"search\",\"query\":\"blue octagon\",\"maxMessages\":4,\"maxChars\":2000}" }
       ]))
-      .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([
-        { id: "call-memory-skip-history", name: "archicode_leave_memory_unchanged", arguments: "{\"reason\":\"The answer restated an already stored decision.\"}" }
-      ], "The older decision was retrieved."));
+      .mockResolvedValueOnce(streamingChatCompletionResponse("The older decision was retrieved."));
     vi.stubGlobal("fetch", fetchMock);
     const session = await createResearchChat({
       projectRoot,
@@ -5109,12 +6454,13 @@ describe("research chat workflow", () => {
     });
     const context7ToolName = "mcp_io_github_upstash_context7_resolve-library-id";
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([
-        { id: "call-memory-skip-greeting", name: "archicode_leave_memory_unchanged", arguments: "{\"reason\":\"This greeting added no durable state.\"}" }
-      ], "Hi. I can help."))
+      .mockResolvedValueOnce(streamingChatCompletionResponse("Hi. I can help."))
       .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([
         { id: "call-context7", name: context7ToolName, arguments: "{\"libraryName\":\"react\"}" }
-      ]));
+      ], "", {
+        reasoning: "I should consult Context7 before answering.",
+        reasoning_details: [{ type: "reasoning.text", id: "reasoning-context7", text: "Consult the requested source.", index: 0 }]
+      }, { prompt_tokens: 100, completion_tokens: 20, completion_tokens_details: { reasoning_tokens: 10 } }));
     vi.stubGlobal("fetch", fetchMock);
     const session = await createResearchChat({
       projectRoot,
@@ -5145,8 +6491,12 @@ describe("research chat workflow", () => {
       toolName: "resolve-library-id",
       providerToolName: context7ToolName,
       argumentsJson: "{\"libraryName\":\"react\"}",
-      originalContent: "Can you use Context7 for React docs?"
+      originalContent: "Can you use Context7 for React docs?",
+      internalContinuation: false
     });
+    expect(approvalMessage?.usage?.reasoningReplayState).toBe("received");
+    expect(JSON.stringify(approvalMessage?.mcpApprovalRequest?.providerContinuation?.messages)).toContain("I should consult Context7 before answering.");
+    expect(JSON.stringify(approvalMessage?.mcpApprovalRequest?.providerContinuation?.messages)).toContain("reasoning-context7");
     expect(mcpCall).toMatchObject({
       serverId: "io-github-upstash-context7",
       serverLabel: "Context7",
@@ -5202,7 +6552,11 @@ describe("research chat workflow", () => {
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([
         { id: "call-context7", name: context7ToolName, arguments: "{\"libraryName\":\"react\"}" }
-      ]))
+      ], "", {
+        reasoning: "The user explicitly requested Context7.",
+        reasoning_content: "Preserve this Kimi-compatible reasoning alias.",
+        reasoning_details: [{ type: "reasoning.text", id: "reasoning-approved", text: "Use the approved tool.", index: 0 }]
+      }))
       .mockResolvedValueOnce(streamingChatCompletionResponse("Context7 returned React docs."));
     vi.stubGlobal("fetch", fetchMock);
     const session = await createResearchChat({
@@ -5219,11 +6573,15 @@ describe("research chat workflow", () => {
     const firstBody = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string);
     const secondBody = JSON.parse(fetchMock.mock.calls[1]![1]!.body as string);
     const toolMessageText = JSON.stringify(secondBody.messages.filter((message: { role?: string }) => message.role === "tool"));
+    const assistantToolMessage = secondBody.messages.find((message: { role?: string; tool_calls?: unknown[] }) => message.role === "assistant" && message.tool_calls?.length);
     const updated = (await listResearchChats(projectRoot))[0]!;
     const mcpCall = updated.messages.at(-1)?.mcpToolCalls[0];
 
     expect(JSON.stringify(firstBody)).toContain("allow-this-message");
     expect(toolMessageText).toContain("context7 approved result for react");
+    expect(assistantToolMessage.reasoning).toBe("The user explicitly requested Context7.");
+    expect(assistantToolMessage.reasoning_content).toBe("Preserve this Kimi-compatible reasoning alias.");
+    expect(assistantToolMessage.reasoning_details).toEqual([{ type: "reasoning.text", id: "reasoning-approved", text: "Use the approved tool.", index: 0 }]);
     expect(mcpCall).toMatchObject({
       serverId: "context7",
       serverLabel: "Context7",
@@ -5273,6 +6631,8 @@ describe("research chat workflow", () => {
     const context7ToolName = "mcp_context7_resolve-library-id";
     const fetchMock = vi.fn()
       .mockResolvedValueOnce(streamingAnthropicResponse([
+        { type: "thinking", thinking: "I should use the approved documentation source.", signature: "sig-approved-context7" },
+        { type: "redacted_thinking", data: "encrypted-approved-context7" },
         { type: "tool_use", id: "toolu-context7", name: context7ToolName, input: { libraryName: "react" } }
       ]))
       .mockResolvedValueOnce(streamingAnthropicResponse([
@@ -5292,12 +6652,20 @@ describe("research chat workflow", () => {
     });
     const firstBody = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string);
     const secondBody = JSON.parse(fetchMock.mock.calls[1]![1]!.body as string);
+    const assistantToolMessage = secondBody.messages.find((message: { role?: string; content?: Array<{ type?: string }> }) =>
+      message.role === "assistant" && message.content?.some((block) => block.type === "tool_use"));
     const updated = (await listResearchChats(projectRoot))[0]!;
     const mcpCall = updated.messages.at(-1)?.mcpToolCalls[0];
 
     expect(JSON.stringify(firstBody)).toContain(context7ToolName);
     expect(JSON.stringify(firstBody)).toContain("allow-this-message");
     expect(JSON.stringify(secondBody.messages)).toContain("context7 approved result for react");
+    expect(assistantToolMessage.content).toEqual([
+      { type: "thinking", thinking: "I should use the approved documentation source.", signature: "sig-approved-context7" },
+      { type: "redacted_thinking", data: "encrypted-approved-context7" },
+      { type: "tool_use", id: "toolu-context7", name: context7ToolName, input: { libraryName: "react" } }
+    ]);
+    expect(updated.messages.at(-1)?.usage?.reasoningReplayState).toBe("mixed");
     expect(mcpCall).toMatchObject({
       serverId: "context7",
       serverLabel: "Context7",
@@ -5345,6 +6713,7 @@ describe("research chat workflow", () => {
     const fetchMock = vi.fn()
       // Turn 1: model reasons in prose, then calls the untrusted tool -> approval.
       .mockResolvedValueOnce(streamingAnthropicResponse([
+        { type: "thinking", thinking: "The user requested Context7 and this action needs approval.", signature: "sig-context7-approval" },
         { type: "text", text: "Let me look that up in Context7." },
         { type: "tool_use", id: "toolu-context7", name: context7ToolName, input: { libraryName: "react" } }
       ]))
@@ -5364,6 +6733,8 @@ describe("research chat workflow", () => {
     expect(continuation?.transport).toBe("anthropic");
     expect(continuation?.pendingToolCall.providerToolName).toBe(context7ToolName);
     expect(JSON.stringify(continuation?.messages)).toContain("Let me look that up in Context7.");
+    expect(JSON.stringify(continuation?.messages)).toContain("The user requested Context7 and this action needs approval.");
+    expect(JSON.stringify(continuation?.messages)).toContain("sig-context7-approval");
     expect(JSON.stringify(continuation?.messages)).toContain("toolu-context7");
 
     const resumeCalls = fetchMock.mock.calls.length;

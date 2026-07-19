@@ -1,8 +1,8 @@
 import { createHash } from "node:crypto";
 import { copyFile, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { researchChatScopeSchema, researchChatSessionSchema } from "../../shared/schema";
-import type { ResearchChatScope, ResearchChatSession } from "../../shared/schema";
+import { researchChatScopeSchema, researchChatSessionSchema, subagentRunSchema } from "../../shared/schema";
+import type { ResearchChatScope, ResearchChatSession, SubagentRun, SubagentRunStatus } from "../../shared/schema";
 import { loadProject, updateProjectSettings } from "../storage/projectStore";
 import { defaultTitleForScope, id, iso } from "../research";
 
@@ -53,7 +53,89 @@ export type ReadChatsFileResult =
   | { ok: true; sessions: ResearchChatSession[] }
   | { ok: false; missing: boolean };
 
+/**
+ * Subagent run ids whose owning operation is currently executing in this
+ * process. A persisted "running" run that is not registered here has no live
+ * operation behind it (the app was restarted or the owning code path threw),
+ * so listing reconciles it to an honest failed state instead of leaving a
+ * forever-running card.
+ */
+const liveSubagentRunIds = new Set<string>();
+
+export function markSubagentRunLive(runId: string): void {
+  liveSubagentRunIds.add(runId);
+}
+
+export function markSubagentRunSettled(runId: string): void {
+  liveSubagentRunIds.delete(runId);
+}
+
+const ALLOWED_SUBAGENT_RUN_TRANSITIONS: Record<SubagentRunStatus, ReadonlySet<SubagentRunStatus>> = {
+  "awaiting-approval": new Set(["awaiting-approval", "running", "rejected", "failed"]),
+  running: new Set(["running", "completed", "blocked", "failed"]),
+  completed: new Set(["completed"]),
+  blocked: new Set(["blocked"]),
+  failed: new Set(["failed"]),
+  rejected: new Set(["rejected"])
+};
+
+type SubagentRunTransitionPatch = Partial<Omit<SubagentRun, "id" | "kind" | "status" | "createdAt" | "updatedAt">>;
+
+/**
+ * The single owner for live Research subagent status transitions. Besides
+ * rejecting impossible state changes, it keeps the in-process live registry
+ * synchronized with the persisted status used by stale-run reconciliation.
+ */
+export function transitionSubagentRun(
+  run: SubagentRun,
+  nextStatus: SubagentRunStatus,
+  patch: SubagentRunTransitionPatch = {},
+  updatedAt = iso()
+): SubagentRun {
+  if (!ALLOWED_SUBAGENT_RUN_TRANSITIONS[run.status].has(nextStatus)) {
+    throw new Error(`Invalid subagent run transition ${run.status} -> ${nextStatus} for ${run.id}.`);
+  }
+  const nextRun = subagentRunSchema.parse({ ...run, ...patch, status: nextStatus, updatedAt });
+  if (nextStatus === "running") markSubagentRunLive(run.id);
+  else markSubagentRunSettled(run.id);
+  return nextRun;
+}
+
+const STALE_RUNNING_SUBAGENT_ERROR = "This subagent was still marked running after its owning operation ended (app restart or an interrupted approval flow), so no live work exists for it. Its recorded progress and evidence are preserved.";
+
+function reconcileStaleRunningSubagentRuns(session: ResearchChatSession): { session: ResearchChatSession; changed: boolean } {
+  let changed = false;
+  const messages = session.messages.map((message) => {
+    if (!message.subagentRuns.some((run) => run.status === "running" && !liveSubagentRunIds.has(run.id))) return message;
+    changed = true;
+    return {
+      ...message,
+      subagentRuns: message.subagentRuns.map((run) => run.status === "running" && !liveSubagentRunIds.has(run.id)
+        ? transitionSubagentRun(run, "failed", { error: run.error ?? STALE_RUNNING_SUBAGENT_ERROR })
+        : run)
+    };
+  });
+  return changed
+    ? { session: researchChatSessionSchema.parse({ ...session, messages, updatedAt: iso() }), changed }
+    : { session, changed };
+}
+
+/** Persists honest terminal states for impossible "running" subagent cards. */
+async function persistReconciledStaleRunningSubagents(projectRoot: string): Promise<void> {
+  await withProjectChatsLock(projectRoot, async () => {
+    const latest = await readChatsForMutation(projectRoot);
+    let changed = false;
+    const sessions = latest.sessions.map((session) => {
+      const reconciled = reconcileStaleRunningSubagentRuns(session);
+      changed = changed || reconciled.changed;
+      return reconciled.session;
+    });
+    if (changed) await writeChats(projectRoot, sessions);
+  });
+}
+
 const LEGACY_SHERLOCK_SOURCES_FAILURE = "Sherlock completed without a structured sources list.";
+const LEGACY_OPTIONAL_MEMORY_DECISION_NOTICE = "The model omitted its optional semantic memory decision. Host-observed subagent status and evidence were preserved without an extra provider repair call.";
 
 /**
  * Older versions treated a missing top-level source index as fatal even after
@@ -84,6 +166,17 @@ function reconcileLegacySherlockSourceFailures(session: ResearchChatSession): Re
   return changed ? { ...session, messages } : session;
 }
 
+function reconcileLegacyOptionalMemoryDecisionNotice(session: ResearchChatSession): ResearchChatSession {
+  if (session.memory.lastUpdateError !== LEGACY_OPTIONAL_MEMORY_DECISION_NOTICE) return session;
+  return {
+    ...session,
+    memory: {
+      ...session.memory,
+      lastUpdateError: undefined
+    }
+  };
+}
+
 export async function readChatsFile(projectRoot: string, filePath: string): Promise<ReadChatsFileResult> {
   let text: string;
   try {
@@ -98,7 +191,9 @@ export async function readChatsFile(projectRoot: string, filePath: string): Prom
       ok: true,
       sessions: (raw.sessions ?? []).flatMap((session) => {
         const parsed = researchChatSessionSchema.safeParse({ ...session, projectRoot });
-        return parsed.success ? [reconcileLegacySherlockSourceFailures(parsed.data)] : [];
+        return parsed.success
+          ? [reconcileLegacyOptionalMemoryDecisionNotice(reconcileLegacySherlockSourceFailures(parsed.data))]
+          : [];
       })
     };
   } catch {
@@ -215,7 +310,11 @@ export async function persistResearchSession(projectRoot: string, session: Resea
 export async function listResearchChats(projectRoot: string): Promise<ResearchChatSession[]> {
   const bundle = await loadProject(projectRoot);
   const store = await readChats(projectRoot);
-  return store.sessions
+  const reconciled = store.sessions.map((session) => reconcileStaleRunningSubagentRuns(session));
+  if (!store.loadFailed && reconciled.some((entry) => entry.changed)) {
+    await persistReconciledStaleRunningSubagents(projectRoot).catch(() => undefined);
+  }
+  return reconciled.map(({ session }) => session)
     .filter((session) => !session.archived)
     .map((session) => researchChatSessionSchema.parse({
       ...session,

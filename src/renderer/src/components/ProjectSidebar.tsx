@@ -47,6 +47,7 @@ import {
   Tooltip
 } from "./ui";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { getOpenQuestionsForScope } from "../utils/nodeSignals";
 import { builtInNodeTypes } from "../utils/nodeTypes";
 import { isRunBlockingNewChange } from "../utils/runStatus";
@@ -147,7 +148,36 @@ export function ProjectSidebar({
     createProjectFromTemplate,
     recentProjects,
     keybindings
-  } = useArchicodeStore();
+  } = useArchicodeStore(useShallow((state) => ({
+    bundle: state.bundle,
+    activeFlowId: state.activeFlowId,
+    activeSubflowId: state.activeSubflowId,
+    searchQuery: state.searchQuery,
+    selectedNodeId: state.selectedNodeId,
+    selectedNodeIds: state.selectedNodeIds,
+    selectNode: state.selectNode,
+    selectNodes: state.selectNodes,
+    toggleNodeSelection: state.toggleNodeSelection,
+    navigateToGraphTarget: state.navigateToGraphTarget,
+    setActiveFlow: state.setActiveFlow,
+    setActiveSubflow: state.setActiveSubflow,
+    setSearchQuery: state.setSearchQuery,
+    rootPath: state.rootPath,
+    addNode: state.addNode,
+    createFlow: state.createFlow,
+    createSubflow: state.createSubflow,
+    renameSubflow: state.renameSubflow,
+    toggleSubflowIgnored: state.toggleSubflowIgnored,
+    reparentSubflow: state.reparentSubflow,
+    deleteSubflow: state.deleteSubflow,
+    saveFlow: state.saveFlow,
+    openProjectFolder: state.openProjectFolder,
+    openRecentProject: state.openRecentProject,
+    revealProjectFolder: state.revealProjectFolder,
+    createProjectFromTemplate: state.createProjectFromTemplate,
+    recentProjects: state.recentProjects,
+    keybindings: state.keybindings
+  })));
   const [flowsExpanded, setFlowsExpanded] = useState(false);
   const [pathCopied, setPathCopied] = useState(false);
   const [pathCopyFailed, setPathCopyFailed] = useState(false);

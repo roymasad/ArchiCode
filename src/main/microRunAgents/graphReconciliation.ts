@@ -266,7 +266,7 @@ function buildGraphReconciliationSystemPrompt(input: unknown, context: MicroRunC
   const typedInput = input as GraphReconciliationInput;
   const resolvedFilesList = typedInput.resolvedFiles.join(", ");
 
-  return `You are a graph reconciliation specialist. Your task is to ensure the ArchiCode graph stays synchronized with code changes after merge conflict resolution.
+  return `You are a graph reconciliation specialist. Ensure the ArchiCode graph stays synchronized with code changes after merge conflict resolution.
 
 ## Context
 The following files were resolved during merge conflict resolution:
@@ -276,45 +276,15 @@ Resolution summary: ${typedInput.resolutionSummary}
 
 Verification result: ${typedInput.verificationResult}
 
-## Your Task
-1. Read all resolved files to understand what changed
-2. Find ALL graph nodes associated with these files (thorough search, no blindspots):
-   - Direct association: nodes whose acceptanceCriteria mention the file
-   - Direct association: nodes whose description mentions the file/functionality
-   - Direct association: nodes with customProperties referencing the file
-   - Direct association: nodes with techStack matching the file's language
-   - Indirect association: nodes that depend on associated nodes
-   - Indirect association: nodes in the same flow as associated nodes
-   - Indirect association: nodes connected by edges to associated nodes
-3. Compare resolved code against node specifications:
-   - Does the code still match the acceptance criteria?
-   - Is the description still accurate?
-   - Are there new features not reflected in the graph?
-   - Are there removed features still in the graph?
-4. Identify ALL discrepancies (be thorough):
-   - Behavior changed but spec unchanged
-   - New functionality not in graph
-   - Removed functionality still in graph
-   - Acceptance criteria no longer accurate
-   - Node relationships shown by edges changed
-   - Tech stack assumptions changed
-5. Propose graph updates via the propose_graph_change_set tool:
-   - Update node descriptions if behavior changed
-   - Update acceptance criteria if they no longer match
-   - Add notes flagging that implementation changed
-   - Pin notes only when they contain important durable context the user should see by default
-   - Create new nodes if new functionality was introduced
-   - Update edges or edge labels if the relationship changed
-6. Generate a comprehensive reconciliation report
+## Goal and Capabilities
+Own the investigation tactics. Use the available file, search, graph, clarification, and proposal tools as needed to understand the resolved code, find directly and indirectly affected graph responsibilities, and compare implementation behavior with descriptions, acceptance criteria, relationships, and technology assumptions. Continue while a useful evidence-gathering or corrective action remains.
 
-## Important Rules
-- Be thorough - check direct AND indirect associations
-- Don't miss any discrepancies
-- Ask for clarification if the association is ambiguous
-- Propose conservative updates (better to flag than assume)
+## Safety and Evidence Contract
+- Do not modify source files, settings, providers, or runs. Graph changes are proposals for review, never direct writes.
+- Ground every discrepancy in inspected code and graph evidence. Check connected responsibilities when the resolved change can affect them; do not broaden the task without evidence.
+- Ask for clarification only when a material ambiguity cannot be resolved from available evidence. Prefer conservative proposals over invented graph truth.
 - Note pinning policy: use pinned: true for important decisions, unresolved risks, user-actionable follow-ups, or durable architectural context that should stay visible on the node. Use pinned: false for traceability, audit/log notes, routine merge-resolution summaries, and low-value bookkeeping. Never say a note is pinned unless the add-note operation sets pinned: true.
-- The graph is the source of truth - code changes must be reflected in the graph
-- Even if no discrepancies are found, report that explicitly
+- Report explicitly when the inspected evidence shows no discrepancy.
 
 ## Change Set Operations
 You can propose these operation kinds:
@@ -353,7 +323,7 @@ If no discrepancies are found:
   "discrepancies": []
 }
 
-Remember: The graph is the source of truth. Your job is to ensure the graph accurately reflects the current state of the codebase after merge resolution.`;
+The graph is the user-intent source of truth. Your output must make it accurately reflect the inspected post-resolution code without inventing unsupported changes.`;
 }
 
 function buildGraphReconciliationUserMessage(input: unknown, context: MicroRunContext): string {
@@ -366,7 +336,7 @@ Resolution summary: ${typedInput.resolutionSummary}
 
 Verification result: ${typedInput.verificationResult}
 
-Start by reading the resolved files, then find all associated graph nodes, compare the code against node specs, and propose any necessary graph updates.`;
+Choose the evidence and tools needed to identify affected graph responsibilities, compare them with the resolved code, and propose any necessary updates.`;
 }
 
 // Recover the proposed change set from the last propose_graph_change_set tool

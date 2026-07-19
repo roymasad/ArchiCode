@@ -17,7 +17,7 @@ import { applyPatchProposal, listPatchProposals, readArtifactDataUrl, readArtifa
 import { archicodeGitAttributesStatus, checkGlobalProvider, createProject, deleteProjectState, enableArchicodeGitAttributes, ensureEmptyCodebaseProject, ensureProject, loadProject, repairProject, saveFlow, setGlobalMcpSettingsStore, setGlobalProviderSettingsStore, updateNode, updateProjectDetails, updateProjectSettings } from "./storage/projectStore";
 import { approveRun, cancelRun, dismissRunError, rejectRun, removeRunFromQueue, reportBug, retryRun, runAgent, startAgentRun, startDebuggingRun, startIncidentDebugRun, startRunProfile, startRuntimeDebugRun, updateBugIncident } from "./storage/runEngine";
 import { setRunUpdatePublisher } from "./storage/runLogs";
-import { listRuntimeServices, restartRuntimeService, startRuntimeService, stopRuntimeService } from "./storage/runtimeServices";
+import { listRuntimeServices, restartRuntimeService, shutdownRuntimeServices, startRuntimeService, stopRuntimeService } from "./storage/runtimeServices";
 import { listChatArtifacts, listProjectMemoryNotes, readChatArtifact, updateProjectMemoryNote } from "./storage/researchKnowledge";
 import { setWebSearchSecretResolver } from "./internalTools";
 import {
@@ -56,13 +56,14 @@ import {
   ttsSettingsSchema,
   type ProjectBundle,
   type ProjectSettings,
+  type ResearchChatSession,
   type Run,
   type SpeechSettings,
   type TtsSettings
 } from "../shared/schema";
 import { createSeedProject } from "../shared/fixtures";
 import { checkForAppUpdate } from "./updater";
-import { applyResearchGraphChangeSet, type CodebaseMappingProgress, cancelResearchChatMessage, mapExistingCodebase, resyncExistingCodebase, respondToSubagentRun, sendResearchChatMessage, summarizeResearchChat, setGlobalResearchPersonalityResolver, setGlobalResearchVerbosityResolver } from "./research";
+import { applyResearchGraphChangeSet, type CodebaseMappingProgress, cancelResearchChatMessage, mapExistingCodebase, resyncExistingCodebase, respondToSubagentRun, resumeResearchGoalsForRunUpdate, sendResearchChatMessage, summarizeResearchChat, setGlobalResearchPersonalityResolver, setGlobalResearchVerbosityResolver } from "./research";
 import { archiveResearchChat, createResearchChat, forkResearchChat, listResearchChats, renameResearchChat, updateResearchChatAutoApproval, setResearchStorageRoot } from "./research/chatStore";
 import {
   getExternalMcpHostStatus,
@@ -108,6 +109,7 @@ import {
 import { parseGlobalResearchPersonality, parseGlobalResearchVerbosity, type GlobalResearchPersonality, type GlobalResearchVerbosity } from "../shared/researchPersonality";
 import { shutdownLocalProviderProcesses } from "./providers/localCli";
 import { projectStatePath, readJson, sha256File, writeJson } from "./storage/persistence";
+import { setDelphiToolCacheRoot } from "./testing/toolCache";
 import {
   mergeProjectMaintenanceChanges,
   projectMaintenanceChangesBetweenHashes,
@@ -369,10 +371,12 @@ type ResearchSubagentProgressPayload = {
   projectRoot: string;
   sessionId: string;
   runId: string;
-  kind: "merge-resolution" | "graph-reconciliation" | "test-authoring" | "sherlock-research";
+  kind: "merge-resolution" | "graph-reconciliation" | "test-authoring" | "sherlock-research" | "delphi-testing";
   title: string;
   message: string;
-  status?: "running" | "completed" | "failed";
+  status?: "running" | "completed" | "blocked" | "failed";
+  artifact?: { id: string; label: string; path: string; mediaType: string };
+  observationAnalysis?: { artifactId: string; status: "started" | "completed" | "failed" };
 };
 
 type ConsoleSession = {
@@ -831,6 +835,12 @@ function publishResearchChatActivity(payload: {
 }): void {
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send("archicode:research-chat-activity", payload);
+  }
+}
+
+function publishResearchChatSessionUpdated(projectRoot: string, session: ResearchChatSession): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send("archicode:research-chat-session-updated", { projectRoot, session });
   }
 }
 
@@ -1958,6 +1968,11 @@ function registerIpc(): void {
     const previousStatus = notifiedRunStatuses.get(key);
     notifiedRunStatuses.set(key, run.status);
     void notifyRunFinishedIfNeeded(projectRoot, run, previousStatus);
+    if (previousStatus !== run.status) {
+      void resumeResearchGoalsForRunUpdate(projectRoot, run)
+        .then((sessions) => sessions.forEach((session) => publishResearchChatSessionUpdated(projectRoot, session)))
+        .catch((error) => console.warn(`[archicode] durable research goal wake failed for run ${run.id}: ${error instanceof Error ? error.message : String(error)}`));
+    }
     trackRunSleepBlocker(projectRoot, run);
     noteRunMaintenanceTransition(projectRoot, run, previousStatus);
     for (const win of BrowserWindow.getAllWindows()) {
@@ -2273,9 +2288,9 @@ function registerIpc(): void {
   );
   ipcMain.handle("archicode:update-node", async (_event, projectRoot, flowId, patch, actor) => updateNode(projectRoot, flowId, patch, actor));
   ipcMain.handle("archicode:author-acceptance-tests", async (_event, projectRoot, flowId, nodeId, providerId) =>
-    withSleepBlocked(`author-tests:${projectRoot}:${nodeId ?? flowId}`, async () => (await authorAcceptanceTestsScoped(projectRoot, flowId, nodeId, providerId)).bundle));
+    withSleepBlocked(`author-tests:${projectRoot}:${nodeId ?? flowId}`, async () => (await authorAcceptanceTestsScoped(projectRoot, flowId, nodeId, providerId, { writeAuthorizedByUser: true })).bundle));
   ipcMain.handle("archicode:author-acceptance-tests-flow", async (_event, projectRoot, flowId, providerId) =>
-    withSleepBlocked(`author-tests-flow:${projectRoot}:${flowId}`, async () => (await authorAcceptanceTestsScoped(projectRoot, flowId, undefined, providerId)).bundle));
+    withSleepBlocked(`author-tests-flow:${projectRoot}:${flowId}`, async () => (await authorAcceptanceTestsScoped(projectRoot, flowId, undefined, providerId, { writeAuthorizedByUser: true })).bundle));
   ipcMain.handle("archicode:clear-acceptance-tests", async (_event, projectRoot, flowId, nodeId) =>
     withSleepBlocked(`clear-tests:${projectRoot}:${nodeId}`, async () => clearNodeAcceptanceTests(projectRoot, flowId, nodeId)));
   ipcMain.handle("archicode:enhance-node-field", async (_event, projectRoot, flowId, nodeId, field, providerId) =>
@@ -2512,12 +2527,20 @@ ipcMain.handle("archicode:retry-run", async (_event, projectRoot, runId, guidanc
   ipcMain.handle("archicode:respond-subagent-run", async (_event, input) =>
     withSleepBlocked(`subagent-run:${input.projectRoot}:${input.sessionId}:${input.runId}`, () => respondToSubagentRun({
       ...input,
-      onProgress: ({ runId, kind, title, message, status }) => publishResearchSubagentProgress({
+      onProgress: ({ runId, kind, title, message, status, artifact, observationAnalysis }) => publishResearchSubagentProgress({
         projectRoot: input.projectRoot,
         sessionId: input.sessionId,
         runId,
         kind,
         title,
+        message,
+        status,
+        artifact,
+        observationAnalysis
+      }),
+      onActivity: (message, status) => publishResearchChatActivity({
+        projectRoot: input.projectRoot,
+        sessionId: input.sessionId,
         message,
         status
       })
@@ -2586,6 +2609,7 @@ app.whenReady().then(async () => {
   installAppBranding();
   installApplicationMenu();
   setResearchStorageRoot(app.getPath("userData"));
+  setDelphiToolCacheRoot(app.getPath("userData"));
   setGlobalResearchPersonalityResolver(globalResearchPersonality);
   setGlobalResearchVerbosityResolver(globalResearchVerbosity);
   setSpeechDataRoot(app.getPath("userData"));
@@ -2621,13 +2645,36 @@ app.on("window-all-closed", () => {
   app.quit();
 });
 
-app.on("before-quit", () => {
+const APP_SHUTDOWN_TIMEOUT_MS = 25_000;
+let appShutdownStarted = false;
+let appShutdownCompleted = false;
+app.on("before-quit", (event) => {
+  if (appShutdownCompleted) return;
+  event.preventDefault();
+  // Repeated quit requests must not bypass cleanup while it is in flight.
+  if (appShutdownStarted) return;
+  appShutdownStarted = true;
   for (const watcher of maintenanceWatchers.values()) watcher.close();
   maintenanceWatchers.clear();
   for (const timer of maintenanceTimers.values()) clearTimeout(timer);
   for (const timer of sourceVerificationTimers.values()) clearTimeout(timer);
   stopAllConsoles();
   shutdownLocalProviderProcesses();
-  void stopExternalMcpHost();
   shutdownTtsWorkers();
+  const cleanup = Promise.allSettled([
+    shutdownRuntimeServices(),
+    stopExternalMcpHost()
+  ]);
+  let shutdownTimer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<void>((resolve) => {
+    shutdownTimer = setTimeout(() => {
+      console.warn(`[archicode] App shutdown cleanup exceeded ${APP_SHUTDOWN_TIMEOUT_MS}ms; exiting without waiting longer.`);
+      resolve();
+    }, APP_SHUTDOWN_TIMEOUT_MS);
+  });
+  void Promise.race([cleanup.then(() => undefined), deadline]).finally(() => {
+    if (shutdownTimer) clearTimeout(shutdownTimer);
+    appShutdownCompleted = true;
+    app.quit();
+  });
 });

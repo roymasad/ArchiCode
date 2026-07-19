@@ -51,6 +51,7 @@ describe("ArchiCode product capability digest", () => {
     expect(allText).toContain("acceptance checks");
     expect(allText).toContain("implementation-scope");
     expect(allText).toContain("Sherlock");
+    expect(allText).toContain("Delphi");
     expect(allText).toContain("read-only navigable 3D graph views");
     expect(allText).toContain("AI-assisted commit-message drafting");
     expect(allText).toContain("fork/archive/cancel/export Research chats");
@@ -58,11 +59,12 @@ describe("ArchiCode product capability digest", () => {
 
     const options = archicodeCurrentProjectOptions(createSeedProject("/tmp/archicode-options").project.settings) as {
       reviewAndApproval: { codeReviewMode: string };
-      agentTools: { subagents: { sherlockResearch: boolean } };
+      agentTools: { subagents: { sherlockResearch: boolean; delphiTesting: boolean } };
       providers: Array<{ apiKey?: string }>;
     };
     expect(options.reviewAndApproval.codeReviewMode).toBe("auto-apply");
     expect(options.agentTools.subagents.sherlockResearch).toBe(true);
+    expect(options.agentTools.subagents.delphiTesting).toBe(true);
     expect(JSON.stringify(options)).not.toContain("apiKey");
   });
 });
@@ -344,6 +346,39 @@ describe("provider mcp tool loops", () => {
 
     expect(output).toBe("Research answer with docs.");
     expect(callMcpTool).toHaveBeenCalledWith({ providerToolName: "mcp_docs_search", argumentsJson: "{\"query\":\"context7\"}" });
+  });
+
+  it("omits an empty tool_calls field when repairing an invalid OpenAI-compatible final answer", async () => {
+    process.env.OPENAI_TEST_KEY = "test";
+    const provider = {
+      ...createSeedProject("/tmp/archicode").project.settings.providers.find((item) => item.kind === "openai-compatible")!,
+      apiKeyEnv: "OPENAI_TEST_KEY",
+      openAiEndpointMode: "chat-completions" as const
+    };
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(chatCompletionTextSse("Initial incomplete answer."))
+      .mockResolvedValueOnce(chatCompletionTextSse("Repaired answer with REQUIRED_MARKER."));
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    let validationCount = 0;
+
+    const output = await callResearchProvider(provider, "Answer and follow any correction guidance.", {
+      webSearchEnabled: false,
+      scopeContext: "{}",
+      messages: [],
+      validateFinalAnswer: (text) => {
+        validationCount += 1;
+        return text.includes("REQUIRED_MARKER") ? undefined : "Add REQUIRED_MARKER to the answer.";
+      }
+    });
+
+    const continuationBody = JSON.parse(fetchMock.mock.calls[1]![1]!.body as string) as {
+      messages: Array<{ role?: string; tool_calls?: unknown[] }>;
+    };
+    const repairedAssistant = continuationBody.messages.filter((message) => message.role === "assistant").at(-1);
+
+    expect(output).toBe("Repaired answer with REQUIRED_MARKER.");
+    expect(validationCount).toBe(2);
+    expect(repairedAssistant).not.toHaveProperty("tool_calls");
   });
 
   it("executes OpenAI-compatible research tool calls through Responses API", async () => {

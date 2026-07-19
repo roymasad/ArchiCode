@@ -2,8 +2,9 @@ import * as fs from "fs/promises";
 import * as path from "path";
 import type { MicroRunTool, MicroRunToolInvocation } from "../microRuns";
 import type { MicroRunContext, MicroRunAgent } from "../microRuns";
-import { runGitCommand, isFileConflicted, runVerificationCommand, getConflictedFiles } from "../microRuns";
+import { runGitCommand, isFileConflicted, getConflictedFiles } from "../microRuns";
 import { detectTechStack } from "../techStack";
+import { createGuardedConsoleTool } from "./guardedConsole";
 import {
   mergeResolutionInputSchema,
   mergeResolutionOutputSchema,
@@ -196,17 +197,21 @@ function createMergeResolutionTools(context: MicroRunContext): MicroRunTool[] {
       required: ["command"]
     },
     handler: async (args: { command: string; args?: string[]; timeout?: number }) => {
-      onProgress?.(`Running: ${args.command} ${args.args?.join(" ") ?? ""}`);
-      const result = await runVerificationCommand(projectRoot, args.command, args.args ?? [], {
-        timeout: args.timeout ?? 600000
-      });
+      if (!context.runConsoleCommand) {
+        return { passed: false, status: "unavailable", message: "The guarded CLI is unavailable in this merge-resolution context." };
+      }
+      const quotedArgs = (args.args ?? []).map((value) => `'${value.replace(/'/g, `'\\''`)}'`);
+      const command = [args.command.trim(), ...quotedArgs].filter(Boolean).join(" ");
+      onProgress?.(`Running verification: ${command}`);
+      const result = await context.runConsoleCommand({ command, timeoutMs: args.timeout ?? 600000 });
+      const record = result && typeof result === "object" && !Array.isArray(result)
+        ? result as Record<string, unknown>
+        : {};
       return {
-        command: args.command,
+        ...record,
+        command,
         args: args.args ?? [],
-        exitCode: result.exitCode,
-        stdout: result.stdout.slice(0, 50000),
-        stderr: result.stderr.slice(0, 50000),
-        passed: result.passed
+        passed: record.status === "succeeded"
       };
     }
   };
@@ -239,6 +244,11 @@ function createMergeResolutionTools(context: MicroRunContext): MicroRunTool[] {
     }
   };
 
+  const guardedConsole = createGuardedConsoleTool(context, {
+    description: "Run a finite project-scoped inspection, conflict diagnostic, or verification chosen for Solomon's assigned merge resolution. The shared safety broker evaluates the actual action. Use the dedicated conflict writer—not shell commands—for file resolution.",
+    progressLabel: "Running guarded merge command"
+  });
+
   return [
     detectTechStackTool,
     readConflictedFileTool,
@@ -246,7 +256,8 @@ function createMergeResolutionTools(context: MicroRunContext): MicroRunTool[] {
     runGitStatusTool,
     runGitDiffTool,
     runVerificationCommandTool,
-    askClarificationTool
+    askClarificationTool,
+    ...(guardedConsole ? [guardedConsole] : [])
   ];
 }
 
@@ -259,21 +270,10 @@ Resolve merge conflicts in the following files: ${typedInput.conflictedFiles.joi
 
 ${typedInput.resolutionStrategy ? `Resolution strategy: ${typedInput.resolutionStrategy}` : "Use your best judgment to resolve conflicts."}
 
-## Your Approach
-1. Detect the project's tech stack using the detect_tech_stack tool
-2. Read each conflicted file using read_conflicted_file
-3. Understand both sides of each conflict:
-   - What does the "ours" side represent?
-   - What does the "theirs" side represent?
-   - What is the intent of each change?
-4. Resolve the conflict by:
-   - Preserving the intent and logic of both sides where possible
-   - Maintaining code style and conventions
-   - Ensuring the resolved code is syntactically correct
-5. Write the resolved file using write_conflicted_file (ONLY for conflicted files)
-6. Run verification commands to ensure the code works
-7. If verification fails, iterate with different approaches
-8. Perform a final comprehensive check before completing
+## Operating Contract
+Own the resolution tactics and iteration. Inspect enough repository and conflict evidence to understand both sides, preserve compatible intent, write only files that are currently conflicted, and use relevant verification evidence before reporting completion. If verification fails, adapt while a useful corrective action remains; do not repeat an unchanged attempt.
+
+You also have a shared guarded CLI for project-scoped inspection, diagnostics, and verification. Choose useful commands yourself; the host evaluates their actual scope and risk. Resolve files only through the dedicated conflicted-file writer so the assigned write boundary remains explicit.
 
 ## Important Rules
 - You can ONLY write files that are currently in a conflicted state
@@ -293,20 +293,8 @@ ${typedInput.resolutionStrategy ? `Resolution strategy: ${typedInput.resolutionS
 After resolving all conflicts, run verification commands:
 ${typedInput.verificationCommands?.map((cmd) => `- ${cmd}`).join("\n") ?? "Call detect_tech_stack. If it returns configuredVerificationCommands, run those (commands marked required must pass); otherwise run its suggestedCommands (typecheck, lint, test)."}
 
-If verification fails:
-1. Analyze the failure output
-2. Identify what needs to be fixed
-3. Update the resolved files
-4. Re-run verification
-5. Repeat up to 3 times, then report failure
-
 ## Final Comprehensive Check
-Before completing, perform a final check:
-1. Verify all conflicted files have been resolved (git status shows no conflicts)
-2. Run typecheck (if available)
-3. Run lint (if available)
-4. Run tests (if available)
-5. Report any remaining issues
+Before completing, confirm that all assigned conflicts are resolved and report the relevant syntax, test, lint, or typecheck evidence that is available for this project. If any coverage remains incomplete, say so precisely.
 
 ## Return Format
 Return a JSON object with this exact structure:
@@ -333,7 +321,7 @@ function buildMergeResolutionUserMessage(input: unknown, context: MicroRunContex
 
 ${typedInput.resolutionStrategy ? `Preferred resolution strategy: ${typedInput.resolutionStrategy}` : ""}
 
-Start by detecting the tech stack, then read each conflicted file, understand the conflicts, and resolve them systematically.`;
+Choose the evidence and tools needed to understand the conflicts, resolve them safely, and verify the result.`;
 }
 
 function parseMergeResolutionOutput(text: string): MergeResolutionOutput {
@@ -363,18 +351,9 @@ function parseMergeResolutionOutput(text: string): MergeResolutionOutput {
   };
 }
 
-function toolArguments(call: MicroRunToolInvocation): Record<string, unknown> {
-  try {
-    const parsed = JSON.parse(call.argumentsJson || "{}");
-    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
-  } catch {
-    return {};
-  }
-}
-
 async function validateMergeResolutionOutput(
   output: unknown,
-  toolCalls: MicroRunToolInvocation[],
+  _toolCalls: MicroRunToolInvocation[],
   input: unknown,
   context?: MicroRunContext
 ): Promise<string | undefined> {
@@ -388,13 +367,6 @@ async function validateMergeResolutionOutput(
   if (missingReportedFiles.length) {
     return `Solomon's report omitted assigned conflicted files: ${missingReportedFiles.join(", ")}`;
   }
-  if (!report.verificationPassed) {
-    return `Solomon did not complete a verified merge resolution: ${report.summary}`;
-  }
-  if (!report.finalCheck.syntaxValid || report.finalCheck.issues.length > 0) {
-    return `Solomon's final check still reports unresolved issues: ${report.finalCheck.issues.join("; ") || "syntax validation failed"}`;
-  }
-
   if (!context) return undefined;
 
   const remainingConflicts = await getConflictedFiles(context.projectRoot);
@@ -403,20 +375,10 @@ async function validateMergeResolutionOutput(
     return `Solomon completed while conflicts remained in: ${assignedStillConflicted.join(", ")}`;
   }
 
-  const gitCheck = await runGitCommand(context.projectRoot, ["rev-parse", "--is-inside-work-tree"]);
-  if (gitCheck.exitCode === 0) {
-    const callsFor = (name: string) => toolCalls.filter((call) => call.providerToolName === name);
-    if (!callsFor("detect_tech_stack").length) return "Solomon completed without detecting the project tech stack.";
-    for (const file of task.conflictedFiles) {
-      const read = callsFor("read_conflicted_file").some((call) => toolArguments(call).filePath === file);
-      const wrote = callsFor("write_conflicted_file").some((call) => toolArguments(call).filePath === file);
-      if (!read) return `Solomon completed without reading assigned conflicted file: ${file}`;
-      if (!wrote) return `Solomon completed without writing a resolution for assigned conflicted file: ${file}`;
-    }
-    const lastWriteIndex = toolCalls.map((call) => call.providerToolName).lastIndexOf("write_conflicted_file");
-    const finalStatusIndex = toolCalls.map((call) => call.providerToolName).lastIndexOf("run_git_status");
-    if (finalStatusIndex < lastWriteIndex) return "Solomon completed without checking git status after its final conflict write.";
-  }
+  // The host verifies the outcome boundary (assigned files are no longer
+  // conflicted) instead of prescribing Solomon's internal tool order. A
+  // truthful verification failure remains useful output for the parent to
+  // handle; it is not converted into a blind repair loop.
   return undefined;
 }
 

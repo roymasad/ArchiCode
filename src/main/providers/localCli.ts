@@ -6,12 +6,15 @@ import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { LlmPhase, McpServer, PhaseModelPolicy } from "../../shared/schema";
-import { type LocalResearchToolCall, type Provider, type ProviderCallOptions, type ProviderHealthResult, type ProviderProgressEvent, type ProviderTokenKind, type ResearchProviderOptions, codingSourceHandoffInstructions, createConsecutiveToolCallLoopDetector, emitUnavailableUsage, extractContextWindowFromModels, extractLocalResearchTurn, extractModelIdsFromModels, extractionSystemPrompt, formatLocalResearchTranscript, imageAttachmentText, inferModelCapabilityProfile, localAskModeMcpRequestInstructions, localResearchToolLoopInstructions, localResearchTranscriptFromContinuation, orchestratorSystemPrompt, phasePolicyText, planningPatchJsonContract, planningQuestionGateInstructions, researchSystemInstructions, researchUserPromptText, resolvePhaseModelPolicy, sourceProposalBatchingInstructions, textAttachmentText } from "../providers";
+import { gaiaAgent, pandoraAgent } from "../../shared/agentIdentities";
+import { type Provider, type ProviderCallOptions, type ProviderHealthResult, type ProviderProgressEvent, type ProviderTokenKind, type ResearchProviderOptions, codingSourceHandoffInstructions, emitUnavailableUsage, extractContextWindowFromModels, extractLocalResearchTurn, extractModelIdsFromModels, extractionSystemPrompt, formatLocalResearchTranscript, imageAttachmentText, inferModelCapabilityProfile, localAskModeMcpRequestInstructions, localResearchToolLoopInstructions, localResearchTranscriptFromContinuation, localResearchTurnValidationFeedback, orchestratorSystemPrompt, phasePolicyText, planningPatchJsonContract, planningQuestionGateInstructions, researchSystemInstructions, researchUserPromptText, resolvePhaseModelPolicy, sourceProposalBatchingInstructions, textAttachmentText } from "../providers";
 import { attachProviderContinuation } from "./anthropic";
+import { runAgentLoop, type AgentToolResult } from "../agentRuntime";
 
 export const requireFromProviders = createRequire(import.meta.url);
 export const localCommandCache = new Map<string, { command: string; env: NodeJS.ProcessEnv }>();
 export const activeLocalProviderProcesses = new Map<number, ChildProcessWithoutNullStreams>();
+export const LOCAL_PROVIDER_INACTIVITY_TIMEOUT_MS = 5 * 60 * 1000;
 
 export function isCodexLocalProvider(provider: Provider): provider is Provider & { kind: "codex-local" } {
   return provider.kind === "codex-local";
@@ -36,12 +39,13 @@ export async function callCodexLocal(provider: Provider, contextText: string, pr
   const writeCapable = provider.localSandbox !== "read-only";
   const phaseInstructions = phase === "coding"
     ? [
+        `You are ${gaiaAgent.title}, ArchiCode's implementation agent.`,
         "This is the coding phase after an ArchiCode plan artifact has been created.",
         writeCapable
           ? "You may edit files in the project only within the configured sandbox and folder policy."
           : "The configured Codex Local sandbox is read-only, so do not attempt filesystem edits; return source changes as archicodePatch propose-source-file operations that ArchiCode can apply.",
         "If the project folder has no app scaffold and the graph provides stack and acceptance criteria, create the smallest runnable scaffold instead of blocking on missing files.",
-        "Use AI Implement as a project-creation or project-update pass depending on the current files; in both cases, align code with the latest graph/node state and durable notes/artifacts.",
+        "Use Gaia's AI Implement role as a project-creation or project-update pass depending on the current files; in both cases, align code with the latest graph/node state and durable notes/artifacts.",
         "For a new frontend scaffold, include complete file contents for package.json, index.html, src entry files, routes/views/components, styles, and any minimal config needed by the selected stack.",
         "Use concrete editable placeholder copy when product identity is unspecified; do not ask a question solely for naming, branding, or marketing copy in a starter template.",
         "Implement the smallest useful change from the selected node or diagram context, and add/update tests when the stack already supports them and the task warrants it.",
@@ -58,6 +62,7 @@ export async function callCodexLocal(provider: Provider, contextText: string, pr
       ]
     : phase === "debugging"
       ? [
+          `You are ${pandoraAgent.title}, ArchiCode's debugging agent.`,
           "This is the debugging phase after a failed coding or verification run.",
           "Prioritize failure logs, recent diffs, changed files, and affected nodes before broad context.",
           "Repair code so the implementation still matches the latest graph/node source of truth, not just the immediate error log.",
@@ -68,6 +73,7 @@ export async function callCodexLocal(provider: Provider, contextText: string, pr
           writeCapable ? "" : sourceProposalBatchingInstructions
         ]
     : [
+        `You are ${gaiaAgent.title}, ArchiCode's implementation agent.`,
         "This is the mandatory planning phase before coding.",
         "Do not edit project files during planning.",
         planningQuestionGateInstructions,
@@ -134,108 +140,126 @@ export async function callLocalResearchProvider(
     ? "Enabled Ask-mode MCP servers remain visible through the structured tool list. If an Ask-mode tool is requested, ArchiCode will pause for approval and then resume this same turn with the tool result."
     : "";
   const projectFilesNote = options.projectRoot
-    ? `Project files and read-only CLI inspection are available through structured tools in this chat. Use the project list/search/read/inspect tools on demand for file, Git diff/history, dependency metadata, runtime-version, and safe local inspection questions instead of shell, Node, or filesystem fallbacks. Use query_code_graph for bounded file/symbol search, dependency neighbors, shortest paths, or reverse impact without loading the full local graph. If the compact project briefing is not enough for exact architecture/run context, request archicode_read_research_context.`
+    ? `Project files and bounded project CLI actions are available through structured tools in this chat. Choose whichever exposed tool best advances the goal. Actions follow the shared risk classifier and the user's approval settings, then resume this trajectory when approval is needed. Parent Chat's sole CLI role restriction is that it must not edit project code files directly; route source implementation through the graph/build path. Use query_code_graph for bounded file/symbol search, dependency neighbors, shortest paths, or reverse impact without loading the full local graph. If the compact project briefing is not enough for exact architecture/run context, request archicode_read_research_context.`
     : "";
   const isolatedSubagent = Boolean(options.systemInstructionsOverride?.trim());
 
-  let completedToolRounds = 0;
-  const toolLoopDetector = createConsecutiveToolCallLoopDetector();
-  while (true) {
-    const prompt = [
-      researchSystemInstructions(options),
-      "",
-      isolatedSubagent
-        ? `You are being called as an isolated ArchiCode subagent through the local ${providerLabel} CLI. Follow the subagent system instructions above; do not adopt the parent Research-chat identity, confirmation flow, or archicodeResearch envelope.`
-        : `You are being called for an ArchiCode Research chat through the local ${providerLabel} CLI, not a build run.`,
-      isolatedSubagent
-        ? "Use only the structured tools and permissions exposed to this isolated run. Do not infer additional restrictions or output wrappers from the parent Research chat."
-        : "Do not edit files. Do not run shell commands. Use only the structured research tools, project context, and built-in web access allowed by this transport. Graph changes must only be returned as pending archicodeResearch changeSet JSON or the structured graph change-set sink tool.",
-      isolatedSubagent
-        ? ""
-        : "When the user asks to edit or update the graph, first inspect the affected nodes, edges, descriptions, acceptance criteria, and nearby responsibilities. State the coherent change you propose, ask every needed clarification in that same response, and ask once whether this is the scope they want prepared for review. Do not return the pending changeSet yet. When the user then affirms that scope, return the pending changeSet immediately without another scope confirmation. The card's own buttons or auto-approve setting still decide whether it is applied.",
-      isolatedSubagent
-        ? ""
-        : "If the user greets you or asks what you can do, the first sentence must sound clearly like the active persona rather than a generic assistant greeting. Include graph-to-code sync only as one brief capability alongside other capabilities. Do not explain sync options, comparison scopes, or the approval flow unless the user specifically asks about syncing, drift, or external edits.",
-      isolatedSubagent
-        ? ""
-        : "When the user asks you to propose or brainstorm, put the normal conversational proposal in archicodeResearch.answer without a changeSet. For a graph edit, use the same response to describe and confirm the scope; after the user affirms it, return the pending changeSet in the next turn without asking again.",
-      projectFilesNote,
-      phasePolicyText("brainstorming", policy, profile),
-      options.webSearchEnabled
-        ? transport === "claude-local"
-          ? "Web search is enabled for this chat. Use Claude's built-in web tools only when current external information is needed, and cite sources when web results inform the answer."
-          : "Web search is enabled for this chat. Use Codex web search only when current external information is needed, and cite sources when web results inform the answer."
-        : "Web search is disabled by project settings. Use only provided context and local model knowledge.",
-      askModeNote,
-      localResearchToolLoopInstructions(options),
-      transcript.length && !isolatedSubagent
-        ? "POST-TOOL CONTINUATION REQUIREMENT: The structured tool results in this prompt are already available in this same user turn. Any earlier assistant answer attached to a tool call was provisional status, not the final response; do not repeat it or merely promise to perform the inspection that just completed. Finish the user's requested workflow now using the returned evidence. If the user requested a concrete graph proposal, creation, update, deletion, move, refinement, or reconciliation, state the concrete coherent scope and end the visible answer with a direct confirmation question asking whether to prepare that exact scope as the graph review card. The wording ‘propose’ does not turn a concrete requested graph change into open-ended brainstorming. Do not invoke Picasso or produce a change set until that one affirmative confirmation."
-        : "",
-      transcript.length
-        ? ["Structured tool transcript so far:", formatLocalResearchTranscript(transcript)].join("\n")
-        : "",
-      "",
-      await researchUserPromptText(userMessage, options)
-    ].filter(Boolean).join("\n");
+  let finalAnswerRequested = false;
+  const transcriptResults = (results: AgentToolResult[]) => results.map(({ toolCall, result }) => ({
+    role: "tool" as const,
+    toolCallId: toolCall.id,
+    providerToolName: toolCall.providerToolName,
+    result
+  }));
 
-    if (completedToolRounds > 0) options.onTokenReset?.();
-    const output = await runTurn(prompt, options.onToken);
-    const parsedTurn = extractLocalResearchTurn(output);
-    if (!parsedTurn?.toolCalls.length || !options.callMcpTool) {
-      return output;
-    }
-    const loopWarnings = parsedTurn.toolCalls.map((toolCall) => toolLoopDetector.record(toolCall.providerToolName, toolCall.argumentsJson || "{}"));
-    const settled = await Promise.allSettled(parsedTurn.toolCalls.map((toolCall) => options.callMcpTool!({
-      providerToolName: toolCall.providerToolName,
-      argumentsJson: toolCall.argumentsJson || "{}"
-    })));
-    let pendingApproval: { toolCall: LocalResearchToolCall; error: unknown } | undefined;
-    let firstError: unknown;
-    const fulfilledToolResults: Array<{ role: "tool"; toolCallId: string; providerToolName: string; result: string }> = [];
-    settled.forEach((outcome, index) => {
-      const toolCall = parsedTurn.toolCalls[index]!;
-      const loopWarning = loopWarnings[index];
-      if (outcome.status === "fulfilled") {
-        fulfilledToolResults.push({
-          role: "tool",
-          toolCallId: toolCall.id,
-          providerToolName: toolCall.providerToolName,
-          result: loopWarning ? `${outcome.value}\n\n${loopWarning}` : outcome.value
+  return runAgentLoop({
+    signal: options.signal,
+    emptyAnswer: "Provider returned no content.",
+    adapter: {
+      nextTurn: async () => {
+        const prompt = [
+          researchSystemInstructions(options),
+          "",
+          isolatedSubagent
+            ? `You are being called as an isolated ArchiCode subagent through the local ${providerLabel} CLI. Follow the subagent system instructions above; do not adopt the parent Research-chat identity, confirmation flow, or archicodeResearch envelope.`
+            : `You are being called for an ArchiCode Research chat through the local ${providerLabel} CLI, not a build run.`,
+          isolatedSubagent
+            ? "Use only the structured tools and permissions exposed to this isolated run. Do not infer additional restrictions or output wrappers from the parent Research chat."
+            : "Do not edit project code files directly. Otherwise use the exposed structured tools and guarded console autonomously for any project-scoped action that advances the goal; normal risk classification and approval settings apply. Route source implementation through ArchiCode's graph/build path. Graph changes must only be returned as pending archicodeResearch changeSet JSON or the structured graph change-set sink tool.",
+          isolatedSubagent
+            ? ""
+            : "When the user asks to edit or update the graph, first inspect the affected nodes, edges, descriptions, acceptance criteria, and nearby responsibilities. State the coherent change you propose, ask every needed clarification in that same response, and ask once whether this is the scope they want prepared for review. Do not return the pending changeSet yet. When the user then affirms that scope, return the pending changeSet immediately without another scope confirmation. The card's own buttons or auto-approve setting still decide whether it is applied.",
+          isolatedSubagent
+            ? ""
+            : "If the user greets you or asks what you can do, the first sentence must sound clearly like the active persona rather than a generic assistant greeting. Include graph-to-code sync only as one brief capability alongside other capabilities. Do not explain sync options, comparison scopes, or the approval flow unless the user specifically asks about syncing, drift, or external edits.",
+          isolatedSubagent
+            ? ""
+            : "When the user asks you to propose or brainstorm, put the normal conversational proposal in archicodeResearch.answer without a changeSet. For a graph edit, use the same response to describe and confirm the scope; after the user affirms it, return the pending changeSet in the next turn without asking again.",
+          projectFilesNote,
+          phasePolicyText("brainstorming", policy, profile),
+          options.webSearchEnabled
+            ? transport === "claude-local"
+              ? "Web search is enabled for this chat. Use Claude's built-in web tools only when current external information is needed, and cite sources when web results inform the answer."
+              : "Web search is enabled for this chat. Use Codex web search only when current external information is needed, and cite sources when web results inform the answer."
+            : "Web search is disabled by project settings. Use only provided context and local model knowledge.",
+          askModeNote,
+          localResearchToolLoopInstructions(options),
+          transcript.length
+            ? "Continue the same task from the structured transcript below. Assistant text beside tool calls is progress from this same trajectory; use both it and the returned evidence, then choose the next useful action yourself."
+            : "",
+          finalAnswerRequested
+            ? "The terminal sink action already succeeded. Return the concise visible answer now without another tool call."
+            : "",
+          transcript.length
+            ? ["Structured tool transcript so far:", formatLocalResearchTranscript(transcript)].join("\n")
+            : "",
+          "",
+          await researchUserPromptText(userMessage, options)
+        ].filter(Boolean).join("\n");
+        const output = await runTurn(prompt, options.onToken);
+        const parsedTurn = extractLocalResearchTurn(output);
+        return {
+          text: parsedTurn?.toolCalls.length ? parsedTurn.answer ?? "" : output,
+          toolCalls: parsedTurn?.toolCalls ?? [],
+          raw: { output, parsedTurn }
+        };
+      },
+      commitToolResults: (turn, results) => {
+        const parsedTurn = turn.raw.parsedTurn;
+        if (!parsedTurn) return;
+        transcript.push({
+          role: "assistant",
+          answer: parsedTurn.answer,
+          toolCalls: parsedTurn.toolCalls
+        }, ...transcriptResults(results));
+      },
+      commitInvalidAnswer: (turn, feedback) => {
+        transcript.push({
+          role: "assistant",
+          answer: turn.text,
+          toolCalls: []
+        }, {
+          role: "feedback",
+          content: feedback
         });
-      } else if (options.isApprovalError?.(outcome.reason) && !pendingApproval) {
-        pendingApproval = { toolCall, error: outcome.reason };
-      } else if (firstError === undefined) {
-        firstError = outcome.reason;
-      }
-    });
-    const needsContinuation = parsedTurn.toolCalls.some((toolCall) => !options.isTerminalTool?.(toolCall.providerToolName));
-    transcript.push({
-      role: "assistant",
-      // An answer emitted alongside a non-terminal inspection call is only
-      // provisional status. Re-injecting it into the next local CLI prompt can
-      // anchor terse models into repeating that status as their final answer
-      // instead of using the returned evidence to finish the workflow.
-      answer: needsContinuation ? undefined : parsedTurn.answer,
-      toolCalls: parsedTurn.toolCalls
-    }, ...fulfilledToolResults);
-    if (pendingApproval) {
-      attachProviderContinuation(pendingApproval.error, {
-        transport,
-        messages: transcript,
-        pendingToolCall: {
-          id: pendingApproval.toolCall.id,
-          providerToolName: pendingApproval.toolCall.providerToolName,
-          argumentsJson: pendingApproval.toolCall.argumentsJson || "{}"
-        }
-      });
-      throw pendingApproval.error;
+      },
+      commitFeedback: (feedback) => {
+        transcript.push({ role: "feedback", content: feedback });
+      },
+      attachApprovalContinuation: ({ turn, completedResults, pendingToolCall, error }) => {
+        const parsedTurn = turn.raw.parsedTurn;
+        const continuationTranscript = parsedTurn
+          ? [...transcript, {
+              role: "assistant" as const,
+              answer: parsedTurn.answer,
+              toolCalls: parsedTurn.toolCalls
+            }, ...transcriptResults(completedResults)]
+          : [...transcript];
+        attachProviderContinuation(error, {
+          transport,
+          messages: continuationTranscript,
+          pendingToolCall
+        });
+      },
+      requestFinalAnswer: () => { finalAnswerRequested = true; },
+      onLaterRound: () => options.onTokenReset?.()
+    },
+    executeTool: options.callMcpTool
+      ? (toolCall) => options.callMcpTool!({
+          providerToolName: toolCall.providerToolName,
+          argumentsJson: toolCall.argumentsJson
+        })
+      : undefined,
+    isApprovalError: options.isApprovalError,
+    onTransientRetry: options.onTransientRetry,
+    isTerminalTool: options.isTerminalTool,
+    terminalToolCompletesTurn: options.terminalToolCompletesTurn,
+    validateFinalAnswer: async (answer) => {
+      const transportFeedback = localResearchTurnValidationFeedback(answer);
+      if (transportFeedback) return transportFeedback;
+      return options.validateFinalAnswer?.(answer);
     }
-    if (firstError !== undefined) throw firstError;
-    if (!needsContinuation) {
-      return parsedTurn.answer || "Provider returned no content.";
-    }
-    completedToolRounds += 1;
-  }
+  });
 }
 
 export async function callCodexLocalResearch(provider: Provider, userMessage: string, options: ResearchProviderOptions, policy: PhaseModelPolicy): Promise<string> {
@@ -296,12 +320,13 @@ export async function callClaudeLocal(provider: Provider, contextText: string, p
   const writeCapable = provider.localSandbox !== "read-only";
   const phaseInstructions = phase === "coding"
     ? [
+        `You are ${gaiaAgent.title}, ArchiCode's implementation agent.`,
         "This is the coding phase after an ArchiCode plan artifact has been created.",
         writeCapable
           ? "You may edit files in the project only within the configured local provider access mode and ArchiCode-mounted tools."
           : "The configured Claude Code access mode is read-only here, so do not attempt filesystem edits; return source changes as archicodePatch propose-source-file operations that ArchiCode can apply.",
         "If the project folder has no app scaffold and the graph provides stack and acceptance criteria, create the smallest runnable scaffold instead of blocking on missing files.",
-        "Use AI Implement as a project-creation or project-update pass depending on the current files; in both cases, align code with the latest graph/node state and durable notes/artifacts.",
+        "Use Gaia's AI Implement role as a project-creation or project-update pass depending on the current files; in both cases, align code with the latest graph/node state and durable notes/artifacts.",
         "For a new frontend scaffold, include complete file contents for package.json, index.html, src entry files, routes/views/components, styles, and any minimal config needed by the selected stack.",
         "Use concrete editable placeholder copy when product identity is unspecified; do not ask a question solely for naming, branding, or marketing copy in a starter template.",
         "Implement the smallest useful change from the selected node or diagram context, and add/update tests when the stack already supports them and the task warrants it.",
@@ -318,6 +343,7 @@ export async function callClaudeLocal(provider: Provider, contextText: string, p
       ]
     : phase === "debugging"
       ? [
+          `You are ${pandoraAgent.title}, ArchiCode's debugging agent.`,
           "This is the debugging phase after a failed coding or verification run.",
           "Prioritize failure logs, recent diffs, changed files, and affected nodes before broad context.",
           "Repair code so the implementation still matches the latest graph/node source of truth, not just the immediate error log.",
@@ -328,6 +354,7 @@ export async function callClaudeLocal(provider: Provider, contextText: string, p
           writeCapable ? "" : sourceProposalBatchingInstructions
         ]
       : [
+          `You are ${gaiaAgent.title}, ArchiCode's implementation agent.`,
           "This is the mandatory planning phase before coding.",
           "Do not edit project files during planning.",
           planningQuestionGateInstructions,
@@ -967,31 +994,6 @@ server.registerTool("archicode_project_read_file", {
     maxChars: z.number().int().min(1).max(MAX_READ_CHARS).optional()
   }
 }, async (args) => asContent(await readProjectFile(args)));
-server.registerTool("archicode_project_inspect_cli", {
-  description: "Run a whitelisted read-only project inspection CLI command with structured args. Useful for Git diffs/history, ripgrep search, dependency metadata, runtime versions, and platform diagnostics. No shell, no writes, capped output.",
-  inputSchema: {
-    command: z.enum(${JSON.stringify([
-      "git", "rg",
-      "node", "npm", "pnpm", "yarn", "bun", "deno",
-      "python", "python3", "pip", "pip3", "uv", "poetry",
-      "go", "rustc", "cargo",
-      "java", "javac", "mvn", "gradle", "./gradlew",
-      "dotnet",
-      "php", "composer", "ruby", "bundle",
-      "vite", "tsc", "eslint", "prettier", "next", "astro", "svelte-kit", "vue-tsc",
-      "flutter", "dart",
-      "xcodebuild", "swift", "pod", "adb", "emulator",
-      "docker", "kubectl", "terraform", "helm",
-      "ls", "find", "wc", "file", "du", "cat", "head", "tail",
-      "sw_vers", "xcrun", "plutil", "defaults",
-      "where", "dir", "type", "findstr", "msbuild"
-    ])}),
-    args: z.array(z.string()).max(MAX_CLI_ARGS).optional(),
-    cwd: z.string().optional(),
-    timeoutMs: z.number().int().min(1000).max(MAX_CLI_TIMEOUT_MS).optional(),
-    maxChars: z.number().int().min(1000).max(MAX_CLI_OUTPUT_CHARS).optional()
-  }
-}, async (args) => asContent(await inspectCli(args)));
 await server.connect(new StdioServerTransport());
 `;
 }
@@ -1204,6 +1206,11 @@ export function textFromNestedTextRecord(value: unknown): string {
   return textFromContentParts(record.content);
 }
 
+function codexLocalImageArgs(images: ProviderCallOptions["imageAttachments"]): string[] {
+  const paths = [...new Set((images ?? []).map((image) => image.path.trim()).filter(Boolean))];
+  return paths.flatMap((imagePath) => ["--image", imagePath]);
+}
+
 export function buildCodexLocalArgs(provider: Provider, options: ProviderCallOptions, outputPath: string): string[] {
   const args = [
     "--ask-for-approval",
@@ -1220,7 +1227,8 @@ export function buildCodexLocalArgs(provider: Provider, options: ProviderCallOpt
     "--sandbox",
     provider.localSandbox ?? "read-only",
     "--output-last-message",
-    outputPath
+    outputPath,
+    ...codexLocalImageArgs(options.imageAttachments)
   ];
 
   if (provider.ephemeral !== false) args.push("--ephemeral");
@@ -1248,7 +1256,8 @@ export function buildCodexLocalResearchArgs(provider: Provider, options: Researc
     "--sandbox",
     "read-only",
     "--output-last-message",
-    outputPath
+    outputPath,
+    ...codexLocalImageArgs(options.imageAttachments)
   ];
 
   if (provider.ephemeral !== false) args.push("--ephemeral");
@@ -1752,7 +1761,8 @@ export async function runLocalProcess(
   stdin: string,
   cwd?: string,
   onProgress?: (event: ProviderProgressEvent) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  options?: { inactivityTimeoutMs?: number }
 ): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
   const resolved = await resolveLocalCommand(command);
   const spawnPlan = await windowsSpawnPlan(resolved.command, args);
@@ -1772,6 +1782,10 @@ export async function runLocalProcess(
     let stdout = "";
     let stderr = "";
     let settled = false;
+    const inactivityTimeoutMs = Number.isFinite(options?.inactivityTimeoutMs) && Number(options?.inactivityTimeoutMs) > 0
+      ? Math.floor(Number(options?.inactivityTimeoutMs))
+      : LOCAL_PROVIDER_INACTIVITY_TIMEOUT_MS;
+    let inactivityTimer: ReturnType<typeof setTimeout> | undefined;
 
     const cleanupChild = (killProcessGroup = false): void => {
       if (child.pid) {
@@ -1787,12 +1801,14 @@ export async function runLocalProcess(
 
     child.stdout.on("data", (chunk: Buffer) => {
       if (settled) return;
+      resetInactivityTimer();
       const text = chunk.toString();
       stdout += text;
       onProgress?.({ stream: "stdout", text });
     });
     child.stderr.on("data", (chunk: Buffer) => {
       if (settled) return;
+      resetInactivityTimer();
       const text = chunk.toString();
       stderr += text;
       onProgress?.({ stream: "stderr", text });
@@ -1810,18 +1826,36 @@ export async function runLocalProcess(
       if (settled) return;
       settled = true;
       cleanupChild(true);
-      cleanupAbort();
+      cleanupControls();
       reject(new Error("Provider call was cancelled."));
     }
-    const cleanupAbort = (): void => {
+    function timeout(): void {
+      if (settled) return;
+      settled = true;
+      cleanupChild(true);
+      cleanupControls();
+      const minutes = inactivityTimeoutMs / 60_000;
+      const duration = Number.isInteger(minutes) ? `${minutes} minute${minutes === 1 ? "" : "s"}` : `${inactivityTimeoutMs}ms`;
+      reject(new Error(`Local provider call produced no output for ${duration}. The CLI process and its child processes were stopped.`));
+    }
+    function resetInactivityTimer(): void {
+      if (inactivityTimer) clearTimeout(inactivityTimer);
+      inactivityTimer = setTimeout(timeout, inactivityTimeoutMs);
+    }
+    const cleanupControls = (): void => {
       signal?.removeEventListener("abort", abort);
+      if (inactivityTimer) {
+        clearTimeout(inactivityTimer);
+        inactivityTimer = undefined;
+      }
     };
     signal?.addEventListener("abort", abort, { once: true });
+    resetInactivityTimer();
 
     child.on("error", (error) => {
       if (settled) return;
       settled = true;
-      cleanupAbort();
+      cleanupControls();
       cleanupChild(true);
       if ((error as Error & { code?: string }).code === "ENOENT") {
         reject(new Error(`Unable to find local command "${command}". Set it to the full CLI path, or make sure it is available from your login shell PATH.`));
@@ -1832,7 +1866,7 @@ export async function runLocalProcess(
     child.on("close", (exitCode) => {
       if (settled) return;
       settled = true;
-      cleanupAbort();
+      cleanupControls();
       cleanupChild(true);
       resolve({ stdout, stderr, exitCode });
     });

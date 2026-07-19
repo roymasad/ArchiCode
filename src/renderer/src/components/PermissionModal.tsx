@@ -1,10 +1,15 @@
 import { ShieldAlert, ShieldCheck, X } from "lucide-react";
 import { useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { useArchicodeStore } from "../store/useArchicodeStore";
 import { Button, DialogContent, DialogRoot } from "./ui";
 
 export function PermissionModal() {
-  const { shellPrompt, setShellPrompt, runAgent } = useArchicodeStore();
+  const { shellPrompt, setShellPrompt, runAgent } = useArchicodeStore(useShallow((state) => ({
+    shellPrompt: state.shellPrompt,
+    setShellPrompt: state.setShellPrompt,
+    runAgent: state.runAgent
+  })));
   const [reusableApproval, setReusableApproval] = useState(false);
   if (!shellPrompt) return null;
 

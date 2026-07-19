@@ -1,5 +1,6 @@
 import { BookOpen, CheckCircle2, ExternalLink, FolderOpen, GitBranch, Keyboard, Lock, MessageSquare, Play, SlidersHorizontal, Sparkles } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
+import { gaiaAgent, pandoraAgent } from "@shared/agentIdentities";
 import { Button, DialogContent, DialogRoot, DialogTrigger, ScrollArea } from "./ui";
 import { useArchicodeStore } from "../store/useArchicodeStore";
 import { ACTION_DESCRIPTORS, formatChord, type ActionId } from "../utils/keybindings";
@@ -38,7 +39,7 @@ const helpSections = [
   {
     icon: <Sparkles size={18} />,
     title: "Let Archi work from context",
-    body: "Run AI Implement for the whole diagram, or use node-scoped actions from the inspector. Archi, the chat research agent, can research questions, edit or create graph nodes and groups, execute builds, help verify results, and sync the graph to code after external edits when you ask."
+    body: `Run AI Implement with ${gaiaAgent.name} for the whole diagram, or use node-scoped actions from the inspector. Archi, the chat research agent, can research questions, edit or create graph nodes and groups, execute builds, help verify results, and sync the graph to code after external edits when you ask.`
   },
   {
     icon: <MessageSquare size={18} />,
@@ -48,7 +49,7 @@ const helpSections = [
   {
     icon: <Play size={18} />,
     title: "Build, run, and debug",
-    body: "Configure build commands and run targets in Settings. Build runs, runtime logs, bug reports, failed checks, artifacts, and diffs stay visible in the activity panel for review and follow-up."
+    body: `Configure build commands and run targets in Settings. ${gaiaAgent.title} handles implementation, while ${pandoraAgent.title} handles focused debugging. Their runs, runtime logs, bug reports, failed checks, artifacts, and diffs stay visible in the activity panel for review and follow-up.`
   },
   {
     icon: <Lock size={18} />,
@@ -136,7 +137,7 @@ export function HelpPage({ trigger }: { trigger?: ReactNode }) {
                 <li>Open a project folder or create a project from a template.</li>
                 <li>Create nodes for features, components, tasks, settings, artifacts, or subflows.</li>
                 <li>Add acceptance criteria, edges, notes, and attachments to the nodes that need work.</li>
-                <li>Run AI Implement, Build, Run App, or AI Debug from the toolbar when the graph has enough context.</li>
+                <li>Run AI Implement with Gaia, Build, Run App, or AI Debug with Pandora from the toolbar when the graph has enough context.</li>
                 <li>Review questions, logs, artifacts, diffs, and proposed changes before treating work as done.</li>
               </ol>
             </section>

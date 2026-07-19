@@ -64,7 +64,7 @@ export type InternalConsoleCommandResult = {
   command: string;
   cwd: string;
   risk: "low" | "medium" | "high";
-  status: "succeeded" | "failed" | "denied" | "approval-required" | "rejected";
+  status: "succeeded" | "failed" | "denied" | "approval-required" | "redirected" | "rejected";
   exitCode?: number | null;
   stdout?: string;
   stderr?: string;
@@ -183,12 +183,12 @@ export function archicodeInternalTools(settings: ProjectSettings): ProviderMcpTo
     );
   }
   if (settings.agentTools.console) {
-    tools.push(tool("archicode_console_run_command", "run_command", "Run a finite project console command through ArchiCode safety checks. Runtime/watch/dev-server commands are rejected.", {
+    tools.push(tool("archicode_console_run_command", "run_command", "Run a bounded project command through ArchiCode's shared safety broker. Choose any project-scoped command that advances the goal. Safe actions run and higher-risk actions follow the user's auto-approval or approval settings. Parent Chat's sole role restriction here is that it must route project-code edits through the graph/build implementation path.", {
       type: "object",
       additionalProperties: false,
       required: ["command"],
       properties: {
-        command: { type: "string", minLength: 1, description: "Finite command to run from the project root or provided cwd." },
+        command: { type: "string", minLength: 1, description: "Bounded command chosen for the current goal." },
         cwd: { type: "string", description: "Optional project-relative working directory." },
         timeoutMs: { type: "integer", minimum: 1000, maximum: TOOL_COMMAND_TIMEOUT_MS, description: "Optional timeout in milliseconds." }
       }

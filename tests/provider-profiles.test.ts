@@ -23,6 +23,7 @@ describe("provider profile helpers", () => {
     expect(Object.values(provider.subagentModelPolicies).map((policy) => policy.maxOutputTokens)).toEqual([
       32000,
       32000,
+      32000,
       32000
     ]);
   });

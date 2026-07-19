@@ -92,7 +92,7 @@ describe("ArchiCode JSON schemas", () => {
     expect(parsed.settings.providers[1]?.outputVerbosity).toBeUndefined();
   });
 
-  it("defaults Sherlock on without re-enabling a legacy-disabled Picasso setting", () => {
+  it("defaults Sherlock and Delphi on without re-enabling a legacy-disabled Picasso setting", () => {
     const parsed = projectSchema.parse({
       ...projectFixture,
       settings: {
@@ -110,6 +110,7 @@ describe("ArchiCode JSON schemas", () => {
     });
 
     expect(parsed.settings.agentTools.subagents?.sherlockResearch).toBe(true);
+    expect(parsed.settings.agentTools.subagents?.delphiTesting).toBe(true);
     expect(parsed.settings.agentTools.subagents?.graphReconciliation).toBe(false);
   });
 

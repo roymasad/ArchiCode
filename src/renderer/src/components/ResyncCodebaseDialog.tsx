@@ -1,5 +1,6 @@
 import { AlertTriangle, CheckCircle2, Clock3, RefreshCw, XCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { ResyncProgress, ResyncReport, ResyncScope } from "../../../preload";
 import { useArchicodeStore } from "../store/useArchicodeStore";
 import { Button, DialogContent, DialogRoot } from "./ui";
@@ -91,7 +92,11 @@ function ResyncSummary({ report, flows }: { report: ResyncReport; flows: Array<{
 }
 
 export function ResyncCodebaseDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }) {
-  const { bundle, rootPath, reload } = useArchicodeStore();
+  const { bundle, rootPath, reload } = useArchicodeStore(useShallow((state) => ({
+    bundle: state.bundle,
+    rootPath: state.rootPath,
+    reload: state.reload
+  })));
   const [progress, setProgress] = useState<ResyncProgress | null>(null);
   const [startedAt, setStartedAt] = useState<number | null>(null);
   const [now, setNow] = useState(() => Date.now());

@@ -1,8 +1,10 @@
-import { AlertCircle, AlertTriangle, Archive, Box, Brain, Check, CheckCircle2, ChevronDown, ChevronUp, Circle, Copy, Download, FileJson, FileText, FolderKanban, History, Layers3, ListTodo, Loader2, Maximize2, MessageSquare, Mic, Minimize2, PanelLeftClose, PanelLeftOpen, Paperclip, Play, Plus, RefreshCw, Send, ShieldCheck, Sparkles, Split, Square, Volume2, Workflow, X } from "lucide-react";
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { CSSProperties, ReactNode } from "react";
+import { AlertCircle, AlertTriangle, Archive, Box, Brain, Check, CheckCircle2, ChevronDown, ChevronUp, Circle, Clock3, Copy, Download, ExternalLink, Eye, FileJson, FileText, FolderKanban, History, Layers3, ListTodo, Loader2, Maximize2, MessageSquare, Mic, Minimize2, PanelLeftClose, PanelLeftOpen, Paperclip, Play, Plus, RefreshCw, Send, ShieldCheck, Sparkles, Split, Square, Volume2, Workflow, X } from "lucide-react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { ComponentProps, ReactNode } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { Artifact, LlmUsage, ProjectBundle, ProjectSettings, ResearchChatScope, ResearchChatSession } from "@shared/schema";
-import { deriveResearchChatContextPlan, estimateTextTokens } from "@shared/contextBudget";
+import { gaiaAgent, pandoraAgent } from "@shared/agentIdentities";
+import { deriveResearchChatContextPlan } from "@shared/contextBudget";
 import { sumLlmUsage, isAllUsageUnavailable, formatCostUsd, formatTokenCount, llmUsageTotalTokens } from "@shared/llmPricing";
 import { extractArchicodeResearch } from "@shared/researchExtraction";
 import { isResearchThinkingPhrase } from "@shared/researchPersonality";
@@ -25,6 +27,7 @@ import {
   isTextAttachmentArtifact,
   mcpToolActivityLine,
   mcpToolUsageTooltip,
+  type ResearchMcpToolCall,
   readableResearchContent,
   scopeKey,
   visibleResearchContent
@@ -54,13 +57,15 @@ import {
   formatResearchChatMarkdown,
   hasResearchMemory
 } from "./researchTranscript";
-import { ResearchTodoCapsule, researchTodosForSession } from "./ResearchTodoCapsule";
+import { ResearchWorkCapsule, researchTodosForSession } from "./ResearchTodoCapsule";
 import { type ArchicodeGraphLink, type ArchicodeProjectPathLink, ResearchMarkdown } from "./ResearchMarkdown";
 import { ChatArtifactsPanel, ProjectMemoryNotesPanel, ResearchHistoryList, ResearchMemoryPanel } from "./ResearchMemoryPanel";
 import { ChatModelPicker } from "./ChatModelPicker";
 import { modelOptionsForProvider } from "./projectToolbarShared";
-import { providerImageInputSupportStatus } from "@shared/providerCapabilities";
+import { providerImageInputSupportStatus, type ProviderImageInputSupportStatus } from "@shared/providerCapabilities";
 import { isRunBlockingNewChange } from "../utils/runStatus";
+import { isTimeoutFailureMessage } from "@shared/failureSemantics";
+import { classifyCommandRisk, type ShellCommandRisk } from "@shared/execution";
 import {
   chatModelDisplayName,
   configuredResearchModelId,
@@ -71,11 +76,319 @@ import {
 
 const RESEARCH_RULES_TOOL_NAME = "archicode_project_manage_rules";
 
+type DelphiObservationArtifact = { id: string; label: string; path: string; mediaType: string };
+type DelphiObservationRunStatus = "awaiting-approval" | "running" | "completed" | "incomplete" | "blocked" | "timed-out" | "failed" | "rejected";
+
+function delphiObservationInspectionSummary(
+  captureCount: number,
+  inspectedCount: number,
+  imageInputSupport: ProviderImageInputSupportStatus | undefined,
+  runStatus: DelphiObservationRunStatus
+): string {
+  const pendingCount = Math.max(0, captureCount - inspectedCount);
+  if (inspectedCount > 0) {
+    return imageInputSupport === "supported" && runStatus === "running" && pendingCount > 0
+      ? `${inspectedCount} model-inspected · ${pendingCount} pending`
+      : `${inspectedCount} model-inspected`;
+  }
+  return imageInputSupport === "supported" && runStatus === "running"
+    ? "inspection pending"
+    : "not model-inspected";
+}
+
+function DelphiObservationGallery(props: {
+  projectRoot: string;
+  artifacts: DelphiObservationArtifact[];
+  modelInspectedArtifactIds: string[];
+  imageInputSupport?: ProviderImageInputSupportStatus;
+  runStatus: DelphiObservationRunStatus;
+}): ReactNode {
+  const [previews, setPreviews] = useState<Record<string, string>>({});
+  const [shouldLoadPreviews, setShouldLoadPreviews] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+  const galleryRef = useRef<HTMLDivElement | null>(null);
+  const imageArtifacts = props.artifacts.filter((artifact) => artifact.mediaType.startsWith("image/"));
+  const inspectedArtifactIds = new Set(props.modelInspectedArtifactIds);
+  const inspectionSummary = delphiObservationInspectionSummary(
+    props.artifacts.length,
+    props.modelInspectedArtifactIds.length,
+    props.imageInputSupport,
+    props.runStatus
+  );
+  const pendingInspection = props.imageInputSupport === "supported" && props.runStatus === "running";
+  const visibleArtifacts = expanded ? imageArtifacts : imageArtifacts.slice(-4);
+  const artifactKey = visibleArtifacts.map((artifact) => `${artifact.id}:${artifact.path}`).join("|");
+
+  useEffect(() => {
+    if (shouldLoadPreviews || !visibleArtifacts.length) return;
+    const gallery = galleryRef.current;
+    if (!gallery || typeof IntersectionObserver === "undefined") {
+      setShouldLoadPreviews(true);
+      return;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      setShouldLoadPreviews(true);
+      observer.disconnect();
+    }, { rootMargin: "500px 0px" });
+    observer.observe(gallery);
+    return () => observer.disconnect();
+  }, [shouldLoadPreviews, visibleArtifacts.length]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!shouldLoadPreviews || !visibleArtifacts.length || !window.archicode?.readArtifactDataUrl) {
+      setPreviews({});
+      return () => { cancelled = true; };
+    }
+    void Promise.all(visibleArtifacts.map(async (artifact) => {
+      try {
+        return [artifact.id, await window.archicode.readArtifactDataUrl(props.projectRoot, artifact.path)] as const;
+      } catch {
+        return [artifact.id, ""] as const;
+      }
+    })).then((entries) => {
+      if (!cancelled) setPreviews(Object.fromEntries(entries.filter(([, value]) => value)));
+    });
+    return () => { cancelled = true; };
+  // artifactKey is a stable content key; depending on the array itself would
+  // reload previews on every live progress line.
+  }, [artifactKey, props.projectRoot, shouldLoadPreviews]);
+
+  if (!visibleArtifacts.length) return null;
+  return (
+    <div ref={galleryRef} className="research-delphi-observations">
+      <div className="research-delphi-observations-head">
+        <Eye size={13} />
+        <span>Captured evidence</span>
+        <small>
+          {props.artifacts.length} capture{props.artifacts.length === 1 ? "" : "s"}
+          {` · ${inspectionSummary}`}
+        </small>
+      </div>
+      <div className={`research-delphi-observation-grid${visibleArtifacts.length === 1 ? " is-single" : ""}`}>
+        {visibleArtifacts.map((artifact) => (
+          <button
+            type="button"
+            key={artifact.id}
+            title={`${artifact.label} — ${inspectedArtifactIds.has(artifact.id) ? "model-inspected" : pendingInspection ? "inspection pending" : "not model-inspected"}; open evidence`}
+            onClick={() => void window.archicode?.openProjectFile(props.projectRoot, artifact.path)}
+          >
+            {previews[artifact.id] ? <img src={previews[artifact.id]} alt={artifact.label} loading="lazy" decoding="async" /> : <Loader2 size={16} className="is-spinning" />}
+            <span>{artifact.label}</span>
+          </button>
+        ))}
+      </div>
+      {imageArtifacts.length > 4 ? (
+        <button
+          type="button"
+          className="research-delphi-observation-toggle"
+          aria-expanded={expanded}
+          onClick={() => setExpanded((current) => !current)}
+        >
+          {expanded ? "Show less" : `Show all ${imageArtifacts.length}`}
+        </button>
+      ) : null}
+    </div>
+  );
+}
+
+function ResearchMessageImageAttachments(props: { projectRoot: string; artifacts: Artifact[] }): ReactNode {
+  const [previews, setPreviews] = useState<Record<string, string>>({});
+  const [shouldLoad, setShouldLoad] = useState(false);
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const artifactKey = props.artifacts.map((artifact) => `${artifact.id}:${artifact.path}`).join("|");
+
+  useEffect(() => {
+    if (shouldLoad || !props.artifacts.length) return;
+    const container = containerRef.current;
+    if (!container || typeof IntersectionObserver === "undefined") {
+      setShouldLoad(true);
+      return;
+    }
+    const observer = new IntersectionObserver((entries) => {
+      if (!entries.some((entry) => entry.isIntersecting)) return;
+      setShouldLoad(true);
+      observer.disconnect();
+    }, { rootMargin: "500px 0px" });
+    observer.observe(container);
+    return () => observer.disconnect();
+  }, [props.artifacts.length, shouldLoad]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!shouldLoad || !props.artifacts.length || !window.archicode?.readArtifactDataUrl) return;
+    void Promise.all(props.artifacts.map(async (artifact) => {
+      try {
+        return [artifact.id, await window.archicode.readArtifactDataUrl(props.projectRoot, artifact.path)] as const;
+      } catch {
+        return [artifact.id, ""] as const;
+      }
+    })).then((entries) => {
+      if (!cancelled) setPreviews(Object.fromEntries(entries.filter(([, value]) => value)));
+    });
+    return () => { cancelled = true; };
+  // artifactKey captures the stable identity/path inputs without retriggering
+  // when the parent recreates the filtered artifact array during streaming.
+  }, [artifactKey, props.projectRoot, shouldLoad]);
+
+  if (!props.artifacts.length) return null;
+  return (
+    <div ref={containerRef} className="research-message-image-grid" aria-label="Image attachments">
+      {props.artifacts.map((artifact) => (
+        <button
+          key={artifact.id}
+          type="button"
+          className="research-message-image-thumb"
+          title={artifact.title}
+          onClick={() => void window.archicode?.openProjectFile(props.projectRoot, artifact.path)}
+        >
+          {previews[artifact.id]
+            ? <img src={previews[artifact.id]} alt={artifact.title} loading="lazy" decoding="async" />
+            : <Loader2 size={16} className="is-spinning" />}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 type RuleApprovalPresentation = {
   summary: string;
   implication: string;
   exactJson: string;
 };
+
+type CommandApprovalPresentation = {
+  command: string;
+  cwd: string;
+  risk: ShellCommandRisk;
+};
+
+export function shellCommandMarkdown(command: string): string {
+  const longestBacktickRun = Math.max(0, ...(command.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = "`".repeat(Math.max(3, longestBacktickRun + 1));
+  return `${fence}bash\n${command}\n${fence}`;
+}
+
+function commandRiskHint(risk: ShellCommandRisk, command: string): string {
+  if (risk === "low") return "Recognized as read-only or low-impact by ArchiCode's command safety classifier.";
+  if (risk === "medium") return "May invoke tools, access external resources, or change local state; review before allowing.";
+  if (command.includes("$(") || command.includes("`")) {
+    return "Classified high because shell command substitution can execute nested commands that the safety classifier cannot prove are read-only.";
+  }
+  return "Contains destructive, privileged, or unrestricted shell behavior; review especially carefully.";
+}
+
+function parsedToolArguments(argumentsJson: string | undefined): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(argumentsJson || "{}");
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
+function ResearchToolTrace(props: {
+  call: ResearchMcpToolCall;
+  copyKey: string;
+  copiedCommandKey: string | null;
+  onCopyCommand: (copyKey: string, command: string) => void;
+}): ReactNode {
+  const [expanded, setExpanded] = useState(false);
+  const command = commandApprovalPresentation("", props.call.toolName, props.call.argumentsJson ?? "{}");
+  const args = parsedToolArguments(props.call.argumentsJson);
+  const description = typeof args.description === "string" ? args.description.trim() : "";
+  const statusLabel = props.call.status === "succeeded"
+    ? command ? "Ran CLI" : "Used tool"
+    : props.call.status === "failed"
+      ? command ? "CLI failed" : "Tool failed"
+      : "Approval requested";
+  const statusTone = props.call.status === "succeeded" ? "success" : props.call.status === "failed" ? "danger" : "warning";
+  const activity = command
+    ? description || command.command.split(/\r?\n/, 1)[0] || "Shell command"
+    : mcpToolActivityLine(props.call);
+  const result = props.call.error?.trim() || props.call.resultSummary?.trim() || "";
+  const argumentsDisplay = props.call.argumentsJson?.trim()
+    ? JSON.stringify(args, null, 2)
+    : "";
+
+  return (
+    <details
+      className={`research-tool-trace is-${props.call.status}`}
+      onToggle={(event) => setExpanded(event.currentTarget.open)}
+    >
+      <summary>
+        {command ? <Play size={12} aria-hidden="true" /> : <Workflow size={12} aria-hidden="true" />}
+        <span className="research-tool-trace-status">{statusLabel}</span>
+        <span className="research-tool-trace-activity">{activity}</span>
+        <ChevronDown size={12} className="research-tool-trace-chevron" aria-hidden="true" />
+      </summary>
+      {expanded ? <div className="research-tool-trace-details">
+        <div className="research-tool-trace-meta">
+          <span>{props.call.serverLabel?.trim() || props.call.serverId} · {props.call.toolName}</span>
+          <Badge tone={statusTone}>{props.call.status}</Badge>
+        </div>
+        {command ? (
+          <>
+            <div className="research-command-approval-heading">
+              <strong>Exact command</strong>
+              <Badge
+                className="research-command-risk-badge"
+                tone={command.risk === "low" ? "success" : command.risk === "medium" ? "warning" : "danger"}
+              >
+                {command.risk[0].toUpperCase() + command.risk.slice(1)} risk
+              </Badge>
+            </div>
+            <div className="research-command-approval-code">
+              <IconButton
+                className="research-command-copy-button"
+                title={props.copiedCommandKey === props.copyKey ? "Copied" : "Copy exact command"}
+                aria-label={props.copiedCommandKey === props.copyKey ? "Command copied" : "Copy exact command"}
+                onClick={() => props.onCopyCommand(props.copyKey, command.command)}
+              >
+                {props.copiedCommandKey === props.copyKey ? <Check size={12} /> : <Copy size={12} />}
+              </IconButton>
+              <ResearchMarkdown content={shellCommandMarkdown(command.command)} />
+            </div>
+            <small className="research-command-risk-hint">{commandRiskHint(command.risk, command.command)}</small>
+            <small>Working directory: {command.cwd}</small>
+          </>
+        ) : argumentsDisplay && argumentsDisplay !== "{}" ? (
+          <>
+            <strong>Arguments</strong>
+            <pre>{argumentsDisplay}</pre>
+          </>
+        ) : null}
+        {result ? (
+          <>
+            <strong>{props.call.status === "failed" ? "Error" : "Result"}</strong>
+            <pre className={props.call.status === "failed" ? "is-error" : ""}>{result}</pre>
+          </>
+        ) : null}
+        <time dateTime={props.call.createdAt}>{new Date(props.call.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time>
+      </div> : null}
+    </details>
+  );
+}
+
+export function commandApprovalPresentation(
+  providerToolName: string,
+  toolName: string,
+  argumentsJson: string
+): CommandApprovalPresentation | null {
+  if (providerToolName !== "archicode_console_run_command" && toolName !== "run_command") return null;
+  try {
+    const parsed = JSON.parse(argumentsJson || "{}") as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+    const args = parsed as Record<string, unknown>;
+    const command = typeof args.command === "string" ? args.command.trim() : "";
+    if (!command) return null;
+    const cwd = typeof args.cwd === "string" && args.cwd.trim() ? args.cwd.trim() : "Project root";
+    return { command, cwd, risk: classifyCommandRisk(command) };
+  } catch {
+    return null;
+  }
+}
 
 export function ruleApprovalPresentation(argumentsJson: string): RuleApprovalPresentation {
   let args: Record<string, unknown> = {};
@@ -131,7 +444,7 @@ function sameScope(left: ResearchChatScope, right: ResearchChatScope): boolean {
 }
 
 export function successfulSubagentBatchCount(
-  kind: "merge-resolution" | "graph-reconciliation" | "test-authoring" | "sherlock-research",
+  kind: "merge-resolution" | "graph-reconciliation" | "test-authoring" | "sherlock-research" | "delphi-testing",
   progressLines: string[]
 ): number {
   if (kind !== "graph-reconciliation") return 0;
@@ -178,6 +491,11 @@ type ResearchChangeSetReviewSummary = {
   autoApproved: boolean;
 };
 
+type ResearchTranscriptAnalysis = {
+  lastVisibleMessageIndex: number;
+  reviewSummaryByChangeSetIndex: Map<number, ResearchChangeSetReviewSummary>;
+};
+
 function changeSetReviewKey(sessionId: string, messageId: string, changeSetId: string): string {
   return `${sessionId}:${messageId}:${changeSetId}`;
 }
@@ -194,24 +512,6 @@ export function parseResearchChangeSetReviewSummary(message: ResearchChatSession
   };
 }
 
-function researchMessagePresentationContent(
-  session: ResearchChatSession,
-  messageIndex: number,
-  message: ResearchChatSession["messages"][number]
-): string {
-  const summary = parseResearchChangeSetReviewSummary(message);
-  if (!summary || summary.autoApproved) return message.content;
-  const previousChangeSet = [...session.messages.slice(0, messageIndex)].reverse().find((item) => item.changeSet)?.changeSet;
-  if (!previousChangeSet) return message.content;
-  const category = researchChangeSetCategory(previousChangeSet.operations);
-  if (category === "graph") return message.content;
-  const retry = /retry reviewed/i.test(message.content);
-  const prefix = category === "queue"
-    ? retry ? "Queue submission retry reviewed" : "Queue submission reviewed"
-    : retry ? "Changes retry reviewed" : "Changes reviewed";
-  return `${prefix}: ${summary.applied} ${category === "queue" ? "queued" : "applied"}, ${summary.rejected} rejected, ${summary.failed} failed.`;
-}
-
 function isChangeSetReviewMessage(message: ResearchChatSession["messages"][number]): boolean {
   return Boolean(parseResearchChangeSetReviewSummary(message));
 }
@@ -224,6 +524,26 @@ function reviewSummaryAfterChangeSet(session: ResearchChatSession, messageIndex:
     if (summary) latest = summary;
   }
   return latest;
+}
+
+function analyzeResearchTranscript(session: ResearchChatSession): ResearchTranscriptAnalysis {
+  let lastVisibleMessageIndex = -1;
+  let activeChangeSetIndex: number | null = null;
+  const reviewSummaryByChangeSetIndex = new Map<number, ResearchChangeSetReviewSummary>();
+
+  session.messages.forEach((message, messageIndex) => {
+    const reviewSummary = parseResearchChangeSetReviewSummary(message);
+    if (!reviewSummary) lastVisibleMessageIndex = messageIndex;
+    if (message.changeSet) {
+      activeChangeSetIndex = messageIndex;
+      return;
+    }
+    if (reviewSummary && activeChangeSetIndex !== null) {
+      reviewSummaryByChangeSetIndex.set(activeChangeSetIndex, reviewSummary);
+    }
+  });
+
+  return { lastVisibleMessageIndex, reviewSummaryByChangeSetIndex };
 }
 
 function reviewStatusPresentation(summary: ResearchChangeSetReviewSummary | null, category: ResearchChangeSetCategory): {
@@ -347,19 +667,23 @@ function operationLabel(
   if (operation.kind === "propose-run-profile") return `${operation.mode === "replace" ? "Replace" : "Create"} run target "${operation.profile.label}"`;
   if (operation.kind === "start-agent-run") {
     const effort = operation.effort === "fast" ? "Fast" : "High";
-    return operation.nodeId ? `Queue ${effort} AI Implement for ${nodeTitleLabel(operation.nodeId, titles)}` : `Queue ${effort} AI Implement for "${flowTitleLabel(operation.flowId, flowTitles)}"`;
+    return operation.nodeId
+      ? `Queue ${gaiaAgent.name} for ${nodeTitleLabel(operation.nodeId, titles)} · ${effort} effort`
+      : `Queue ${gaiaAgent.name} for "${flowTitleLabel(operation.flowId, flowTitles)}" · ${effort} effort`;
   }
   if (operation.kind === "start-run-profile") return `Queue run target ${operation.profileId}`;
+  if (operation.kind === "stop-runtime-service") return `Stop runtime service ${operation.serviceId}`;
+  if (operation.kind === "restart-runtime-service") return `Restart runtime service ${operation.serviceId}`;
   if (operation.kind === "retry-run") return `Queue retry for ${operation.runId}`;
-  if (operation.kind === "start-debugging-run") return `Queue debug for ${operation.runId}`;
+  if (operation.kind === "start-debugging-run") return `Queue ${pandoraAgent.name} for ${operation.runId}`;
   if (operation.kind === "author-acceptance-tests") {
     return operation.nodeId
       ? `Regenerate acceptance tests for ${nodeTitleLabel(operation.nodeId, titles)}`
       : `Regenerate acceptance tests for flow "${flowTitleLabel(operation.flowId, flowTitles)}"`;
   }
   if (operation.kind === "run-acceptance-checks") return `Run acceptance checks for ${nodeTitleLabel(operation.nodeId, titles)}`;
-  if (operation.kind === "start-runtime-debug-run") return `Queue runtime debug for ${operation.serviceId}`;
-  if (operation.kind === "start-incident-debug-run") return "Queue incident debug";
+  if (operation.kind === "start-runtime-debug-run") return `Queue ${pandoraAgent.name} for runtime ${operation.serviceId}`;
+  if (operation.kind === "start-incident-debug-run") return `Queue ${pandoraAgent.name} for reported incidents`;
   if (operation.kind === "delete-node") return `Delete node ${nodeTitleLabel(operation.nodeId, titles)}`;
   if (operation.kind === "delete-edge") return `Delete edge ${operation.edgeId}`;
   if (operation.kind === "create-group") return `Create group "${operation.group.name}"`;
@@ -380,6 +704,7 @@ function operationFields(operation: ResearchOperationView): string {
   if (operation.kind === "propose-run-profile") return [operation.profile.kind, operation.profile.runCommand, operation.reason].filter(Boolean).join(" · ");
   if (operation.kind === "start-agent-run") return [operation.promptSummary, operation.command].filter(Boolean).join(" · ");
   if (operation.kind === "start-run-profile") return [operation.flowId, operation.targetId].filter(Boolean).join(" · ");
+  if (operation.kind === "stop-runtime-service" || operation.kind === "restart-runtime-service") return operation.serviceId;
   if (operation.kind === "retry-run" || operation.kind === "start-debugging-run") return "";
   if (operation.kind === "start-runtime-debug-run") return operation.flowId;
   if (operation.kind === "start-incident-debug-run") return operation.flowId ?? "";
@@ -415,15 +740,77 @@ function operationFlowId(operation: ResearchOperationView): string | null {
 }
 
 function isDestructiveOperation(operation: ResearchOperationView): boolean {
-  return operation.kind === "delete-note" || operation.kind === "delete-node" || operation.kind === "delete-edge" || operation.kind === "delete-subflow" || operation.kind === "delete-group";
+  return operation.kind === "delete-note" || operation.kind === "delete-node" || operation.kind === "delete-edge" || operation.kind === "delete-subflow" || operation.kind === "delete-group" || operation.kind === "stop-runtime-service";
 }
 
-export function ResearchPanel({
-  panelAction,
+function formatResearchTaskElapsed(elapsedMs: number): string {
+  const totalSeconds = Math.max(0, Math.floor(elapsedMs / 1_000));
+  const hours = Math.floor(totalSeconds / 3_600);
+  const minutes = Math.floor((totalSeconds % 3_600) / 60);
+  const seconds = totalSeconds % 60;
+  return hours > 0
+    ? `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`
+    : `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function ResearchSubmitButton({
+  disabled,
+  label,
+  pending,
+  onSubmit
+}: {
+  disabled: boolean;
+  label: string;
+  pending: boolean;
+  onSubmit: () => void;
+}) {
+  const hasContent = useArchicodeStore((state) => composerHasContent(state.researchDraft));
+  return (
+    <Button type="button" variant="primary" disabled={disabled || !hasContent} onClick={onSubmit}>
+      {pending ? <Loader2 className="is-spinning" size={15} /> : <Send size={15} />}
+      <span>{label}</span>
+    </Button>
+  );
+}
+
+function ResearchDraftContextIndicator({
+  bundle,
+  baseContextCharacters,
+  ...props
+}: {
+  bundle: ProjectBundle | null;
+  baseContextCharacters: number;
+} & Omit<ComponentProps<typeof ContextSizeIndicator>, "estimatedTokens">) {
+  const segments = useArchicodeStore((state) => state.researchDraft);
+  const draft = useMemo(() => composerDraftText(segments, bundle), [bundle, segments]);
+  // The base JSON contains draft:"". Replace those two empty-string quotes
+  // with the exact JSON-encoded draft length without rebuilding chat history.
+  const estimatedTokens = Math.ceil((baseContextCharacters - 2 + JSON.stringify(draft).length) / 4);
+  return <ContextSizeIndicator {...props} estimatedTokens={estimatedTokens} />;
+}
+
+function ResearchTaskTimer({ startedAtMs }: { startedAtMs: number }) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    setNowMs(Date.now());
+    const intervalId = window.setInterval(() => setNowMs(Date.now()), 1_000);
+    return () => window.clearInterval(intervalId);
+  }, [startedAtMs]);
+  const elapsed = formatResearchTaskElapsed(nowMs - startedAtMs);
+  return (
+    <Tooltip content="Elapsed time for the current user request, including parent continuations and subagent work.">
+      <span className="ui-badge research-task-timer" aria-label={`Current task active for ${elapsed}`}>
+        <Clock3 size={12} aria-hidden="true" />
+        <span>{elapsed}</span>
+      </span>
+    </Tooltip>
+  );
+}
+
+export const ResearchPanel = memo(function ResearchPanel({
   focusMode = false,
   onToggleFocusMode
 }: {
-  panelAction?: ReactNode;
   focusMode?: boolean;
   onToggleFocusMode?: () => void;
 }) {
@@ -459,20 +846,53 @@ export function ResearchPanel({
     applyResearchGraphChangeSet,
     respondToSubagentRun,
     globalSpeechSettings,
-    globalTtsSettings
-  } = useArchicodeStore();
-  const researchDraft = useArchicodeStore((state) => state.researchDraft);
-  const clearResearchDraft = useArchicodeStore((state) => state.clearResearchDraft);
-  const appendResearchDraftText = useArchicodeStore((state) => state.appendResearchDraftText);
-  const draft = useMemo(() => composerDraftText(researchDraft, bundle), [researchDraft, bundle]);
+    globalTtsSettings,
+    clearResearchDraft,
+    appendResearchDraftText
+  } = useArchicodeStore(useShallow((state) => ({
+    bundle: state.bundle,
+    rootPath: state.rootPath,
+    activeFlowId: state.activeFlowId,
+    activeSubflowId: state.activeSubflowId,
+    selectedNodeId: state.selectedNodeId,
+    researchSessions: state.researchSessions,
+    selectedResearchSessionId: state.selectedResearchSessionId,
+    researchScope: state.researchScope,
+    researchBusySessionIds: state.researchBusySessionIds,
+    researchQueuedMessages: state.researchQueuedMessages,
+    researchPendingAttachmentPaths: state.researchPendingAttachmentPaths,
+    researchStreamStates: state.researchStreamStates,
+    researchSubagentActivity: state.researchSubagentActivity,
+    researchChatActivity: state.researchChatActivity,
+    setResearchScope: state.setResearchScope,
+    requestResearchComposerFocus: state.requestResearchComposerFocus,
+    navigateToGraphTarget: state.navigateToGraphTarget,
+    refreshResearchChats: state.refreshResearchChats,
+    selectResearchChat: state.selectResearchChat,
+    archiveResearchChat: state.archiveResearchChat,
+    updateResearchChatAutoApproval: state.updateResearchChatAutoApproval,
+    sendResearchMessage: state.sendResearchMessage,
+    retryResearchMessage: state.retryResearchMessage,
+    stopResearchMessage: state.stopResearchMessage,
+    forkResearchMessage: state.forkResearchMessage,
+    dequeueResearchMessage: state.dequeueResearchMessage,
+    reorderQueuedResearchMessage: state.reorderQueuedResearchMessage,
+    summarizeResearchChat: state.summarizeResearchChat,
+    applyResearchGraphChangeSet: state.applyResearchGraphChangeSet,
+    respondToSubagentRun: state.respondToSubagentRun,
+    globalSpeechSettings: state.globalSpeechSettings,
+    globalTtsSettings: state.globalTtsSettings,
+    clearResearchDraft: state.clearResearchDraft,
+    appendResearchDraftText: state.appendResearchDraftText
+  })));
   const [attachmentPaths, setAttachmentPaths] = useState<string[]>([]);
-  const [messageImagePreviews, setMessageImagePreviews] = useState<Record<string, string>>({});
   const [showHistory, setShowHistory] = useState(false);
   const [focusHistoryOpen, setFocusHistoryOpen] = useState(() => window.innerWidth > 900);
   const [acceptedByChangeSet, setAcceptedByChangeSet] = useState<Record<string, Set<number>>>({});
   const [pendingChangeSetKeys, setPendingChangeSetKeys] = useState<Set<string>>(() => new Set());
   const [copiedMessageId, setCopiedMessageId] = useState<string | null>(null);
   const [copiedSubagentRunId, setCopiedSubagentRunId] = useState<string | null>(null);
+  const [copiedCommandMessageId, setCopiedCommandMessageId] = useState<string | null>(null);
   const [chatExportStatus, setChatExportStatus] = useState<string | null>(null);
   const [composingNewChat, setComposingNewChat] = useState(false);
   const [historyFilter, setHistoryFilter] = useState<"all" | "scope">("all");
@@ -480,7 +900,9 @@ export function ResearchPanel({
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [rememberMcpByMessage, setRememberMcpByMessage] = useState<Record<string, boolean>>({});
   const [subagentStrategyDrafts, setSubagentStrategyDrafts] = useState<Record<string, string>>({});
+  const [delphiRuntimeTargetSelections, setDelphiRuntimeTargetSelections] = useState<Record<string, Set<string>>>({});
   const [respondingSubagentRunId, setRespondingSubagentRunId] = useState<string | null>(null);
+  const [expandedSubagentSummaryIds, setExpandedSubagentSummaryIds] = useState<Set<string>>(() => new Set());
   const [researchHasNewActivity, setResearchHasNewActivity] = useState(false);
   const [rememberedMcpByChat, setRememberedMcpByChat] = useState<Record<string, Set<string>>>({});
   const [retryingMessageId, setRetryingMessageId] = useState<string | null>(null);
@@ -491,7 +913,6 @@ export function ResearchPanel({
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [recordingSpeech, setRecordingSpeech] = useState(false);
   const [speechBusy, setSpeechBusy] = useState(false);
-  const [speechLevel, setSpeechLevel] = useState(0);
   const [ttsStatus, setTtsStatus] = useState<Awaited<ReturnType<typeof window.archicode.getTtsStatus>> | null>(null);
   const [ttsError, setTtsError] = useState<string | null>(null);
   const [ttsBusyMessageId, setTtsBusyMessageId] = useState<string | null>(null);
@@ -499,7 +920,10 @@ export function ResearchPanel({
   const previousFocusModeRef = useRef(focusMode);
   const [ttsHighlight, setTtsHighlight] = useState<{ messageId: string; text: string } | null>(null);
   const messagesViewportRef = useRef<HTMLDivElement | null>(null);
+  const speechMeterRef = useRef<HTMLDivElement | null>(null);
   const researchScrollFollowRef = useRef(true);
+  const researchManualScrollHoldRef = useRef(false);
+  const researchRevealSubmittedMessageRef = useRef(false);
   const speechStreamRef = useRef<MediaStream | null>(null);
   const speechAudioContextRef = useRef<AudioContext | null>(null);
   const speechSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
@@ -527,7 +951,6 @@ export function ResearchPanel({
   const streamingAutoplayRef = useRef<StreamingTtsState | null>(null);
   const lastStreamingAutoplayObservedKeyRef = useRef<string | null>(null);
   const suppressedStreamingAutoplayRef = useRef<{ messageId: string; sessionId: string } | null>(null);
-
   useEffect(() => {
     if (focusMode && !previousFocusModeRef.current) {
       setShowHistory(false);
@@ -539,9 +962,22 @@ export function ResearchPanel({
   const defaultScope = bundle ? defaultResearchScope(bundle, activeFlowId, activeSubflowId, selectedNodeId) : null;
   const scope = researchScope ?? defaultScope;
   const selected = researchSessions.find((session) => session.id === selectedResearchSessionId) ?? null;
+  const transcriptAnalysis = useMemo(
+    () => selected
+      ? analyzeResearchTranscript(selected)
+      : { lastVisibleMessageIndex: -1, reviewSummaryByChangeSetIndex: new Map<number, ResearchChangeSetReviewSummary>() },
+    [selected]
+  );
   const activeGraphLockRun = bundle?.runs.find(isRunBlockingNewChange) ?? null;
   const researchBusy = selected ? researchBusySessionIds.includes(selected.id) : false;
+  const latestTaskUserMessage = [...(selected?.messages ?? [])].reverse().find((message) => message.role === "user");
+  const parsedResearchTaskStartedAtMs = latestTaskUserMessage ? Date.parse(latestTaskUserMessage.createdAt) : Number.NaN;
+  // The user message is the task boundary. Parent continuations, approvals,
+  // and subagent passes may briefly toggle the renderer's busy flag, but they
+  // must all retain this same cumulative start time.
+  const researchTaskStartedAtMs = Number.isFinite(parsedResearchTaskStartedAtMs) ? parsedResearchTaskStartedAtMs : null;
   const queuedMessages = selected ? researchQueuedMessages[selected.id] ?? [] : [];
+
   const messageAttachmentArtifacts = useMemo(() => {
     if (!bundle || !selected) return [];
     const attachmentIds = new Set(selected.messages.flatMap((message) => message.attachmentIds));
@@ -616,33 +1052,6 @@ export function ResearchPanel({
     setChatModelValue(nextModelId);
   };
 
-  useEffect(() => {
-    const projectRoot = bundle?.project.rootPath;
-    const imageArtifacts = messageAttachmentArtifacts.filter(isImageArtifact);
-    if (!projectRoot || !imageArtifacts.length || !window.archicode?.readArtifactDataUrl) {
-      setMessageImagePreviews({});
-      return;
-    }
-    let cancelled = false;
-    const previewIds = new Set(imageArtifacts.map((artifact) => artifact.id));
-    setMessageImagePreviews((current) => Object.fromEntries(
-      Object.entries(current).filter(([artifactId]) => previewIds.has(artifactId))
-    ));
-    void Promise.all(imageArtifacts.map(async (artifact) => {
-      try {
-        return [artifact.id, await window.archicode.readArtifactDataUrl(projectRoot, artifact.path)] as const;
-      } catch {
-        return [artifact.id, ""] as const;
-      }
-    })).then((entries) => {
-      if (cancelled) return;
-      setMessageImagePreviews(Object.fromEntries(entries.filter(([, dataUrl]) => dataUrl)));
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [bundle?.project.rootPath, messageAttachmentArtifacts]);
-
   const submitResearchChangeSet = (
     messageId: string,
     changeSet: ResearchChangeSetView,
@@ -677,6 +1086,18 @@ export function ResearchPanel({
     }
   }, [selectedSpeechModelId]);
 
+  const setSpeechMeterLevel = useCallback((level: number) => {
+    const meter = speechMeterRef.current;
+    if (!meter) return;
+    const normalized = Math.max(0, Math.min(1, level));
+    meter.style.setProperty("--speech-level", normalized.toFixed(3));
+    meter.style.setProperty("--speech-opacity", (0.22 + normalized * 0.42).toFixed(3));
+    meter.style.setProperty("--speech-scale", (1 + normalized * 0.18).toFixed(3));
+    [0.55, 0.9, 1.15, 0.75, 1].forEach((gain, index) => {
+      meter.style.setProperty(`--speech-bar-${index}`, `${Math.max(4, 4 + normalized * 18 * gain)}px`);
+    });
+  }, []);
+
   const stopSpeechCapture = useCallback(async () => {
     speechProcessorRef.current?.disconnect();
     speechSourceRef.current?.disconnect();
@@ -687,11 +1108,11 @@ export function ResearchPanel({
     speechStreamRef.current = null;
     speechAudioContextRef.current = null;
     setRecordingSpeech(false);
-    setSpeechLevel(0);
+    setSpeechMeterLevel(0);
     if (audioContext && audioContext.state !== "closed") {
       await audioContext.close();
     }
-  }, []);
+  }, [setSpeechMeterLevel]);
 
   const startSpeechRecording = useCallback(async () => {
     if (!speechSettings?.enabled) {
@@ -734,7 +1155,7 @@ export function ResearchPanel({
         speechChunksRef.current.push(new Float32Array(input));
         let sum = 0;
         for (const sample of input) sum += sample * sample;
-        setSpeechLevel(Math.min(1, Math.sqrt(sum / input.length) * 14));
+        setSpeechMeterLevel(Math.sqrt(sum / input.length) * 14);
       };
       source.connect(processor);
       processor.connect(audioContext.destination);
@@ -748,7 +1169,7 @@ export function ResearchPanel({
       await stopSpeechCapture();
       setSpeechError(error instanceof Error ? error.message : "Could not start microphone capture.");
     }
-  }, [missingSpeechModelMessage, refreshSpeechStatus, selectedSpeechModelId, speechSettings?.enabled, speechStatus, stopSpeechCapture]);
+  }, [missingSpeechModelMessage, refreshSpeechStatus, selectedSpeechModelId, setSpeechMeterLevel, speechSettings?.enabled, speechStatus, stopSpeechCapture]);
 
   const stopSpeechRecording = useCallback(async (completion: "review" | "send" = "review") => {
     const chunks = speechChunksRef.current;
@@ -772,6 +1193,8 @@ export function ResearchPanel({
         threads: speechSettings?.threads
       });
       if (completion === "send" && !mcpApprovalPending && result.text.trim()) {
+        const researchDraft = useArchicodeStore.getState().researchDraft;
+        const draft = composerDraftText(researchDraft, bundle);
         const serialized = serializeComposerDraft(
           [...researchDraft, { kind: "text", text: `${draft ? `${draft.trimEnd()}\n\n` : ""}${result.text.trim()}` }],
           bundle
@@ -782,6 +1205,7 @@ export function ResearchPanel({
           const attached = attachmentPaths;
           setAttachmentPaths([]);
           const rememberedMcpServerIds = selected ? [...(rememberedMcpByChat[selected.id] ?? new Set<string>())] : [];
+          researchRevealSubmittedMessageRef.current = !researchBusy;
           await sendResearchMessage(
             serialized.message.trim(),
             attached,
@@ -803,14 +1227,13 @@ export function ResearchPanel({
       speechChunksRef.current = [];
     }
   }, [
-    researchDraft,
-    draft,
     bundle,
     clearResearchDraft,
     appendResearchDraftText,
     attachmentPaths,
     mcpApprovalPending,
     rememberedMcpByChat,
+    researchBusy,
     selected,
     selectedSpeechModelId,
     chatModelRequest,
@@ -1577,7 +2000,7 @@ export function ResearchPanel({
     }
   }, [finalizeTtsSpeechQueue, queueTtsSpeechUnits, writeTtsDebugEvent]);
 
-  const navigateGraphLink = (target: ArchicodeGraphLink) => {
+  const navigateGraphLink = useCallback((target: ArchicodeGraphLink) => {
     if (!bundle) return;
     if (target.kind === "project") return navigateToGraphTarget({ kind: "project" });
     const targetFlow = bundle.flows.find((item) => item.id === target.flowId);
@@ -1593,7 +2016,7 @@ export function ResearchPanel({
     }
     if (!targetFlow.nodes.some((item) => item.id === target.nodeId)) return;
     navigateToGraphTarget(target);
-  };
+  }, [bundle, navigateToGraphTarget]);
 
   useEffect(() => {
     void refreshResearchChats();
@@ -1823,30 +2246,37 @@ export function ResearchPanel({
   const archiveConfirmationSession = archiveConfirmationSessionId
     ? researchSessions.find((session) => session.id === archiveConfirmationSessionId) ?? null
     : null;
-  const messageCount = selected?.messages.length ?? 0;
   const lastResearchMessage = selected?.messages[selected.messages.length - 1];
-  const lastLiveSubagents = lastResearchMessage ? researchSubagentActivity[lastResearchMessage.id] ?? [] : [];
-  const lastParentActivity = lastResearchMessage ? researchChatActivity[lastResearchMessage.id] : undefined;
-  const researchActivityKey = [
-    selected?.id ?? "",
-    lastResearchMessage?.id ?? "",
-    lastResearchMessage?.content.length ?? 0,
-    lastResearchMessage?.mcpToolCalls?.length ?? 0,
-    lastResearchMessage?.subagentRuns?.map((run) => `${run.id}:${run.status}:${run.progress.length}`).join("|") ?? "",
-    lastLiveSubagents.map((run) => `${run.id}:${run.status}:${run.lines.length}`).join("|"),
-    lastParentActivity ? `${lastParentActivity.status}:${lastParentActivity.lines.length}` : "",
-    researchBusy ? "busy" : "idle"
-  ].join(":");
+  // Only real transcript growth should advertise "New activity". Subagent
+  // status, spinner, progress-line, and evidence-gallery mutations happen
+  // inside an existing message card and must not masquerade as a new message.
+  const researchTranscriptActivityKey = selected?.messages
+    .map((message) => `${message.id}:${message.content.length}:${message.error?.length ?? 0}`)
+    .join("|") ?? "";
+  // Approval cards are actionable transcript milestones, even when a
+  // subagent card mutates inside an existing assistant message. They must be
+  // revealed immediately rather than hidden behind the generic More button.
+  const researchApprovalActivityKey = useMemo(() => selected?.messages.flatMap((message, messageIndex) => [
+    message.mcpApprovalRequest ? `mcp:${message.id}` : "",
+    ...(message.subagentRuns ?? [])
+      .filter((run) => run.status === "awaiting-approval")
+      .map((run) => `subagent:${message.id}:${run.id}`),
+    message.changeSet && !message.changeSet.reviewedAt && !transcriptAnalysis.reviewSummaryByChangeSetIndex.has(messageIndex)
+      ? `change-set:${message.id}:${message.changeSet.id}`
+      : ""
+  ]).filter(Boolean).join("|") ?? "", [selected?.messages, transcriptAnalysis]);
 
   const scrollResearchToBottom = useCallback(() => {
     const viewport = messagesViewportRef.current;
     if (!viewport) return;
+    researchManualScrollHoldRef.current = false;
     viewport.scrollTop = viewport.scrollHeight;
     researchScrollFollowRef.current = true;
     setResearchHasNewActivity(false);
   }, []);
 
   useEffect(() => {
+    researchManualScrollHoldRef.current = false;
     researchScrollFollowRef.current = true;
     setResearchHasNewActivity(false);
     requestAnimationFrame(scrollResearchToBottom);
@@ -1855,35 +2285,94 @@ export function ResearchPanel({
   useEffect(() => {
     const viewport = messagesViewportRef.current;
     if (!viewport) return;
+    const holdAutoFollow = () => {
+      researchManualScrollHoldRef.current = true;
+      researchScrollFollowRef.current = false;
+    };
+    const distanceFromBottom = () => viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight;
     const updateFollowState = () => {
-      const nearBottom = viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight <= 72;
-      researchScrollFollowRef.current = nearBottom;
-      if (nearBottom) setResearchHasNewActivity(false);
+      if (distanceFromBottom() <= 8) {
+        researchManualScrollHoldRef.current = false;
+        researchScrollFollowRef.current = true;
+        setResearchHasNewActivity(false);
+      }
+    };
+    const holdAutoFollowOnWheel = (event: WheelEvent) => {
+      // Scrolling upward always pauses follow mode. A downward wheel gesture
+      // only pauses it when the reader is already away from the live bottom.
+      if (event.deltaY < 0 || distanceFromBottom() > 8) holdAutoFollow();
+    };
+    const holdAutoFollowOnKey = (event: KeyboardEvent) => {
+      const upwardKey = event.key === "ArrowUp" || event.key === "PageUp" || event.key === "Home" || (event.key === " " && event.shiftKey);
+      const downwardKey = event.key === "ArrowDown" || event.key === "PageDown" || event.key === "End" || event.key === " ";
+      if (upwardKey || (downwardKey && distanceFromBottom() > 8)) holdAutoFollow();
+    };
+    const scrollRoot = viewport.closest(".ui-scroll-area");
+    const holdAutoFollowOnScrollbar = (event: Event) => {
+      if (event.target instanceof Element && event.target.closest(".ui-scrollbar")) holdAutoFollow();
     };
     updateFollowState();
     viewport.addEventListener("scroll", updateFollowState, { passive: true });
-    return () => viewport.removeEventListener("scroll", updateFollowState);
+    viewport.addEventListener("wheel", holdAutoFollowOnWheel, { passive: true });
+    viewport.addEventListener("touchmove", holdAutoFollow, { passive: true });
+    viewport.addEventListener("keydown", holdAutoFollowOnKey);
+    scrollRoot?.addEventListener("pointerdown", holdAutoFollowOnScrollbar, { passive: true });
+    return () => {
+      viewport.removeEventListener("scroll", updateFollowState);
+      viewport.removeEventListener("wheel", holdAutoFollowOnWheel);
+      viewport.removeEventListener("touchmove", holdAutoFollow);
+      viewport.removeEventListener("keydown", holdAutoFollowOnKey);
+      scrollRoot?.removeEventListener("pointerdown", holdAutoFollowOnScrollbar);
+    };
   }, [selected?.id]);
 
   useEffect(() => {
     if (!selected) return;
     requestAnimationFrame(() => {
-      if (researchScrollFollowRef.current) scrollResearchToBottom();
-      else setResearchHasNewActivity(true);
+      const viewport = messagesViewportRef.current;
+      if (viewport && researchRevealSubmittedMessageRef.current) {
+        // A message the user just submitted is never hidden behind the generic
+        // "More" affordance, even when the transcript was previously scrolled
+        // upward. Consume this override once; subsequent activity respects the
+        // user's manual scroll position again.
+        researchRevealSubmittedMessageRef.current = false;
+        researchManualScrollHoldRef.current = false;
+        researchScrollFollowRef.current = true;
+        viewport.scrollTop = viewport.scrollHeight;
+        setResearchHasNewActivity(false);
+      } else if (viewport && researchScrollFollowRef.current && !researchManualScrollHoldRef.current) {
+        viewport.scrollTop = viewport.scrollHeight;
+        setResearchHasNewActivity(false);
+      } else {
+        const hasUnseenTranscript = Boolean(viewport && viewport.scrollHeight - viewport.scrollTop - viewport.clientHeight > 8);
+        setResearchHasNewActivity(hasUnseenTranscript);
+      }
     });
-  }, [researchActivityKey, scrollResearchToBottom, selected?.id]);
+  }, [researchTranscriptActivityKey, selected?.id]);
+
+  useEffect(() => {
+    if (!researchApprovalActivityKey) return;
+    requestAnimationFrame(scrollResearchToBottom);
+  }, [researchApprovalActivityKey, scrollResearchToBottom]);
 
   const submit = async () => {
     if (mcpApprovalPending) return;
+    const researchDraft = useArchicodeStore.getState().researchDraft;
     if (!composerHasContent(researchDraft)) return;
     const serialized = serializeComposerDraft(researchDraft, bundle);
     const message = serialized.message.trim();
     if (!message && serialized.referencedNodeIds.length === 0) return;
     setComposingNewChat(false);
+    researchManualScrollHoldRef.current = false;
+    researchScrollFollowRef.current = true;
     clearResearchDraft();
     const attached = attachmentPaths;
     setAttachmentPaths([]);
     const rememberedMcpServerIds = selected ? [...(rememberedMcpByChat[selected.id] ?? new Set<string>())] : [];
+    // An in-flight session queues the new message outside the transcript. A
+    // normal send appends an optimistic user message immediately, so mark that
+    // single transcript update for an unconditional reveal before dispatching.
+    researchRevealSubmittedMessageRef.current = !researchBusy;
     // sendResearchMessage queues the message automatically when this session is
     // already streaming, instead of blocking the send; it fires once the
     // in-flight turn completes.
@@ -1927,7 +2416,8 @@ export function ResearchPanel({
   const respondToSubagent = async (
     message: ResearchChatSession["messages"][number],
     run: NonNullable<ResearchChatSession["messages"][number]["subagentRuns"]>[number],
-    decision: "approved" | "rejected"
+    decision: "approved" | "rejected",
+    runtimeTargetProfileIds?: string[]
   ) => {
     if (!selected) return;
     setRespondingSubagentRunId(run.id);
@@ -1937,7 +2427,8 @@ export function ResearchPanel({
         message.id,
         run.id,
         decision,
-        decision === "approved" ? subagentStrategyDrafts[run.id]?.trim() || undefined : undefined
+        decision === "approved" ? subagentStrategyDrafts[run.id]?.trim() || undefined : undefined,
+        decision === "approved" ? runtimeTargetProfileIds : undefined
       );
     } finally {
       setRespondingSubagentRunId((current) => current === run.id ? null : current);
@@ -1985,18 +2476,28 @@ export function ResearchPanel({
     }
   };
 
-  const setTransientExportStatus = (message: string) => {
-    setChatExportStatus(message);
-    window.setTimeout(() => setChatExportStatus((current) => current === message ? null : current), 1800);
+  const copyApprovalCommand = async (messageId: string, command: string) => {
+    try {
+      await writeClipboardText(command);
+      setCopiedCommandMessageId(messageId);
+      window.setTimeout(() => setCopiedCommandMessageId((current) => current === messageId ? null : current), 1400);
+    } catch {
+      setCopiedCommandMessageId(null);
+    }
   };
 
-  const openProjectPathLink = (target: ArchicodeProjectPathLink) => {
+  const setTransientExportStatus = useCallback((message: string) => {
+    setChatExportStatus(message);
+    window.setTimeout(() => setChatExportStatus((current) => current === message ? null : current), 1800);
+  }, []);
+
+  const openProjectPathLink = useCallback((target: ArchicodeProjectPathLink) => {
     if (!rootPath || !window.archicode?.openProjectPath) return;
     void window.archicode.openProjectPath(rootPath, target.relativePath)
       .catch((error: unknown) => {
         setTransientExportStatus(error instanceof Error ? error.message : "Project path could not be opened.");
       });
-  };
+  }, [rootPath, setTransientExportStatus]);
 
   const exportChat = (format: "markdown" | "json") => {
     if (!selected || !bundle) return;
@@ -2044,39 +2545,30 @@ export function ResearchPanel({
       : "Record voice input";
   const speechButtonDisabled = mcpApprovalPending || speechBusy || (!recordingSpeech && speechRuntimeMissing);
   const recordingSendDisabled = speechBusy || mcpApprovalPending;
-  const composerPrimaryDisabled = recordingSpeech
-    ? speechBusy || mcpApprovalPending
-    : speechBusy || mcpApprovalPending || !composerHasContent(researchDraft);
+  const composerPrimaryDisabled = speechBusy || mcpApprovalPending;
   const composerPrimaryLabel = speechBusy ? "Transcribing" : researchBusy ? "Queue" : "Send";
-  const activeSpeechLevel = recordingSpeech ? speechLevel : 0;
-  const speechLevelStyle = {
-    "--speech-level": activeSpeechLevel.toFixed(3),
-    "--speech-opacity": (0.22 + activeSpeechLevel * 0.42).toFixed(3),
-    "--speech-scale": (1 + activeSpeechLevel * 0.18).toFixed(3)
-  } as CSSProperties;
-  const researchContextPlan = bundle ? deriveResearchChatContextPlan(chatProvider
+  const researchContextPlan = useMemo(() => bundle ? deriveResearchChatContextPlan(chatProvider
     ? {
         ...bundle.project.settings,
         providers: bundle.project.settings.providers.map((item) => item.id === chatProvider.id
           ? { ...item, ...(chatModelRequest ? { model: chatModelRequest } : {}), enabled: true }
           : { ...item, enabled: false })
       }
-    : bundle.project.settings) : null;
-  const recentResearchMessages = selected && researchContextPlan
+    : bundle.project.settings) : null, [bundle, chatModelRequest, chatProvider]);
+  const recentResearchMessages = useMemo(() => selected && researchContextPlan
     ? selected.messages.slice(-researchContextPlan.recentMessageLimit)
-    : [];
-  const researchDraftContextText = JSON.stringify({
-    draft,
+    : [], [researchContextPlan, selected]);
+  const researchContextBaseCharacters = useMemo(() => JSON.stringify({
+    draft: "",
     memory: selected?.memory ?? null,
     messages: recentResearchMessages.map((message) => ({
       content: message.content,
       role: message.role
     }))
-  });
+  }).length, [recentResearchMessages, selected?.memory]);
   const researchContextEstimate = researchContextPlan
     ? {
       detail: `Recent messages included before send: ${recentResearchMessages.length} / ${researchContextPlan.recentMessageLimit}.`,
-      estimatedTokens: estimateTextTokens(researchDraftContextText),
       maxTokens: researchContextPlan.modelContextTokens
     }
     : null;
@@ -2271,7 +2763,6 @@ export function ResearchPanel({
               {focusMode ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
             </IconButton>
           ) : null}
-          {panelAction}
         </div>
       </div>
 
@@ -2304,21 +2795,28 @@ export function ResearchPanel({
                   <ResearchScopeIcon scope={scope} />
                 </span>
               </Tooltip>
+              {researchBusy && researchTaskStartedAtMs !== null ? (
+                <ResearchTaskTimer startedAtMs={researchTaskStartedAtMs} />
+              ) : null}
             </div>
           </div>
         ) : null}
         <div className="research-session-controls">
-          {selected ? <ResearchTodoCapsule items={researchTodosForSession(selected)} /> : null}
+          {selected ? <ResearchWorkCapsule session={selected} items={researchTodosForSession(selected)} /> : null}
           {selected && hasResearchMemory(selected.memory) ? <ResearchMemoryPanel session={selected} /> : null}
           {selected && rootPath ? <ProjectMemoryNotesPanel projectRoot={rootPath} refreshKey={selected.updatedAt} /> : null}
           {selected && rootPath ? <ChatArtifactsPanel key={`chat-artifacts-${selected.id}`} projectRoot={rootPath} session={selected} refreshKey={selected.updatedAt} /> : null}
           {researchAutoApproveGraphChanges ? (
-            <Switch
-              checked={researchAutoApproveGraphChanges.enabled}
-              onCheckedChange={setAutoApproveGraphChanges}
-              label="Auto-approve"
-              tooltip="Applies non-destructive graph design changes automatically across all research chats in this project. Deletes and run actions still require review."
-            />
+            <div className="research-auto-approve">
+              <div className="research-auto-approve-fit">
+                <Switch
+                  checked={researchAutoApproveGraphChanges.enabled}
+                  onCheckedChange={setAutoApproveGraphChanges}
+                  label="Auto-approve"
+                  tooltip="Automatically applies non-destructive graph changes and safety-classified medium-risk Chat commands across this project. High-risk actions, project-code edits, deletes, and run actions still require review or their dedicated workflow."
+                />
+              </div>
+            </div>
           ) : null}
         </div>
       </div>
@@ -2352,7 +2850,6 @@ export function ResearchPanel({
                 {selected ? selected.messages.map((message, messageIndex) => {
                   if (isChangeSetReviewMessage(message)) return null;
                   const isStreamingMessage = researchBusy && message.id.startsWith("research-waiting");
-                  const presentationContent = researchMessagePresentationContent(selected, messageIndex, message);
                   const streamKind = researchStreamStates[message.id]?.kind;
                   const isThinkingDraft = isStreamingMessage && streamKind === "thinking";
                   const liveSubagentRuns = researchSubagentActivity[message.id] ?? [];
@@ -2370,7 +2867,9 @@ export function ResearchPanel({
                   const parentActivityLines = liveParentActivity?.lines.length
                     ? liveParentActivity.lines
                     : persistedContinuationLines;
-                  const isLastMessage = !selected.messages.slice(messageIndex + 1).some((laterMessage) => !isChangeSetReviewMessage(laterMessage));
+                  const hasTimelineActivity = hasSubagentCards || parentActivityLines.length > 0;
+                  const isParentActivityRunning = liveParentActivity?.status === "running" || (!liveParentActivity && isStreamingMessage);
+                  const isLastMessage = messageIndex === transcriptAnalysis.lastVisibleMessageIndex;
                   const retryableMessage = canRetryResearchMessage(message) && isLastMessage;
                   const messageImageAttachments = message.attachmentIds
                     .map((attachmentId) => messageAttachmentArtifactsById.get(attachmentId))
@@ -2384,12 +2883,22 @@ export function ResearchPanel({
                         .filter((filePath) => !isImageAttachmentPath(filePath))
                         .map(attachmentFileName);
                   const messageAttachmentCount = message.attachmentIds.length || (researchPendingAttachmentPaths[message.id]?.length ?? 0);
-                  const changeSetResultReport = isStreamingMessage ? null : changeSetResultReportPresentation(presentationContent);
+                  const changeSetResultReport = isStreamingMessage ? null : changeSetResultReportPresentation(message.content);
                   const ruleApproval = message.mcpApprovalRequest?.providerToolName === RESEARCH_RULES_TOOL_NAME
                     ? ruleApprovalPresentation(message.mcpApprovalRequest.argumentsJson ?? "{}")
                     : null;
+                  const commandApproval = message.mcpApprovalRequest
+                    ? commandApprovalPresentation(
+                        message.mcpApprovalRequest.providerToolName,
+                        message.mcpApprovalRequest.toolName,
+                        message.mcpApprovalRequest.argumentsJson ?? "{}"
+                      )
+                    : null;
+                  const visibleToolCalls = [...(message.mcpToolCalls ?? [])]
+                    .filter((call) => !(message.mcpApprovalRequest && call.status === "approval-required"))
+                    .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
                   return (
-                  <div key={message.id} className={`research-message research-message-${message.role}${isThinkingDraft ? " research-message-thinking-draft" : ""}${hasSubagentCards ? " research-message-has-subagents" : ""}`}>
+                  <div key={message.id} className={`research-message research-message-${message.role}${isThinkingDraft ? " research-message-thinking-draft" : ""}${hasSubagentCards ? " research-message-has-subagents" : ""}${hasTimelineActivity ? " research-message-has-activity" : ""}`}>
                     <div className="research-message-head">
                       <div className="research-message-meta">
                         <strong>{message.role === "assistant" ? "AI Assistant" : message.role === "user" ? "You" : "System"}</strong>
@@ -2440,28 +2949,11 @@ export function ResearchPanel({
                         </IconButton>
                       </div>
                     </div>
-                    {messageImageAttachments.length ? (
-                      <div className="research-message-image-grid" aria-label="Image attachments">
-                        {messageImageAttachments.map((artifact) => {
-                          const previewUrl = messageImagePreviews[artifact.id];
-                          if (!previewUrl) return null;
-                          return (
-                            <button
-                              key={artifact.id}
-                              type="button"
-                              className="research-message-image-thumb"
-                              title={artifact.title}
-                              onClick={() => {
-                                if (bundle?.project.rootPath && window.archicode?.openProjectFile) {
-                                  void window.archicode.openProjectFile(bundle.project.rootPath, artifact.path);
-                                }
-                              }}
-                            >
-                              <img src={previewUrl} alt={artifact.title} />
-                            </button>
-                          );
-                        })}
-                      </div>
+                    {messageImageAttachments.length && bundle?.project.rootPath ? (
+                      <ResearchMessageImageAttachments
+                        projectRoot={bundle.project.rootPath}
+                        artifacts={messageImageAttachments}
+                      />
                     ) : null}
                     {messageTextAttachments.length || pendingTextAttachmentNames.length ? (
                       <div className="research-message-file-list" aria-label="Text document attachments">
@@ -2493,59 +2985,77 @@ export function ResearchPanel({
                         ))}
                       </div>
                     ) : null}
-                    {changeSetResultReport ? (
-                      <div className={`research-change-set-result is-${changeSetResultReport.tone}`}>
-                        <div className="research-change-set-result-summary">
-                          <strong>{changeSetResultReport.title}</strong>
-                          <span>{changeSetResultReport.summary}</span>
-                        </div>
-                        <details>
-                          <summary>
-                            <span>Operation details</span>
-                            <small>{changeSetResultReport.operationCount}</small>
-                          </summary>
-                          <div className="research-change-set-result-details">
-                            <ResearchMarkdown
-                              content={changeSetResultReport.details}
-                              onGraphLink={navigateGraphLink}
-                              onProjectPathLink={openProjectPathLink}
+                    {visibleToolCalls.length ? (
+                      <div className="research-tool-traces" aria-label="Agent tool activity in chronological order">
+                        {visibleToolCalls.map((call, callIndex) => {
+                          const copyKey = `${message.id}:tool:${callIndex}`;
+                          return (
+                            <ResearchToolTrace
+                              key={`${call.createdAt}:${call.serverId}:${call.toolName}:${callIndex}`}
+                              call={call}
+                              copyKey={copyKey}
+                              copiedCommandKey={copiedCommandMessageId}
+                              onCopyCommand={(key, commandText) => void copyApprovalCommand(key, commandText)}
                             />
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                    <div className="research-message-content">
+                      {changeSetResultReport ? (
+                        <div className={`research-change-set-result is-${changeSetResultReport.tone}`}>
+                          <div className="research-change-set-result-summary">
+                            <strong>{changeSetResultReport.title}</strong>
+                            <span>{changeSetResultReport.summary}</span>
                           </div>
-                        </details>
-                      </div>
-                    ) : (
-                      <ResearchMarkdown
-                        content={displayResearchContent(presentationContent, isStreamingMessage)}
-                        highlightText={ttsHighlight?.messageId === message.id ? ttsHighlight.text : null}
-                        onGraphLink={navigateGraphLink}
-                        onProjectPathLink={openProjectPathLink}
-                      />
-                    )}
-                    {isStreamingMessage ? (
-                      <span className="research-thinking" aria-label={isThinkingDraft ? "Research is thinking" : "Research is writing"}>
-                        <span />
-                        <span />
-                        <span />
-                      </span>
-                    ) : null}
-                    {message.error ? (
-                      <div className="research-error-actions">
-                        <small className="research-error">{message.error}</small>
-                        {retryableMessage ? (
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant="ghost"
-                            className="research-error-retry"
-                            disabled={researchBusy}
-                            onClick={() => void retryFailedMessage(message.id)}
-                          >
-                            {retryingMessageId === message.id ? <Loader2 size={13} className="is-spinning" /> : <RefreshCw size={13} />}
-                            <span>{retryingMessageId === message.id ? "Retrying" : "Retry"}</span>
-                          </Button>
-                        ) : null}
-                      </div>
-                    ) : null}
+                          <details>
+                            <summary>
+                              <span>Operation details</span>
+                              <small>{changeSetResultReport.operationCount}</small>
+                            </summary>
+                            <div className="research-change-set-result-details">
+                              <ResearchMarkdown
+                                content={changeSetResultReport.details}
+                                onGraphLink={navigateGraphLink}
+                                onProjectPathLink={openProjectPathLink}
+                              />
+                            </div>
+                          </details>
+                        </div>
+                      ) : (
+                        <ResearchMarkdown
+                          content={displayResearchContent(message.content, isStreamingMessage)}
+                          highlightText={ttsHighlight?.messageId === message.id ? ttsHighlight.text : null}
+                          onGraphLink={navigateGraphLink}
+                          onProjectPathLink={openProjectPathLink}
+                        />
+                      )}
+                      {isStreamingMessage ? (
+                        <span className="research-thinking" aria-label={isThinkingDraft ? "Research is thinking" : "Research is writing"}>
+                          <span />
+                          <span />
+                          <span />
+                        </span>
+                      ) : null}
+                      {message.error ? (
+                        <div className="research-error-actions">
+                          <small className="research-error">{message.error}</small>
+                          {retryableMessage ? (
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant="ghost"
+                              className="research-error-retry"
+                              disabled={researchBusy}
+                              onClick={() => void retryFailedMessage(message.id)}
+                            >
+                              {retryingMessageId === message.id ? <Loader2 size={13} className="is-spinning" /> : <RefreshCw size={13} />}
+                              <span>{retryingMessageId === message.id ? "Retrying" : "Retry"}</span>
+                            </Button>
+                          ) : null}
+                        </div>
+                      ) : null}
+                    </div>
                     {message.mcpApprovalRequest ? (
                       <div className={`research-mcp-request${ruleApproval ? " is-rule-change" : ""}`}>
                         <div>
@@ -2567,8 +3077,36 @@ export function ResearchPanel({
                           </div>
                         ) : (
                           <>
+                            {commandApproval ? (
+                              <div className="research-command-approval-proposal">
+                                <div className="research-command-approval-heading">
+                                  <strong>Command to run</strong>
+                                  <Badge
+                                    className="research-command-risk-badge"
+                                    tone={commandApproval.risk === "low" ? "success" : commandApproval.risk === "medium" ? "warning" : "danger"}
+                                  >
+                                    {commandApproval.risk[0].toUpperCase() + commandApproval.risk.slice(1)} risk
+                                  </Badge>
+                                </div>
+                                <div className="research-command-approval-code">
+                                  <IconButton
+                                    className="research-command-copy-button"
+                                    title={copiedCommandMessageId === message.id ? "Copied" : "Copy exact command"}
+                                    aria-label={copiedCommandMessageId === message.id ? "Command copied" : "Copy exact command"}
+                                    onClick={() => void copyApprovalCommand(message.id, commandApproval.command)}
+                                  >
+                                    {copiedCommandMessageId === message.id ? <Check size={12} /> : <Copy size={12} />}
+                                  </IconButton>
+                                  <ResearchMarkdown content={shellCommandMarkdown(commandApproval.command)} />
+                                </div>
+                                <small className="research-command-risk-hint">{commandRiskHint(commandApproval.risk, commandApproval.command)}</small>
+                                <small>Working directory: {commandApproval.cwd}</small>
+                              </div>
+                            ) : null}
                             <p>
-                              The assistant tried to use this Ask-mode MCP tool. Approve or reject this tool use.
+                              {commandApproval
+                                ? "Review this exact command, then approve or reject it."
+                                : "The assistant tried to use this Ask-mode MCP tool. Approve or reject this tool use."}
                             </p>
                             <label className="research-mcp-remember">
                               <input
@@ -2604,7 +3142,8 @@ export function ResearchPanel({
                       </div>
                     ) : null}
                     {(() => {
-                      const persistedRuns = message.subagentRuns ?? [];
+                      const persistedRuns = [...(message.subagentRuns ?? [])]
+                        .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
                       const liveRuns = liveSubagentRuns;
                       const liveById = new Map(liveRuns.map((entry) => [entry.id, entry]));
                       const persistedIds = new Set(persistedRuns.map((entry) => entry.id));
@@ -2624,9 +3163,24 @@ export function ResearchPanel({
                             status: live ? live.status : run.status,
                             proposedResolutionStrategy: run.proposedResolutionStrategy,
                             reviewReason: run.reviewReason,
+                            runtimeTargetSelection: run.runtimeTargetSelection,
+                            selectedRuntimeTargetProfileIds: run.selectedRuntimeTargetProfileIds,
+                            imageInputSupport: run.imageInputSupport,
+                            argumentsJson: run.argumentsJson,
                             resultSummary: run.resultSummary,
                             error: run.error,
-                            progressLines: live?.lines.length ? live.lines : run.progress
+                            failureKind: run.failureKind,
+                            diagnostics: live?.visuallyAnalyzedArtifactIds.length
+                              ? {
+                                  ...run.diagnostics,
+                                  visuallyAnalyzedArtifactIds: Array.from(new Set([
+                                    ...(run.diagnostics?.visuallyAnalyzedArtifactIds ?? []),
+                                    ...live.visuallyAnalyzedArtifactIds
+                                  ]))
+                                }
+                              : run.diagnostics,
+                            progressLines: live?.lines.length ? live.lines : run.progress,
+                            artifacts: live?.artifacts.length ? live.artifacts : (run.artifacts ?? [])
                           };
                         }),
                         // Live-only runs (e.g. graph reconciliation that has not
@@ -2638,9 +3192,18 @@ export function ResearchPanel({
                           status: entry.status,
                           proposedResolutionStrategy: undefined,
                           reviewReason: undefined,
+                          runtimeTargetSelection: undefined,
+                          selectedRuntimeTargetProfileIds: [],
+                          imageInputSupport: undefined,
+                          argumentsJson: "{}",
                           resultSummary: undefined,
                           error: undefined,
-                          progressLines: entry.lines
+                          failureKind: undefined,
+                          diagnostics: entry.visuallyAnalyzedArtifactIds.length
+                            ? { responsePreview: undefined, visuallyAnalyzedArtifactIds: entry.visuallyAnalyzedArtifactIds }
+                            : undefined,
+                          progressLines: entry.lines,
+                          artifacts: entry.artifacts
                         }))
                       ];
                       if (!cards.length) return null;
@@ -2648,30 +3211,77 @@ export function ResearchPanel({
                       <div className="research-subagent-runs">
                         {cards.map((run) => {
                           const isResponding = respondingSubagentRunId === run.id;
+                          let delphiArgs: { objective?: string; mode?: string; observation?: { mode?: string; capture?: string }; target?: { baseUrl?: string; deviceId?: string } } = {};
+                          if (run.kind === "delphi-testing") {
+                            try { delphiArgs = JSON.parse(run.argumentsJson || "{}"); } catch { delphiArgs = {}; }
+                          }
+                          const isDelphiSetup = run.kind === "delphi-testing" && delphiArgs.mode === "setup";
+                          const runtimeTargetOptions = run.runtimeTargetSelection?.options ?? [];
+                          const selectedRuntimeTargets = delphiRuntimeTargetSelections[run.id] ?? new Set(run.selectedRuntimeTargetProfileIds ?? []);
+                          const targetSelectionRequired = runtimeTargetOptions.length > 1;
+                          const targetSelectionValid = !targetSelectionRequired || selectedRuntimeTargets.size >= (run.runtimeTargetSelection?.minSelections ?? 1);
+                          const delphiTargetUrl = delphiArgs.target?.baseUrl;
+                          const runSummary = run.kind === "delphi-testing" ? delphiArgs.objective || run.subtitle : run.subtitle;
+                          const summaryExpanded = expandedSubagentSummaryIds.has(run.id);
+                          const summaryExpandable = runSummary.length > 110 || (run.kind === "delphi-testing" && Boolean(delphiArgs.objective));
                           const successfulBatchCount = successfulSubagentBatchCount(run.kind, run.progressLines);
+                          const correctedLegacyDelphiBlock = run.kind === "delphi-testing" &&
+                            run.status === "failed" &&
+                            /pixel-level visual-quality claim without analyzing/i.test(run.error ?? "") &&
+                            /["']status["']\s*:\s*["']blocked["']/i.test(run.diagnostics?.responsePreview ?? "") &&
+                            /["']verdict["']\s*:\s*["']blocked["']/i.test(run.diagnostics?.responsePreview ?? "");
+                          const timedOut = run.status === "failed" && (
+                            run.failureKind === "timeout" ||
+                            isTimeoutFailureMessage(run.error) ||
+                            isTimeoutFailureMessage(run.resultSummary)
+                          );
+                          // Delphi's terminal `blocked` output means that the audit
+                          // completed with unresolved coverage. Present that as
+                          // Incomplete; reserve Blocked for a parent trajectory that
+                          // cannot continue at all. The persisted value stays
+                          // backward-compatible for older chats.
+                          const displayStatus = timedOut
+                            ? "timed-out"
+                            : run.kind === "delphi-testing" && (correctedLegacyDelphiBlock || run.status === "blocked")
+                              ? "incomplete"
+                              : run.status;
                           const title = run.kind === "merge-resolution"
                             ? "Solomon — Merge Arbiter"
                             : run.kind === "sherlock-research"
                               ? "Sherlock — Research Detective"
+                              : run.kind === "delphi-testing"
+                                ? "Delphi — Test & Runtime Oracle"
                               : run.kind === "test-authoring"
                                 ? "Test Authoring Agent"
                                 : "Picasso — Graph Architect";
-                          const statusLabel = run.status === "awaiting-approval" ? "Awaiting approval"
-                            : run.status === "running" ? "Running"
-                            : run.status === "completed" ? "Completed"
-                            : run.status === "failed" ? "Failed"
+                          const statusLabel = displayStatus === "awaiting-approval" ? "Awaiting approval"
+                            : displayStatus === "running" ? "Running"
+                            : displayStatus === "completed" ? "Completed"
+                            : displayStatus === "incomplete" ? "Incomplete"
+                            : displayStatus === "timed-out" ? "Timed out"
+                            : displayStatus === "blocked" ? "Blocked"
+                            : displayStatus === "failed" ? "Failed"
                             : "Cancelled";
-                          const statusTone = run.status === "completed" ? "success"
-                            : run.status === "failed" ? "danger"
-                            : run.status === "rejected" ? "neutral"
+                          const statusTone = displayStatus === "completed" ? "success"
+                            : displayStatus === "incomplete" ? "warning"
+                            : displayStatus === "timed-out" ? "warning"
+                            : displayStatus === "blocked" ? "warning"
+                            : displayStatus === "failed" ? "danger"
+                            : displayStatus === "rejected" ? "neutral"
                             : "accent";
                           return (
-                            <div key={run.id} className={`research-subagent-run research-subagent-run-${run.status}`}>
+                            <div
+                              key={run.id}
+                              className={`research-subagent-run research-subagent-run-${displayStatus} research-timeline-${displayStatus === "running" || displayStatus === "awaiting-approval" ? "active" : "terminal"}`}
+                            >
                               <div className="research-subagent-run-head">
-                                {run.status === "running" ? <Loader2 size={14} className="is-spinning" />
-                                  : run.status === "completed" ? <CheckCircle2 size={14} />
-                                  : run.status === "failed" ? <AlertCircle size={14} />
-                                : run.status === "rejected" ? <X size={14} />
+                                {displayStatus === "running" ? <Loader2 size={14} className="is-spinning" />
+                                  : displayStatus === "completed" ? <CheckCircle2 size={14} />
+                                  : displayStatus === "incomplete" ? <AlertTriangle size={14} />
+                                  : displayStatus === "timed-out" ? <Clock3 size={14} />
+                                  : displayStatus === "blocked" ? <AlertTriangle size={14} />
+                                  : displayStatus === "failed" ? <AlertCircle size={14} />
+                                : displayStatus === "rejected" ? <X size={14} />
                                   : <ShieldCheck size={14} />}
                                 <strong>{title}</strong>
                                 {successfulBatchCount ? (
@@ -2685,7 +3295,36 @@ export function ResearchPanel({
                                 ) : null}
                                 <Badge tone={statusTone}>{statusLabel}</Badge>
                               </div>
-                              <small>{run.subtitle}</small>
+                              <div className={`research-subagent-summary${summaryExpanded ? " is-expanded" : ""}`}>
+                                <small>{runSummary}</small>
+                                {summaryExpandable ? (
+                                  <button
+                                    type="button"
+                                    aria-expanded={summaryExpanded}
+                                    onClick={() => setExpandedSubagentSummaryIds((current) => {
+                                      const next = new Set(current);
+                                      if (next.has(run.id)) next.delete(run.id);
+                                      else next.add(run.id);
+                                      return next;
+                                    })}
+                                  >
+                                    {summaryExpanded ? "Show less" : "Show more"}
+                                  </button>
+                                ) : null}
+                              </div>
+                              {run.kind === "delphi-testing" ? (
+                                <div className="research-delphi-observation-status">
+                                  <Eye size={13} />
+                                  <span>{delphiArgs.observation?.mode === "headless" ? "Headless audit" : "Visible observation"}</span>
+                                  {delphiArgs.target?.deviceId ? <small>Target {delphiArgs.target.deviceId}</small> : null}
+                                  {delphiTargetUrl ? (
+                                    <Button type="button" size="sm" onClick={() => void window.archicode?.openExternalUrl(delphiTargetUrl)}>
+                                      <ExternalLink size={13} />
+                                      <span>Open target</span>
+                                    </Button>
+                                  ) : null}
+                                </div>
+                              ) : null}
                               {run.status === "awaiting-approval" ? (
                                 <div className="research-subagent-approval">
                                   {run.kind === "merge-resolution" ? (
@@ -2700,24 +3339,48 @@ export function ResearchPanel({
                                       />
                                     </label>
                                   ) : (
-                                    <div className="research-subagent-reason">
-                                      <span>Why reconcile?</span>
-                                      <p>{run.reviewReason ?? "ArchiCode detected possible graph drift after the merge."}</p>
-                                    </div>
+                                    <>
+                                      <div className="research-subagent-reason">
+                                        <span>{isDelphiSetup ? "What will be installed?" : run.kind === "delphi-testing" ? "What will Delphi do?" : "Why reconcile?"}</span>
+                                        <p>{run.reviewReason ?? (run.kind === "delphi-testing" ? "Delphi will inspect and run the approved finite project checks." : "ArchiCode detected possible graph drift after the merge.")}</p>
+                                      </div>
+                                      {targetSelectionRequired ? (
+                                        <fieldset className="research-delphi-target-picker">
+                                          <legend>Choose every target Delphi should run and test</legend>
+                                          {runtimeTargetOptions.map((option) => (
+                                            <label key={option.profileId}>
+                                              <input
+                                                type="checkbox"
+                                                checked={selectedRuntimeTargets.has(option.profileId)}
+                                                disabled={researchBusy}
+                                                onChange={() => setDelphiRuntimeTargetSelections((current) => {
+                                                  const nextSelection = new Set(current[run.id] ?? []);
+                                                  if (nextSelection.has(option.profileId)) nextSelection.delete(option.profileId);
+                                                  else nextSelection.add(option.profileId);
+                                                  return { ...current, [run.id]: nextSelection };
+                                                })}
+                                              />
+                                              <span>{option.label}<small>{option.kind}</small></span>
+                                            </label>
+                                          ))}
+                                          <small>Select one target or combine several, such as a backend and frontend in a monorepo.</small>
+                                        </fieldset>
+                                      ) : null}
+                                    </>
                                   )}
                                   <div className="research-subagent-approval-actions">
                                     <Button
                                       type="button"
                                       size="sm"
                                       variant="primary"
-                                      disabled={researchBusy}
+                                      disabled={researchBusy || !targetSelectionValid}
                                       onClick={() => {
                                         const run0 = message.subagentRuns.find((entry) => entry.id === run.id);
-                                        if (run0) void respondToSubagent(message, run0, "approved");
+                                        if (run0) void respondToSubagent(message, run0, "approved", targetSelectionRequired ? [...selectedRuntimeTargets] : undefined);
                                       }}
                                     >
                                       {isResponding ? <Loader2 size={15} className="is-spinning" /> : <Check size={15} />}
-                                      <span>{run.kind === "merge-resolution" ? "Approve" : "Run"}</span>
+                                      <span>{run.kind === "merge-resolution" ? "Approve" : isDelphiSetup ? "Install" : "Run"}</span>
                                     </Button>
                                     <Button
                                       type="button"
@@ -2747,8 +3410,17 @@ export function ResearchPanel({
                                   </div>
                                 </div>
                               ) : null}
-                              {(run.status === "completed" || run.status === "failed") ? (
-                                <small className="research-subagent-result">{run.status === "failed" ? run.error : run.resultSummary}</small>
+                              {run.kind === "delphi-testing" && bundle?.project.rootPath ? (
+                                <DelphiObservationGallery
+                                  projectRoot={bundle.project.rootPath}
+                                  artifacts={run.artifacts}
+                                  modelInspectedArtifactIds={run.diagnostics?.visuallyAnalyzedArtifactIds ?? []}
+                                  imageInputSupport={run.imageInputSupport}
+                                  runStatus={displayStatus}
+                                />
+                              ) : null}
+                              {(displayStatus === "completed" || displayStatus === "incomplete" || displayStatus === "blocked" || displayStatus === "timed-out" || displayStatus === "failed") ? (
+                                <small className="research-subagent-result">{displayStatus === "failed" || displayStatus === "timed-out" ? run.error ?? run.resultSummary : run.resultSummary}</small>
                               ) : null}
                             </div>
                           );
@@ -2760,11 +3432,11 @@ export function ResearchPanel({
                       <div className={`research-parent-activity research-parent-activity-${liveParentActivity?.status ?? (isStreamingMessage ? "running" : "completed")}`}>
                         <div className="research-parent-activity-head">
                           {liveParentActivity?.status === "failed" ? <AlertCircle size={14} />
-                            : isStreamingMessage && liveParentActivity?.status !== "completed" ? <Loader2 size={14} className="is-spinning" />
+                            : isParentActivityRunning ? <Loader2 size={14} className="is-spinning" />
                             : <CheckCircle2 size={14} />}
                           <strong>Archi — Parent investigation</strong>
-                          <Badge tone={liveParentActivity?.status === "failed" ? "danger" : isStreamingMessage && liveParentActivity?.status !== "completed" ? "accent" : "success"}>
-                            {liveParentActivity?.status === "failed" ? "Blocked" : isStreamingMessage && liveParentActivity?.status !== "completed" ? "Working" : "Complete"}
+                          <Badge tone={liveParentActivity?.status === "failed" ? "danger" : isParentActivityRunning ? "accent" : "success"}>
+                            {liveParentActivity?.status === "failed" ? "Blocked" : isParentActivityRunning ? "Working" : "Complete"}
                           </Badge>
                         </div>
                         <div className="research-parent-activity-lines">
@@ -2778,9 +3450,9 @@ export function ResearchPanel({
                       const queueSubmission = changeSetCategory === "queue";
                       const reviewKey = changeSetReviewKey(selected.id, message.id, changeSet.id);
                       const reviewPending = pendingChangeSetKeys.has(reviewKey);
-                      const reviewSummary = reviewSummaryAfterChangeSet(selected, messageIndex);
+                      const reviewSummary = transcriptAnalysis.reviewSummaryByChangeSetIndex.get(messageIndex) ?? null;
                       const reviewPresentation = reviewStatusPresentation(reviewSummary, changeSetCategory);
-                      const reviewed = Boolean(changeSet.reviewedAt) || Boolean(reviewSummary) || hasLegacyReviewAfterChangeSet(selected, messageIndex);
+                      const reviewed = Boolean(changeSet.reviewedAt) || Boolean(reviewSummary);
                       const canRetryFailedReview = Boolean(reviewSummary && reviewSummary.applied === 0 && reviewSummary.rejected === 0 && reviewSummary.failed === changeSet.operations.length);
                       const waitingForRun = Boolean(activeGraphLockRun && (!reviewed || canRetryFailedReview));
                       const primaryActionLabel = waitingForRun
@@ -2905,7 +3577,7 @@ export function ResearchPanel({
               onClick={scrollResearchToBottom}
             >
               <ChevronDown size={14} />
-              <span>New activity</span>
+              <span>More</span>
             </Button>
           ) : null}
           {selected && queuedMessages.length ? (
@@ -2940,7 +3612,7 @@ export function ResearchPanel({
               ))}
             </div>
           ) : null}
-          <div className="research-composer">
+          <div ref={speechMeterRef} className="research-composer">
             <ChatComposer
               placeholder={mcpApprovalPending ? "Approve or reject first" : "Ask anything"}
               disabled={mcpApprovalPending}
@@ -2969,26 +3641,18 @@ export function ResearchPanel({
                     variant="success"
                     className="research-recording-send"
                     disabled={recordingSendDisabled}
-                    style={speechLevelStyle}
                     onClick={() => void stopSpeechRecording("send")}
                   >
                     <Play size={15} />
                     <span>Send</span>
                   </Button>
                 ) : (
-                  <Button
-                    type="button"
-                    variant="primary"
+                  <ResearchSubmitButton
                     disabled={composerPrimaryDisabled}
-                    onClick={() => void submit()}
-                  >
-                    {speechBusy ? (
-                      <Loader2 className="is-spinning" size={15} />
-                    ) : (
-                      <Send size={15} />
-                    )}
-                    <span>{composerPrimaryLabel}</span>
-                  </Button>
+                    label={composerPrimaryLabel}
+                    pending={speechBusy}
+                    onSubmit={() => void submit()}
+                  />
                 )}
                 {recordingSpeech ? (
                   <Button
@@ -2998,7 +3662,6 @@ export function ResearchPanel({
                     aria-label="Done"
                     title="Done"
                     disabled={composerPrimaryDisabled}
-                    style={speechLevelStyle}
                     onClick={() => void runSpeechAction()}
                   >
                     <Square size={15} />
@@ -3009,7 +3672,6 @@ export function ResearchPanel({
                     className="research-speech-button"
                     aria-pressed={false}
                     disabled={speechButtonDisabled}
-                    style={speechLevelStyle}
                     onClick={() => void runSpeechAction()}
                   >
                     {speechBusy ? <Loader2 className="is-spinning" size={15} /> : <Mic size={15} />}
@@ -3050,10 +3712,10 @@ export function ResearchPanel({
                   </IconButton>
                 ) : null}
                 {researchContextEstimate ? (
-                  <ContextSizeIndicator
-                    active={researchBusy}
+                  <ResearchDraftContextIndicator
+                    bundle={bundle}
+                    baseContextCharacters={researchContextBaseCharacters}
                     detail={researchContextEstimate.detail}
-                    estimatedTokens={researchContextEstimate.estimatedTokens}
                     label="Recent messages"
                     maxTokens={researchContextEstimate.maxTokens}
                     cost={researchSessionCost}
@@ -3102,12 +3764,11 @@ export function ResearchPanel({
               <small
                 className={speechError ? "research-speech-status has-error" : "research-speech-status"}
                 aria-live="polite"
-                style={speechLevelStyle}
               >
                 {recordingSpeech && !speechError ? (
                   <span className="research-speech-meter" aria-hidden="true">
-                    {[0.55, 0.9, 1.15, 0.75, 1].map((gain, index) => (
-                      <span key={index} style={{ height: `${Math.max(4, 4 + speechLevel * 18 * gain)}px` }} />
+                    {[0, 1, 2, 3, 4].map((index) => (
+                      <span key={index} />
                     ))}
                   </span>
                 ) : null}
@@ -3156,4 +3817,4 @@ export function ResearchPanel({
       </DialogRoot>
     </aside>
   );
-}
+});

@@ -8,7 +8,9 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { defaultPhaseModelPolicies, researchGraphOperationKinds, type LlmPhase, type LlmUsage, type McpServer, type ModelCapabilityProfile, type PhaseModelPolicy, type ProjectSettings, type ResearchChatMessage } from "../shared/schema";
 import { estimateTextTokens } from "../shared/contextBudget";
-import { computeUsageCostDetails } from "../shared/llmPricing";
+import { gaiaAgent, pandoraAgent } from "../shared/agentIdentities";
+import { computeUsageCostDetails, mergeReasoningReplayStates } from "../shared/llmPricing";
+export { createConsecutiveToolCallLoopDetector } from "./agentRuntime";
 import { heuristicImageInputSupportStatus, providerModelOutputTokenLimit, providerSupportsImageInput } from "../shared/providerCapabilities";
 import type { GlobalResearchVerbosity } from "../shared/researchPersonality";
 import { extractTextDocument } from "./documentText";
@@ -49,6 +51,7 @@ export type RawLlmUsage = {
   thinkingTokens?: number;
   cacheReadTokens?: number;
   cacheCreationTokens?: number;
+  reasoningReplayState?: "received" | "absent";
 };
 
 // Accumulates raw usage across a call's tool-loop iterations / thinking retries
@@ -62,6 +65,7 @@ export function createUsageAccumulator(): {
   let thinkingTokens = 0;
   let cacheReadTokens = 0;
   let cacheCreationTokens = 0;
+  const reasoningReplayStates: Array<RawLlmUsage["reasoningReplayState"]> = [];
   let calls = 0;
   return {
     add(raw) {
@@ -70,6 +74,7 @@ export function createUsageAccumulator(): {
       thinkingTokens += raw.thinkingTokens ?? 0;
       cacheReadTokens += raw.cacheReadTokens ?? 0;
       cacheCreationTokens += raw.cacheCreationTokens ?? 0;
+      reasoningReplayStates.push(raw.reasoningReplayState);
       calls += 1;
     },
     finalize(provider, modelId) {
@@ -81,6 +86,7 @@ export function createUsageAccumulator(): {
         thinkingTokens: thinkingTokens || undefined,
         cacheReadTokens: cacheReadTokens || undefined,
         cacheCreationTokens: cacheCreationTokens || undefined,
+        reasoningReplayState: mergeReasoningReplayStates(reasoningReplayStates),
         calls: Math.max(1, calls)
       };
       const cost = computeUsageCostDetails(usage, provider);
@@ -181,54 +187,6 @@ export type ProviderTextAttachment = {
 
 export type ProviderTokenKind = "answer" | "thinking";
 
-function canonicalToolArgumentValue(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(canonicalToolArgumentValue);
-  if (!value || typeof value !== "object") return value;
-  return Object.fromEntries(
-    Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, entry]) => [key, canonicalToolArgumentValue(entry)])
-  );
-}
-
-function canonicalToolArguments(argumentsJson: string): string {
-  try {
-    return JSON.stringify(canonicalToolArgumentValue(JSON.parse(argumentsJson || "{}")));
-  } catch {
-    return argumentsJson.trim();
-  }
-}
-
-/**
- * Guards provider tool loops against a model repeating the exact same call.
- * `record` returns a warning string on the second-to-last allowed repeat —
- * callers append it to that call's tool result so the model gets one explicit
- * chance to change course — and throws when the limit is reached.
- */
-export function createConsecutiveToolCallLoopDetector(maxConsecutiveIdenticalCalls = 3): {
-  record: (providerToolName: string, argumentsJson: string) => string | undefined;
-} {
-  let previousSignature: string | undefined;
-  let consecutiveCount = 0;
-  return {
-    record(providerToolName, argumentsJson) {
-      const signature = `${providerToolName}\n${canonicalToolArguments(argumentsJson)}`;
-      if (signature === previousSignature) consecutiveCount += 1;
-      else {
-        previousSignature = signature;
-        consecutiveCount = 1;
-      }
-      if (consecutiveCount >= maxConsecutiveIdenticalCalls) {
-        throw new Error(`Consecutive identical tool-call loop detected for ${providerToolName}; stopped on attempt ${consecutiveCount}.`);
-      }
-      if (consecutiveCount === maxConsecutiveIdenticalCalls - 1) {
-        return `ArchiCode loop guard: this ${providerToolName} call is identical to your previous one, which already executed — repeating it changes nothing. One more identical call aborts the run. Change the arguments or content, try a different approach, or state what is blocking you.`;
-      }
-      return undefined;
-    }
-  };
-}
-
 export type ResearchProviderOptions = {
   projectRoot?: string;
   webSearchEnabled?: boolean;
@@ -258,6 +216,8 @@ export type ResearchProviderOptions = {
   graphReconciliationSubagentEnabled?: boolean;
   /** Whether spawn_sherlock is in the advertised tool list for this turn. */
   sherlockResearchSubagentEnabled?: boolean;
+  /** Whether spawn_delphi is in the advertised tool list for this turn. */
+  delphiTestingSubagentEnabled?: boolean;
   messages: ResearchChatMessage[];
   researchMessageLimit?: number;
   researchHistoryTokenBudget?: number;
@@ -270,6 +230,13 @@ export type ResearchProviderOptions = {
   mcpTools?: ProviderMcpTool[];
   mcpServers?: McpServer[];
   callMcpTool?: (input: { providerToolName: string; argumentsJson: string }) => Promise<string>;
+  /**
+   * Optional caller-owned final-answer contract. A returned error is appended
+   * to the same provider transcript so the agent can repair its own trajectory.
+   */
+  validateFinalAnswer?: (text: string) => string | undefined | Promise<string | undefined>;
+  /** Reports a shared-runtime retry of the current provider turn after a transport-only failure. */
+  onTransientRetry?: (error: unknown) => void;
   /**
    * "Sink" tools (e.g. propose_graph_change_set / update_memory) whose only job
    * is to hand structured output back to the caller. When a model turn calls
@@ -422,11 +389,8 @@ export async function callResearchProvider(provider: Provider, userMessage: stri
 }
 
 const researchDurableMemoryPolicy = [
-  "MEMORY OWNERSHIP:",
-  "You decide semantically what is worth remembering. Every non-empty turn must end with exactly one explicit memory decision: call archicode_update_memory when durable state was created or materially changed, otherwise call archicode_leave_memory_unchanged with a short semantic reason.",
-  "A memory update is required when the user assigns or changes a task, goal, requirement, constraint, preference, or desired outcome; asks about a key project, product, design, graph, implementation, or operational matter whose context will matter later; establishes a decision, approval, rejection, or direction; receives a durable result, fact, finding, failure, or evidence from a tool, run, attachment, or subagent; leaves work pending, blocked, awaiting confirmation, awaiting user input, or genuinely unclear; or when the cumulative summary has become materially stale and should be refreshed.",
-  "For a pending graph scope, remember the concrete proposed scope and that confirmation or a review card is still pending. When that state changes, update it rather than leaving stale memory.",
-  "Do not defer the memory decision to a later turn and never omit both tools. Use leave_memory_unchanged only when the turn truly adds no durable state, such as small talk, a transient acknowledgement with no state change, or a purely ephemeral explanation. Never use keyword matching; judge the meaning of the complete turn."
+  "HOST-OWNED CONTINUITY:",
+  "ArchiCode folds conversation summary, approvals, tool results, subagent outcomes, and goal progress from persisted host events. Do not call tools merely to update memory or goal state, do not narrate bookkeeping, and do not delay the user's answer for a memory decision."
 ].join("\n");
 
 const researchGraphDelegationPolicy = [
@@ -449,11 +413,14 @@ const researchToolDeliveryDirective = [
 ].join("\n");
 
 function researchSubagentDirective(options: ResearchProviderOptions): string {
-  if (!options.mergeResolutionSubagentEnabled && !options.graphReconciliationSubagentEnabled && !options.sherlockResearchSubagentEnabled) return "";
+  if (!options.mergeResolutionSubagentEnabled && !options.graphReconciliationSubagentEnabled && !options.sherlockResearchSubagentEnabled && !options.delphiTestingSubagentEnabled) return "";
   const reconciliationEnabled = Boolean(options.graphReconciliationSubagentEnabled);
   return [
     options.sherlockResearchSubagentEnabled
-      ? "Use spawn_sherlock for substantial codebase, online, or topic investigation that would otherwise fill this chat's context with a long research trail. Give Sherlock a bounded objective and use its compact evidence dossier; Sherlock is read-only and runs immediately. When Sherlock returns a valid evidence dossier, synthesize it and perform only targeted verification needed to answer—do not repeat the entire investigation. If Sherlock fails or reports an evidence blocker, say that you are taking over before using the parent tools for a fallback investigation."
+      ? "Use spawn_sherlock for substantial codebase, online, or topic investigation that would otherwise fill this chat's context with a long research trail. A codebase security review or audit is substantial research and belongs to Sherlock unless the user explicitly asks Archi to perform it directly. Give Sherlock a bounded objective and the correct research mode, then use its compact evidence dossier; Sherlock is read-only and runs immediately. When Sherlock returns a valid evidence dossier, synthesize it and perform only targeted verification needed to answer—do not repeat the entire investigation. If Sherlock fails or reports a genuine evidence blocker, say that you are taking over before using the parent tools for a fallback investigation."
+      : "",
+    options.delphiTestingSubagentEnabled
+      ? "Use spawn_delphi when the user asks Archi to run, retest, visually audit, or runtime-audit a project. Give Delphi the goal, relevant scope, platforms, acceptance criteria, and target context; do not prescribe its command sequence or tool order. Read the host-provided DELPHI MODEL PREFLIGHT before promising visual inspection. Preserve any page, route, screen, or flow the user named. Default to visible observation so the user can watch supported targets. Set target.launch to if-needed when Delphi should start an existing Run App profile; the approval card grants a bounded verification/runtime capability and lists target lifecycle. Delphi chooses purposeful evidence within ceilings. Missing supported adapters are offered for approval in ArchiCode's isolated managed cache and the same audit resumes. Do not claim tests ran until Delphi returns. Project dependency installation and source edits are never implicit."
       : "",
     reconciliationEnabled
       ? `${researchGraphDelegationPolicy}\nFor read-only substantial graph analysis with no edits requested, call Picasso with mode assess; no graph-edit confirmation is needed and no change set is expected. For graph edits, preserve the graph-edit confirmation gate: first inspect enough to describe the concrete, coherent scope, then end the visible response with a direct question asking whether the user wants that exact scope prepared as a review card. A request to propose a concrete graph update is still a graph-edit scope-confirmation request, not open-ended brainstorming. Do not finish that turn by merely promising future inspection: perform the needed inspection with tools during the same turn, then present the scope and ask the direct confirmation question. Do not invoke Picasso or produce a graph change set before that confirmation. After the user confirms, invoke spawn_picasso in that next turn and let its graphChangeSet become the normal review card without asking again. Picasso's graph changes are proposal-only and are not applied automatically. An explicit request to use Picasso does not itself replace confirmation of a previously described concrete edit scope. If Sherlock already investigated the topic, pass only its compact evidence summary to Picasso.`
@@ -475,6 +442,16 @@ function researchSubagentDirective(options: ResearchProviderOptions): string {
       : "",
     "Either subagent's result may include an \"unresolvedClarifications\" field: the subagent had an ambiguous decision to make, could not ask you live, and proceeded on its own best judgment. Always surface any unresolvedClarifications to the user verbatim, explain what assumption was made, and invite them to re-run with more guidance (e.g. a resolutionStrategy) if the assumption looks wrong."
   ].filter(Boolean).join("\n");
+}
+
+export function isExplicitDelphiAuditRequest(userMessage: string): boolean {
+  const text = userMessage.toLowerCase().replace(/\s+/g, " ").trim();
+  if (!text) return false;
+  const executionThenVerification = /\b(?:run|execute|launch|start|open)\b.{0,80}\b(?:test|tests|testing|retest|audit|verify|check)\b/.test(text);
+  const verificationThenExecution = /\b(?:test|tests|testing|retest|audit|verify|check)\b.{0,80}\b(?:run|execute|launch|start|open)\b/.test(text);
+  const directTargetAudit = /\b(?:test|retest|audit)\b.{0,50}\b(?:project|codebase|website|site|app|application|runtime|browser|emulator|simulator|device|build)\b/.test(text);
+  const qualifiedAudit = /\b(?:visual|browser|runtime|emulator|simulator|mobile|device)\s+(?:test|testing|audit|check)\b/.test(text);
+  return executionThenVerification || verificationThenExecution || directTargetAudit || qualifiedAudit;
 }
 
 export function researchResponseStyleDirective(verbosity: GlobalResearchVerbosity = "default"): string {
@@ -728,7 +705,7 @@ export const orchestratorSystemPrompt = [
   "Treat the current graph, flows, nodes, edges, notes, tags, logs, artifacts, diff deltas, run history, data fields, acceptance criteria, and approvals as the evolving project source of truth.",
   "Treat node.implementationScope separately as deterministic, best-effort code-navigation hints. own/share/cover claims may be incomplete, inaccurate, or stale; use checkedAt to judge when they were last evaluated, use them to orient inspection, verify them against current files, and never treat them as permissions, hard edit boundaries, or replacements for node intent and acceptance criteria. Missing hints mean unknown.",
   "Evidence order for code mapping: current inspected source is authoritative; node.implementationScope is stronger structural orientation than semanticRetrieval; semantic matches are secondary discovery candidates only. Use semantic matches to broaden inspection, never as proof of implementation, dependency, ownership, edit scope, or graph truth.",
-  "AI Implement can be used at project inception to create the first runnable scaffold and throughout the lifecycle to update an existing codebase; code you create or edit must match the latest graph/node state.",
+  `${gaiaAgent.title} powers AI Implement at project inception to create the first runnable scaffold and throughout the lifecycle to update an existing codebase; code she creates or edits must match the latest graph/node state.`,
   "First inspect the selected node or full diagram state, including stages, flags, diffs, notes, artifacts, edges, and approvals.",
   "Respect projectConventions from the context, including .gitignore, agent instruction files such as AGENTS.md/CLAUDE.md/GEMINI.md, README, package scripts, and missing recommended convention files.",
   "Before proceeding, check for ambiguity in target user/job, product identity/content source, core workflows/pages/data, stack/runtime/integration constraints, acceptance criteria/testing, and visual/brand constraints.",
@@ -959,6 +936,7 @@ export function phaseHandoffInstructions(phase: LlmPhase, structuredSourceHandof
   if (phase === "coding") {
     if (structuredSourceHandoff) {
       return [
+        `You are ${gaiaAgent.title}, ArchiCode's implementation agent. Own the requested source work through a valid handoff without changing your role or identity.`,
         "Submit source changes with the available ArchiCode source handoff tools instead of returning an archicodePatch JSON block.",
         "Call archicode_submit_source_file once per file. You may issue many independent file calls in the same response, so a normal successful batch still takes one provider turn.",
         "End that same response with exactly one archicode_finish_source_batch call. If a file receipt reports a parse or validation error, resend only that file and finish the batch again; previously accepted files remain staged.",
@@ -968,11 +946,12 @@ export function phaseHandoffInstructions(phase: LlmPhase, structuredSourceHandof
         "Do not place multiple files inside one JSON string and do not return source-file prose in place of tool calls. ArchiCode validates the staged batch, applies it atomically, and then verifies it."
       ].join(" ");
     }
-    return `Return an archicodePatch JSON object using the coding handoff schema. ArchiCode will validate, apply safe source-file proposals, and review unsafe changes. ${codingSourceHandoffInstructions} ${sourceProposalBatchingInstructions}`;
+    return `You are ${gaiaAgent.title}, ArchiCode's implementation agent. Return an archicodePatch JSON object using the coding handoff schema. ArchiCode will validate, apply safe source-file proposals, and review unsafe changes. ${codingSourceHandoffInstructions} ${sourceProposalBatchingInstructions}`;
   }
   if (phase === "debugging") {
     if (structuredSourceHandoff) {
       return [
+        `You are ${pandoraAgent.title}, ArchiCode's debugging agent. Own the incident investigation and focused repair through a valid handoff.`,
         "Submit the smallest source repair with the available ArchiCode source handoff tools instead of returning an archicodePatch JSON block.",
         "Call archicode_submit_source_file once per changed file; multiple independent file calls may be issued in the same response.",
         "End the same response with archicode_finish_source_batch. Resend only a file whose receipt reports an error.",
@@ -980,10 +959,10 @@ export function phaseHandoffInstructions(phase: LlmPhase, structuredSourceHandof
         "Use implementationStatus complete after the final repair file. ArchiCode applies and verifies it; use continue only when another concrete source-file slice remains."
       ].join(" ");
     }
-    return `Debug the failed run from logs and diffs. Return an archicodePatch JSON object using the coding handoff schema with the smallest repair source-file proposals, or fail with a clear run-level reason. ${codingSourceHandoffInstructions} ${sourceProposalBatchingInstructions}`;
+    return `You are ${pandoraAgent.title}, ArchiCode's debugging agent. Debug the failed run from logs and diffs. Return an archicodePatch JSON object using the coding handoff schema with the smallest repair source-file proposals, or fail with a clear run-level reason. ${codingSourceHandoffInstructions} ${sourceProposalBatchingInstructions}`;
   }
   if (phase === "planning") {
-    return `This is a non-mutating planning phase before coding. ${planningQuestionGateInstructions} ${planningPatchJsonContract}`;
+    return `You are ${gaiaAgent.title}, ArchiCode's implementation agent. This is your non-mutating planning phase before coding. ${planningQuestionGateInstructions} ${planningPatchJsonContract}`;
   }
   return "This is a non-mutating phase unless you return reviewed archicodePatch operations.";
 }
@@ -1004,7 +983,8 @@ export type LocalResearchToolCall = {
 
 type LocalResearchContinuationMessage =
   | { role: "assistant"; answer?: string; toolCalls: LocalResearchToolCall[] }
-  | { role: "tool"; toolCallId: string; providerToolName: string; result: string };
+  | { role: "tool"; toolCallId: string; providerToolName: string; result: string }
+  | { role: "feedback"; content: string };
 
 type LocalResearchTurn = {
   answer?: string;
@@ -1104,8 +1084,24 @@ export function extractLocalResearchTurn(output: string): LocalResearchTurn | nu
   return null;
 }
 
+/**
+ * Local CLI transports use a JSON envelope in place of native tool calls.
+ * If a model starts emitting that private envelope but produces malformed
+ * JSON, it is not a user-facing answer: return a contract correction to the
+ * same trajectory instead of letting the transport syntax leak into chat.
+ */
+export function localResearchTurnValidationFeedback(output: string): string | undefined {
+  if (!/"archicodeResearchTurn"\s*:/.test(output)) return undefined;
+  if (extractLocalResearchTurn(output)) return undefined;
+  return [
+    "Your response appears to be an internal archicodeResearchTurn tool envelope, but ArchiCode could not parse it as a valid tool turn.",
+    "Do not show the internal envelope to the user. If tools are still needed, return one syntactically valid JSON object with archicodeResearchTurn.toolCalls and complete quoted arguments. Otherwise return only the normal user-facing answer in prose."
+  ].join("\n\n");
+}
+
 export function localResearchToolLoopInstructions(options: ResearchProviderOptions): string {
   if (!options.mcpTools?.length) return "";
+  const isolatedSubagent = Boolean(options.systemInstructionsOverride?.trim());
   const toolLines = options.mcpTools.map((tool) =>
     `- ${tool.providerToolName}: ${tool.description || `${tool.serverLabel}: ${tool.toolName}`}`
   );
@@ -1114,10 +1110,16 @@ export function localResearchToolLoopInstructions(options: ResearchProviderOptio
     "Native tool calling is not available in this local provider transport, so use the JSON tool-turn contract below instead of pretending tools are unavailable.",
     "When you need tools, return exactly one machine-readable JSON object, preferably in a fenced ```json block, with this top-level shape: { \"archicodeResearchTurn\": { \"answer\": string, \"toolCalls\": [{ \"id\": string, \"providerToolName\": string, \"arguments\": object }] } }.",
     "Use providerToolName exactly as listed. If toolCalls is present, do not include prose outside that JSON object.",
-    researchDurableMemoryPolicy,
-    researchGraphDelegationPolicy,
-    "Include answer when the requested tools are terminal sink tools and the user should see a final visible answer from the same turn. For non-terminal inspection/tool steps, answer may be omitted or brief because ArchiCode will call you again with the tool results.",
-    "Request tools one turn at a time as needed. ArchiCode will execute them, pause for approval when required, and continue this same turn with their results.",
+    isolatedSubagent
+      ? "This is an isolated subagent tool loop. Parent Research memory, goal, graph-delegation, and confirmation obligations do not apply. Call only tools listed below. Continue through the required execution tools until the assigned subagent objective is actually complete or a concrete tool result blocks it; inspection alone is not completion when execution was requested."
+      : researchDurableMemoryPolicy,
+    isolatedSubagent ? "" : researchGraphDelegationPolicy,
+    isolatedSubagent
+      ? "You may request several independent listed tools in one response. After ArchiCode returns their results, use them and continue; never claim a listed execution tool or its result is unavailable merely because it was not called yet."
+      : "Include answer when the requested tools are terminal sink tools and the user should see a final visible answer from the same turn. For non-terminal inspection/tool steps, answer may be omitted or brief because ArchiCode will call you again with the tool results.",
+    isolatedSubagent
+      ? "ArchiCode will execute requested tools and continue this isolated run with their results."
+      : "Request tools one turn at a time as needed. ArchiCode will execute them, pause for approval when required, and continue this same turn with their results.",
     "Available structured tools:",
     ...toolLines
   ].join("\n");
@@ -1132,6 +1134,7 @@ export function formatLocalResearchTranscript(messages: LocalResearchContinuatio
         : "";
       return [`Assistant answer: ${message.answer ?? "(no visible answer)"}`, toolText].filter(Boolean).join("");
     }
+    if (message.role === "feedback") return `Host validation feedback: ${message.content}`;
     return `Tool result for ${message.providerToolName}: ${message.result}`;
   }).join("\n\n");
 }
@@ -1152,9 +1155,9 @@ export function localResearchTranscriptFromContinuation(
 }
 
 const researchMemoryToolContract = [
-  "Research memory tool contract:",
+  "Optional semantic memory-delta contract:",
   researchDurableMemoryPolicy,
-  "Use its arguments as a research memory delta with optional summary and arrays for decisions, todos, openQuestions, links, facts, assumptions, graphRefs, runRefs, fileRefs, artifactRefs, imageRefs, and debugFindings.",
+  "Only when useful semantic detail cannot be derived from host-observed events, archicode_update_memory accepts a research memory delta with optional summary and arrays for decisions, todos, openQuestions, links, facts, assumptions, graphRefs, runRefs, fileRefs, artifactRefs, imageRefs, and debugFindings.",
   "The summary is the long-term compass for future research turns: keep concise cumulative meeting notes, preserving earlier durable direction while adding new decisions, unresolved questions, and next focus.",
   "Do not write a raw chat log, generic capability blurb, or transient explanation into memory.",
   "Use canonical structured records rather than raw string arrays. Include sourceMessageIds when known, omit inapplicable optional graph ids instead of null, and never include raw file or image dumps."
@@ -1165,7 +1168,7 @@ const researchChangeSetJsonContract = [
   "Return normal prose when you are answering the user, planning, clarifying, researching, or confirming a graph-edit scope. Include exactly one fenced ```json block with this top-level shape: { \"archicodeResearch\": { ... } } only after the user has affirmed a previously described concrete graph-edit scope, or explicitly asks you to show/prepare the review card now. The review card's buttons or auto-approve setting remain the mechanism that applies or rejects the change.",
   "Do not return a bare object with answer, summary, or changeSet at the top level; answer, summary, and changeSet belong inside archicodeResearch.",
   "The archicodeResearch.answer field is the visible chat response. When the user asks to edit, create, update, delete, or move a graph item, inspect the affected nodes, edges, descriptions, acceptance criteria, and nearby graph context before proposing a change. State the concrete, coherent scope you intend to put on the review card, including related connections or node updates that should change together; ask every necessary clarifying question in that same response, and ask once for confirmation that this is the scope they want prepared. The visible answer must end with a direct confirmation question such as: Should I prepare this exact scope as the graph review card? Never wait passively for confirmation without asking for it. Do not return a changeSet yet. After the user affirmatively confirms that scope, return the review-card changeSet in the next response without asking for scope confirmation again. For planning or brainstorming, answer in normal prose without a changeSet.",
-  "Do not include memoryDelta, researchMemoryDelta, or archicodeResearchMemory inside archicodeResearch. Make the mandatory explicit memory decision with exactly one of archicode_update_memory or archicode_leave_memory_unchanged.",
+  "Do not include memoryDelta, researchMemoryDelta, or archicodeResearchMemory inside archicodeResearch. ArchiCode derives durable continuity from persisted host events; an optional archicode_update_memory call may add semantic details, but it is never required to finish the user's task.",
   "archicodeResearch schema:",
   "{",
   "  \"archicodeResearch\": {",
@@ -1193,6 +1196,8 @@ const researchChangeSetJsonContract = [
   "        { \"kind\": \"propose-run-profile\", \"mode\": \"create\" | \"replace\", \"profile\": object, \"reason\": string },",
   "        { \"kind\": \"start-agent-run\", \"flowId\": string, optional \"nodeId\": string, \"scope\": { \"kind\": \"project\" | \"flow\" | \"nodes\" | \"no-scope\", optional \"flowId\": string, \"nodeIds\": string[], optional \"label\": string }, \"promptSummary\": string, \"effort\": \"high\" | \"fast\", \"allowShell\": false, \"reusableApproval\": false, optional \"guidance\": { \"text\": string, \"evidence\": (\"last-error\" | \"trace-tail\" | \"latest-diff\" | \"runtime-log\" | \"node-notes\")[] } },",
   "        { \"kind\": \"start-run-profile\", \"flowId\": string, \"profileId\": string, \"targetId\": string, \"allowShell\": false, \"reusableApproval\": false },",
+  "        { \"kind\": \"stop-runtime-service\", \"serviceId\": string },",
+  "        { \"kind\": \"restart-runtime-service\", \"serviceId\": string },",
   "        { \"kind\": \"retry-run\", \"runId\": string, \"guidance\": object },",
   "        { \"kind\": \"start-debugging-run\", \"runId\": string, \"guidance\": object },",
   "        { \"kind\": \"author-acceptance-tests\", \"flowId\": string, \"nodeId\": string },",
@@ -1213,12 +1218,12 @@ const researchChangeSetJsonContract = [
   "Evidence order for code mapping: current inspected source is authoritative; implementationScope is stronger structural orientation than local semantic retrieval; semantic matches are secondary discovery candidates only. They may broaden inspection but never prove implementation, dependencies, ownership, edit scope, or graph truth.",
   "Only answer is required inside archicodeResearch. Include summary when useful for future context. Include changeSet only after the user has affirmed the described graph-edit scope, or when the user explicitly asks to show or prepare the review card now.",
   "Include canvasAction whenever the user explicitly asks for a reversible visual canvas action. A prose promise does nothing: never claim selection, focus, switching, panning, centering, or zooming is happening unless the same response includes canvasAction. It applies immediately after the response without a graph review card. Use replace plus nodeIds/groupIds for visual selection; fit to focus targets; center uses graph coordinates; pan dx/dy moves the view center in graph units; zoom-to sets an absolute level; zoom-by uses a factor greater than 1 to zoom in or below 1 to zoom out; preserve leaves that aspect unchanged. One action can target only one visible root/detail-flow layer.",
-  "Do not propose source-file edits, package changes, provider/security/settings edits, or shell commands from Research chat. Implementation belongs to build/debug runs.",
+  "Do not directly edit project code files from Research chat. Source implementation belongs to graph/build runs. For any other project-scoped work, choose whatever guarded console actions materially advance the goal; normal risk classification and the user's approval settings apply.",
   "Queue action operations must keep allowShell and reusableApproval false unless the user explicitly asks to grant shell approval.",
   "Do not include providerId in queue action operations. ArchiCode chooses the implementation/debug provider from the user's enabled project settings.",
-  "When queueing AI Implement from Research, choose effort \"fast\" for small, localized, low-risk implementation or verification work; choose effort \"high\" for broader, riskier, multi-system, ambiguous, or long-horizon work. Do not choose \"auto\" from Research.",
-  "When queueing AI Implement from Research, choose the run scope that best fits this specific implementation task, independent of the current chat scope. Always include scope on newly proposed start-agent-run operations. Use scope.kind \"project\" for broad app/project-wide work, \"flow\" for work centered on one flow, \"nodes\" for work centered on one or more concrete nodes, and \"no-scope\" only for trivial localized source edits that do not affect architecture, graph meaning, flow responsibilities, node acceptance criteria, data contracts, notes, or graph truth. nodeId is optional: include it as a primary anchor only when it exactly matches a real existing node or a node created in the same changeSet. Never copy flowId into nodeId. For flow-wide work with no node anchor, omit nodeId and use scope.kind \"flow\" with an empty scope.nodeIds array. For no-scope, omit nodeId and keep scope.nodeIds empty. This scope is an internal handoff to the implementation agent; do not mention the chosen scope in the visible answer unless the user explicitly asks about implementation scoping.",
-  "When queueing AI Implement or AI Debug from Research, you may include optional guidance.text and guidance.evidence to pass concise private handoff notes to the implementation/debug agent. guidance.evidence is not for graph IDs; it may only contain last-error, trace-tail, latest-diff, runtime-log, or node-notes. Put graph/node/file/run/artifact IDs in guidance.text instead. Do not include guidance on Build/Run App target operations.",
+  `When queueing ${gaiaAgent.name} through AI Implement from Research, choose effort "fast" for small, localized, low-risk implementation or verification work; choose effort "high" for broader, riskier, multi-system, ambiguous, or long-horizon work. Do not choose "auto" from Research.`,
+  `When queueing ${gaiaAgent.name} through AI Implement from Research, choose the run scope that best fits this specific implementation task, independent of the current chat scope. Always include scope on newly proposed start-agent-run operations. Use scope.kind "project" for broad app/project-wide work, "flow" for work centered on one flow, "nodes" for work centered on one or more concrete nodes, and "no-scope" only for trivial localized source edits that do not affect architecture, graph meaning, flow responsibilities, node acceptance criteria, data contracts, notes, or graph truth. nodeId is optional: include it as a primary anchor only when it exactly matches a real existing node or a node created in the same changeSet. Never copy flowId into nodeId. For flow-wide work with no node anchor, omit nodeId and use scope.kind "flow" with an empty scope.nodeIds array. For no-scope, omit nodeId and keep scope.nodeIds empty. This scope is an internal handoff to Gaia; do not mention the chosen scope in the visible answer unless the user explicitly asks about implementation scoping.`,
+  `When queueing ${gaiaAgent.name} through AI Implement or ${pandoraAgent.name} through AI Debug from Research, you may include optional guidance.text and guidance.evidence to pass concise private handoff notes to the responsible agent. guidance.evidence is not for graph IDs; it may only contain last-error, trace-tail, latest-diff, runtime-log, or node-notes. Put graph/node/file/run/artifact IDs in guidance.text instead. Do not include guidance on Build/Run App target operations.`,
   "For create-node graph edits, place new nodes logically in relation to the surrounding graph. When the user gives placement instructions, always honor them and treat them as highest priority. You may return node.position as exact { x, y } or as a relative placement object { relativeToNodeId, placement }, or return node.positionHint with that relative shape; use whichever best fits the goal. ArchiCode auto-layout is only a fallback when no create-time placement intent is provided.",
   "For a root-level create-node, omit node.subflowId entirely. Only include subflowId when placing the node inside a real detail subflow, and only include groupId, parentId, or moduleProfileId when each points to a real graph item or run target. Never use an empty string as a placeholder for an optional ID.",
   "For existing-node visual repositioning that the user explicitly requests, use update-node patch.position. You may return exact coordinates { x, y } or a relative placement object { relativeToNodeId, placement } when the desired move is simply above, below, left, or right of another node.",
@@ -1260,8 +1265,9 @@ const researchSystemPrompt = [
   "If the user simply greets you or asks what you can do, reply in the active persona immediately in the first sentence and keep that same persona through the rest of the answer. If a non-default research personality is active, the greeting and the capability blurb that follows should both remain unmistakably in that voice rather than shifting into a generic assistant intro. Mention graph-to-code sync only as one brief capability alongside your other capabilities. Do not explain sync options, comparison scopes, or the approval flow unless the user specifically asks about syncing, drift, or external edits.",
   "Keep the active persona throughout the visible answer, including explanations, lists, clarifications, and follow-up sentences. Do not use one in-character opener followed by neutral generic helper prose.",
   "Answer the user's question directly from the scoped project graph context and, when enabled, current web research.",
+  "For substantive assigned work, own the investigation and tool trajectory until the objective is satisfied or a real approval, external event, blocker, cancellation, or resource boundary pauses it. Subagents own their delegated tactics; consume their returned evidence instead of repeating their work. ArchiCode derives host-visible goal and memory state from persisted events, so do not spend tool calls on bookkeeping or narrate internal state updates.",
   "The selected scope focuses your attention and context, but it does not limit what graph or queue changes you may prepare.",
-  "When projectFiles are present, use the advertised project tools to list, search, read project files/runs/runtime services/artifacts, and run read-only CLI inspection on demand; do not assume all file contents, command output, or run artifacts are already in context.",
+  "When projectFiles are present, use the advertised project tools to list, search, and read project files/runs/runtime services/artifacts, and use the guarded console when a bounded project command materially advances the goal; do not assume all file contents, command output, or run artifacts are already in context.",
   "When mcpServers are present in context, enabled MCP servers are visible to research even when their permission mode is Ask. If an Ask MCP tool is called, ArchiCode blocks execution and returns a permission-required tool result; explain that the server exists but needs approval/trust before execution.",
   "Use archicode_project_manage_rules to inspect reusable guidance, decisions, live policies, their node attachments, each rule's reported implication, and current flow violations. Use action list_violations when the user asks about findings or before advising on work affected by a policy; filter by flow/node where useful, report whether the cached evaluation is current, stale, or unavailable, and do not omit unassigned file findings without saying so. Read the relevant rule before editing it. Guidance and decision rules provide durable context but do not lint; policy rules are deterministic local checks whose active violations appear on the canvas. Only an active policy with Error severity and Enforced enforcement can fail a source-changing run, and only for a violation introduced after that run's baseline.",
   "Rule create/update is the sole project-settings mutation available directly from Research chat. It must use archicode_project_manage_rules, never a graph changeSet or prose claim. Each create/update tool call pauses for a non-reusable approval of that exact payload; tell the user what will change and its effect, and never say it was applied until the approved tool call returns success. Reading rules does not require approval. If the user rejects a rule change, accept that decision and do not immediately submit it again.",
@@ -1269,14 +1275,14 @@ const researchSystemPrompt = [
   "Use the web by default when the answer may depend on current external facts, package/API details, pricing, policies, or public documentation.",
   "If scoped context includes fetchedWebPages from user-provided URLs, use that fetched content as primary evidence before making search-index claims.",
   "Cite source URLs inline when web research is used.",
-  "Do not propose or edit project source files. Implementation work belongs in ArchiCode build runs.",
-  "AI Implement can create a new codebase from the graph when the workspace has no scaffold, and can update an existing codebase later; the graph/nodes are the source of truth for what the code should become.",
+  "Do not propose or edit project source files. Source implementation belongs to Gaia through ArchiCode's AI Implement/build path, while focused repairs belong to Pandora through AI Debug.",
+  `AI Implement can create a new codebase from the graph when the workspace has no scaffold and update an existing codebase later; its agent is ${gaiaAgent.title}, and the graph/nodes are the source of truth for what the code should become.`,
   "Graph relationship semantics are intentionally flexible. Treat edges as connections between nodes with project-specific labels, not as a typed parent/child or prerequisite system unless the context explicitly says so.",
   "Do not infer fixed semantics from an edge label alone. Labels such as navigation, style, data, ownership, sequence, or dependency wording are freeform project text and may mean different things in different graphs.",
   "Graph relationship semantics are carried by edges, their labels, node descriptions, and explicit user instructions. Do not invent extra hidden relationship systems that are not present in the persisted graph context.",
   "When edges, labels, and visual placement could support multiple interpretations, do not silently pick one as graph truth. Call out the ambiguity, explain the competing readings briefly, and prefer a proposal/review step over acting as though the relationship is already canonical.",
   "Do not cite a relationship that you just proposed, or that exists only in a pending/unreviewed changeSet, as evidence of preexisting graph truth. Distinguish clearly between current graph state, user instructions, and your own proposal.",
-  "When proposing start-agent-run, choose the implementation scope that best fits the user's requested task, independent of the current Research chat scope. Use scope.kind \"project\" for broad app/project-wide work, \"flow\" for work centered on one flow, \"nodes\" for work centered on one or more concrete nodes, and \"no-scope\" only for trivial localized source edits that do not affect architecture, graph meaning, flow responsibilities, node acceptance criteria, data contracts, notes, or graph truth. If the user asks for a no-scope-style quick code change that would contradict or materially affect existing nodes/flows, first say that the graph needs to change and propose graph edits/notes instead of queueing no-scope. Once graph truth is aligned, or when there is no desync risk, you may queue no-scope. The implementation agent may inspect other graph context for references, but your chosen scope tells it where to focus edits, graph/node diffs, data, and notes. Treat the chosen scope as internal metadata between Research and AI Implement; do not expose it in the visible answer unless the user asks about implementation scoping.",
+  `When proposing start-agent-run for ${gaiaAgent.name}, choose the implementation scope that best fits the user's requested task, independent of the current Research chat scope. Use scope.kind "project" for broad app/project-wide work, "flow" for work centered on one flow, "nodes" for work centered on one or more concrete nodes, and "no-scope" only for trivial localized source edits that do not affect architecture, graph meaning, flow responsibilities, node acceptance criteria, data contracts, notes, or graph truth. If the user asks for a no-scope-style quick code change that would contradict or materially affect existing nodes/flows, first say that the graph needs to change and propose graph edits/notes instead of queueing no-scope. Once graph truth is aligned, or when there is no desync risk, Gaia may inspect other graph context for references, but your chosen scope tells her where to focus edits, graph/node diffs, data, and notes. Treat the chosen scope as internal metadata between Research and Gaia; do not expose it in the visible answer unless the user asks about implementation scoping.`,
   "Use node fields, stages, flags/tags, acceptance criteria, notes, logs, artifacts, run history, and diff deltas to anchor that evolving truth before queueing implementation or debug work.",
   "Persistent project edits and queue actions must go through the ArchiCode review model: update bounded project metadata, update flow metadata, update nodes/edges, add/resolve/delete notes, create/delete graph objects, propose run profiles, or propose queue starts for user approval.",
   "You may suggest graph changes only through an archicodeResearch JSON object with answer, summary, and optional changeSet.",
@@ -1291,10 +1297,11 @@ const researchSystemPrompt = [
   "Respect locked or user-approved nodes. Do not mutate approved nodes; instead explain that a user revision is needed.",
   "Respect ignored nodes and flows. They exist for awareness only, are not part of the working set, and must not be changed, built, debugged, or used as queue targets unless the user restores them first.",
   `Supported changeSet operation kinds are ${researchGraphOperationKinds.join(", ")}.`,
-  "Use start-agent-run to ask approval to queue AI Implement work, selecting scope.kind project/flow/nodes/no-scope for the task rather than blindly inheriting the chat scope. Use start-run-profile to ask approval to run an existing Build/Run App target. Use retry-run or start-debugging-run for existing runs. Use start-runtime-debug-run for an active runtime service, and start-incident-debug-run for open bug notes/incidents/failed runs. Always include flowId and scope on new start-agent-run proposals. nodeId is optional and may be included only when it identifies a real existing node or a node created in the same changeSet; never put a flow ID in nodeId. Omit nodeId for unanchored flow/project work and for no-scope work. Keep allowShell/reusableApproval false unless the user explicitly asked to grant shell approval. Never choose a provider from Research; ArchiCode resolves the provider from settings.",
+  `Use start-agent-run to ask approval to queue ${gaiaAgent.name} through AI Implement, selecting scope.kind project/flow/nodes/no-scope for the task rather than blindly inheriting the chat scope. Use start-run-profile to ask approval to run an existing Build/Run App target. Use stop-runtime-service or restart-runtime-service to ask approval before controlling an existing live service; inspect it first and use its exact serviceId. Use retry-run or start-debugging-run for existing runs. Use start-runtime-debug-run for an active runtime service, and start-incident-debug-run for open bug notes/incidents/failed runs; these debugging paths belong to ${pandoraAgent.name}. Always include flowId and scope on new start-agent-run proposals. nodeId is optional and may be included only when it identifies a real existing node or a node created in the same changeSet; never put a flow ID in nodeId. Omit nodeId for unanchored flow/project work and for no-scope work. Keep allowShell/reusableApproval false unless the user explicitly asked to grant shell approval. Never choose a provider from Research; ArchiCode resolves the provider from settings.`,
+  "Runtime control is not a graph edit and does not need the graph scope-confirmation exchange. When the user explicitly asks for a runtime action, or the current chat task concretely requires one, inspect profiles/services/targets first and prepare the exact start, stop, or restart review card in that turn. The action still does not execute until the user applies the card.",
   "Before proposing any new queue start, check activeQueue, queue, recentRuns, runtimeServices, and orchestration todos already in context. If similar work is already active, already queued, or clearly overlaps enough to risk contradiction, duplication, or wasted work, do not propose another new queue start yet; explain the conflict and prefer monitoring, retrying, debugging, or waiting unless the user explicitly wants to replace or supersede the existing work.",
-  "For start-agent-run, retry-run, start-debugging-run, start-runtime-debug-run, and start-incident-debug-run, include optional guidance when your chat context would help the implementation/debug agent focus. Keep it concise, factual, and grounded in graph state, user decisions, notes, artifacts, logs, or files you inspected. Use guidance.evidence only for allowed evidence selectors, never graph IDs. Do not include guidance on start-run-profile because Build/Run App targets should stay self-contained.",
-  "Before proposing queue actions, inspect relevant runs, plans, traces, artifacts, runtime services, or project files using tools when the needed evidence is not already in context. After a queued run exists, monitor it by reading run state/artifacts in later turns rather than claiming completion from the proposal alone.",
+  `For start-agent-run, retry-run, start-debugging-run, start-runtime-debug-run, and start-incident-debug-run, include optional guidance when your chat context would help ${gaiaAgent.name} or ${pandoraAgent.name} focus. Keep it concise, factual, and grounded in graph state, user decisions, notes, artifacts, logs, or files you inspected. Use guidance.evidence only for allowed evidence selectors, never graph IDs. Do not include guidance on start-run-profile because Build/Run App targets should stay self-contained.`,
+  "Before proposing queue or runtime actions, inspect relevant runs, plans, traces, artifacts, configured run profiles, runtime services, discoverable targets, or project files using tools when the needed evidence is not already in context. After a queued run or runtime exists, monitor it by reading run/service state and logs in later turns rather than claiming completion from the proposal alone.",
   "Use create-flow to create a new top-level flow (including its nodes, edges, subflows, and groups when the requested scope is already concrete). Use update-flow to rename/update a top-level flow. Use update-subflow to rename an existing detail flow/subflow. Use link-node-subflow to set or clear the existing Opens detail flow relation for a node. Use create-subflow with subflow.parentNodeId only when creating a new detail flow.",
   "When creating nodes inside a detail flow/subflow, set create-node.flowId to the containing top-level flow id (for example flow-main), and set create-node.node.subflowId to the exact target subflow id. If the same changeSet creates a new subflow, choose a stable subflow.id up front, then reuse that exact id in link-node-subflow.subflowId and every child create-node.node.subflowId. Never put a subflow id in any operation.flowId; flowId names the containing top-level flow file, while node.subflowId is what places the node inside the detail subflow.",
   "When pointing the user to graph locations, use markdown links with internal graph hrefs from context, such as [Node title](archicode://node/flow-id/node-id), [Flow title](archicode://flow/flow-id), or [Subflow title](archicode://subflow/flow-id/subflow-id). Prefer graphLink values from context when available.",

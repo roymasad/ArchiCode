@@ -1,5 +1,14 @@
 import type { LlmUsage, ModelPricing } from "./schema";
 
+export function mergeReasoningReplayStates(
+  states: Array<LlmUsage["reasoningReplayState"]>
+): LlmUsage["reasoningReplayState"] {
+  const observed = new Set(states.filter((state): state is NonNullable<LlmUsage["reasoningReplayState"]> => Boolean(state)));
+  if (!observed.size) return undefined;
+  if (observed.has("mixed") || observed.size > 1) return "mixed";
+  return observed.values().next().value;
+}
+
 type ProviderLike = {
   kind: string;
   model?: string;
@@ -321,6 +330,7 @@ export function sumLlmUsage(usages: Array<LlmUsage | undefined | null>): LlmUsag
     thinkingTokens: thinkingTokens || undefined,
     cacheReadTokens: cacheReadTokens || undefined,
     cacheCreationTokens: cacheCreationTokens || undefined,
+    reasoningReplayState: mergeReasoningReplayStates(valid.map((usage) => usage.reasoningReplayState)),
     calls,
     estimated: estimated || undefined,
     costUsd: roundCost(costUsd),

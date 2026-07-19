@@ -1,6 +1,7 @@
 import { AlertTriangle, CheckCircle2, Sparkles } from "lucide-react";
 import type { CSSProperties } from "react";
 import { useEffect, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { codebaseReviewPartitionBudget } from "@shared/schema";
 import type { CodebaseMappingSummary } from "../../../preload";
 import { useArchicodeStore, type CodebaseOnboardingDetail, type CodebaseOnboardingGranularity, type CodebaseOnboardingLevel, type CodebaseOnboardingReviewEffort } from "../store/useArchicodeStore";
@@ -191,7 +192,16 @@ export function CodebaseOnboardingWizard() {
     cancelCodebaseOnboardingRun,
     openProjectSettings,
     checkProvider
-  } = useArchicodeStore();
+  } = useArchicodeStore(useShallow((state) => ({
+    bundle: state.bundle,
+    providerHealth: state.providerHealth,
+    codebaseOnboarding: state.codebaseOnboarding,
+    dismissCodebaseOnboarding: state.dismissCodebaseOnboarding,
+    startCodebaseOnboardingRun: state.startCodebaseOnboardingRun,
+    cancelCodebaseOnboardingRun: state.cancelCodebaseOnboardingRun,
+    openProjectSettings: state.openProjectSettings,
+    checkProvider: state.checkProvider
+  })));
   const [levels, setLevels] = useState<CodebaseOnboardingLevel>("3");
   const [detail, setDetail] = useState<CodebaseOnboardingDetail>("balanced");
   const [reviewEffort, setReviewEffort] = useState<CodebaseOnboardingReviewEffort>("balanced");

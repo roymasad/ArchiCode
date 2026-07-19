@@ -1,6 +1,8 @@
 import { Bug, ChevronDown, CircleHelp, EyeOff, FileJson, PauseCircle, RefreshCw, ShieldCheck, XCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { llmPatchProposalSchema, type LlmPatchProposal, type LlmUsage, type ProjectBundle, type ProjectSettings, type Run, type RunEvidenceKind } from "@shared/schema";
+import { gaiaAgent, pandoraAgent } from "@shared/agentIdentities";
 import { formatCostUsd, formatTokenCount, llmUsageTotalTokens } from "@shared/llmPricing";
 import { useArchicodeStore, type RunGuidanceInput } from "../store/useArchicodeStore";
 import { isRunErrorResolved, runFailureDetails, runFailureMessage } from "../utils/runErrors";
@@ -139,6 +141,13 @@ function runHeadline(run: Run, openQuestionCount = 0, runs: Run[] = []): string 
   if (run.status === "succeeded") return "Run completed";
   if (run.status === "cancelled") return "Run cancelled";
   return "Run in progress";
+}
+
+function activeRunAgentTitle(run: Run): string | null {
+  if (run.status === "debugging" || run.phase === "debugging") return pandoraAgent.title;
+  if (run.purpose === "run-discovery") return null;
+  if (run.status === "planning" || run.status === "coding" || run.phase === "planning" || run.phase === "coding") return gaiaAgent.title;
+  return null;
 }
 
 function runSummary(run: Run, runs: Run[] = []): string {
@@ -498,7 +507,23 @@ function buildGuidance(text: string, evidence: RunEvidenceKind[]): RunGuidanceIn
 }
 
 export function RunConsole() {
-  const { rootPath, bundle, patchProposals, selectedRunId, selectRun, approveRun, cancelRun, rejectRun, dismissRunError, removeRunFromQueue, retryRun, retryRunWithGuidance, startDebuggingRun, startScopedResearchChat, keybindings } = useArchicodeStore();
+  const { rootPath, bundle, patchProposals, selectedRunId, selectRun, approveRun, cancelRun, rejectRun, dismissRunError, removeRunFromQueue, retryRun, retryRunWithGuidance, startDebuggingRun, startScopedResearchChat, keybindings } = useArchicodeStore(useShallow((state) => ({
+    rootPath: state.rootPath,
+    bundle: state.bundle,
+    patchProposals: state.patchProposals,
+    selectedRunId: state.selectedRunId,
+    selectRun: state.selectRun,
+    approveRun: state.approveRun,
+    cancelRun: state.cancelRun,
+    rejectRun: state.rejectRun,
+    dismissRunError: state.dismissRunError,
+    removeRunFromQueue: state.removeRunFromQueue,
+    retryRun: state.retryRun,
+    retryRunWithGuidance: state.retryRunWithGuidance,
+    startDebuggingRun: state.startDebuggingRun,
+    startScopedResearchChat: state.startScopedResearchChat,
+    keybindings: state.keybindings
+  })));
   const [reusableApproval, setReusableApproval] = useState(false);
   const [showRemoved, setShowRemoved] = useState(false);
   const [guidanceTarget, setGuidanceTarget] = useState<"retry" | "debug" | null>(null);
@@ -810,6 +835,7 @@ export function RunConsole() {
           <>
             <div className="run-detail-head">
               <div>
+                {activeRunAgentTitle(selected) ? <small>{activeRunAgentTitle(selected)}</small> : null}
                 <strong>{runHeadline(selected, selectedOpenQuestionCount, runs)}</strong>
               </div>
               <div className="run-detail-head-actions">

@@ -1,6 +1,7 @@
 import type { LlmPhase, ModelCapabilityProfile, PhaseModelPolicy, ProjectSettings } from "../../shared/schema";
 import { defaultPhaseModelPolicies } from "../../shared/schema";
 import type { ProviderMcpTool } from "../mcp";
+import { runAgentLoop, type AgentToolResult } from "../agentRuntime";
 import {
   type Provider,
   type ProviderCallOptions,
@@ -10,7 +11,6 @@ import {
   type ResearchProviderOptions,
   type ResearchThreadTurn,
   appendTextAttachmentBlock,
-  createConsecutiveToolCallLoopDetector,
   createUsageAccumulator,
   extractContextWindowFromModels,
   extractModelCapabilitiesFromModels,
@@ -116,8 +116,16 @@ export function applyAnthropicGenerationControls(
   if (profile.supportsTemperature && policy.temperature !== undefined) body.temperature = policy.temperature;
 }
 
+export type AnthropicContentBlock = Record<string, unknown> & {
+  type: string;
+  text?: string;
+  id?: string;
+  name?: string;
+  input?: unknown;
+};
+
 export type AnthropicMessagePayload = {
-  content?: Array<{ type: string; text?: string; id?: string; name?: string; input?: unknown }>;
+  content?: AnthropicContentBlock[];
   stop_reason?: string | null;
   usage?: {
     input_tokens?: number;
@@ -129,6 +137,12 @@ export type AnthropicMessagePayload = {
     output_tokens_details?: { thinking_tokens?: number };
   };
 };
+
+function anthropicReasoningReplayState(content: AnthropicContentBlock[] | undefined): RawLlmUsage["reasoningReplayState"] {
+  return (content ?? []).some((block) => block.type === "thinking" || block.type === "redacted_thinking")
+    ? "received"
+    : "absent";
+}
 
 export function anthropicPayloadText(payload: AnthropicMessagePayload, label: string): string {
   const content = payload.content ?? [];
@@ -196,6 +210,7 @@ export type AnthropicToolUse = { id: string; name: string; input: unknown };
 export type AnthropicStreamResult = {
   text: string;
   toolUses: AnthropicToolUse[];
+  content: AnthropicContentBlock[];
   stopReason?: string;
   usage?: AnthropicMessagePayload["usage"];
 };
@@ -231,7 +246,8 @@ export async function streamAnthropicMessages(
   // thinking. Merge both so cost reflects cached-token pricing.
   let startUsage: AnthropicMessagePayload["usage"];
   let deltaUsage: AnthropicMessagePayload["usage"];
-  const toolBlocks = new Map<number, { id: string; name: string; json: string }>();
+  const contentBlocks = new Map<number, AnthropicContentBlock>();
+  const toolInputJson = new Map<number, string>();
 
   const consumeEvent = (eventText: string): void => {
     const dataLines = eventText.split(/\r?\n/)
@@ -255,8 +271,9 @@ export async function streamAnthropicMessages(
     if (event.type === "content_block_start") {
       const block = event.content_block as Record<string, unknown> | undefined;
       const index = event.index as number | undefined;
-      if (typeof index === "number" && block?.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string") {
-        toolBlocks.set(index, { id: block.id, name: block.name, json: "" });
+      if (typeof index === "number" && typeof block?.type === "string") {
+        contentBlocks.set(index, { ...block, type: block.type });
+        if (block.type === "tool_use") toolInputJson.set(index, "");
       }
     }
     if (event.type === "content_block_delta") {
@@ -266,8 +283,20 @@ export async function streamAnthropicMessages(
         onToken?.(delta.text);
       }
       if (delta?.type === "input_json_delta" && typeof delta.partial_json === "string" && typeof index === "number") {
-        const block = toolBlocks.get(index);
-        if (block) block.json += delta.partial_json;
+        toolInputJson.set(index, `${toolInputJson.get(index) ?? ""}${delta.partial_json}`);
+      }
+      if (typeof index === "number") {
+        const block = contentBlocks.get(index);
+        if (block) {
+          for (const [key, value] of Object.entries(delta ?? {})) {
+            if (key === "type" || key === "partial_json") continue;
+            if (typeof value === "string") {
+              block[key] = `${typeof block[key] === "string" ? block[key] : ""}${value}`;
+            } else if (value !== undefined) {
+              block[key] = value;
+            }
+          }
+        }
       }
     }
     if (event.type === "message_delta") {
@@ -288,15 +317,23 @@ export async function streamAnthropicMessages(
   buffer += decoder.decode();
   if (buffer.trim()) consumeEvent(buffer);
 
-  const toolUses = [...toolBlocks.values()].map((block) => {
-    let input: unknown = {};
-    try {
-      input = block.json.trim() ? JSON.parse(block.json) : {};
-    } catch {
-      input = {};
-    }
-    return { id: block.id, name: block.name, input };
-  });
+  const content = [...contentBlocks.entries()]
+    .sort(([left], [right]) => left - right)
+    .map(([index, block]) => {
+      if (block.type !== "tool_use") return block;
+      const json = toolInputJson.get(index) ?? "";
+      let input: unknown = block.input ?? {};
+      try {
+        input = json.trim() ? JSON.parse(json) : input;
+      } catch {
+        input = {};
+      }
+      return { ...block, input };
+    });
+  const toolUses = content.flatMap((block): AnthropicToolUse[] =>
+    block.type === "tool_use" && typeof block.id === "string" && typeof block.name === "string"
+      ? [{ id: block.id, name: block.name, input: block.input ?? {} }]
+      : []);
   const mergedUsage: AnthropicMessagePayload["usage"] = {
     input_tokens: startUsage?.input_tokens,
     cache_read_input_tokens: startUsage?.cache_read_input_tokens,
@@ -305,9 +342,12 @@ export async function streamAnthropicMessages(
     output_tokens_details: deltaUsage?.output_tokens_details
   };
   if (mergedUsage.input_tokens !== undefined || mergedUsage.output_tokens !== undefined) {
-    onUsage?.(extractAnthropicUsage(mergedUsage));
+    onUsage?.({
+      ...extractAnthropicUsage(mergedUsage),
+      reasoningReplayState: anthropicReasoningReplayState(content)
+    });
   }
-  return { text, toolUses, stopReason, usage: mergedUsage };
+  return { text, toolUses, content, stopReason, usage: mergedUsage };
 }
 
 export async function callAnthropicStreamingMessages(
@@ -404,79 +444,95 @@ export async function callAnthropicCompatible(
   }
 
   let completedToolRounds = 0;
-  const toolLoopDetector = createConsecutiveToolCallLoopDetector();
-  while (true) {
-    // Roll the message-level cache breakpoint to the tail so each tool round
-    // reuses the cached prefix (system + tools + project context + prior turns)
-    // instead of re-billing the whole transcript.
-    setRollingMessageCacheBreakpoint(messages);
-    const response = await postAnthropicMessages(baseUrl, apiKey, body, "Anthropic-compatible provider", options.signal);
-
-    if (!response.ok) {
-      throw new Error(`Anthropic-compatible provider failed with ${response.status}: ${await response.text()}`);
-    }
-
-    const payload = await response.json() as AnthropicMessagePayload;
-    acc.add(extractAnthropicUsage(payload.usage));
-    const content = payload.content ?? [];
-    const toolUses = content.filter((part) => part.type === "tool_use" && part.id && part.name);
-    if (!toolUses.length || !options.callMcpTool) {
-      try {
-        return emitAndReturn(anthropicPayloadText(payload, "Anthropic-compatible provider"));
-      } catch (error) {
-        if (completedToolRounds > 0 || !shouldRetryAnthropicWithoutThinking(error, body)) throw error;
-        options.onProgress?.({
-          stream: "stderr",
-          text: "Anthropic thinking consumed the full response budget before returning text. Retrying once without Anthropic thinking controls."
-        });
-        const retryResponse = await postAnthropicMessages(
-          baseUrl,
-          apiKey,
-          anthropicBodyWithoutThinkingControls(body, policy, profile),
-          "Anthropic-compatible provider",
-          options.signal
-        );
-        if (!retryResponse.ok) {
-          throw new Error(`Anthropic-compatible provider failed with ${retryResponse.status}: ${await retryResponse.text()}`);
+  type AnthropicProviderTurn = {
+    content: Array<Record<string, unknown>>;
+  };
+  const answer = await runAgentLoop<AnthropicProviderTurn>({
+    signal: options.signal,
+    executeTool: options.callMcpTool
+      ? (toolCall) => options.callMcpTool!({ providerToolName: toolCall.providerToolName, argumentsJson: toolCall.argumentsJson })
+      : undefined,
+    adapter: {
+      async nextTurn() {
+        // Roll the message cache breakpoint to the tail so each round reuses
+        // the accumulated transcript prefix.
+        setRollingMessageCacheBreakpoint(messages);
+        const response = await postAnthropicMessages(baseUrl, apiKey, body, "Anthropic-compatible provider", options.signal);
+        if (!response.ok) {
+          throw new Error(`Anthropic-compatible provider failed with ${response.status}: ${await response.text()}`);
         }
-        const retryPayload = await retryResponse.json() as AnthropicMessagePayload;
-        acc.add(extractAnthropicUsage(retryPayload.usage));
-        return emitAndReturn(anthropicPayloadText(retryPayload, "Anthropic-compatible provider"));
+        const payload = await response.json() as AnthropicMessagePayload;
+        const content = payload.content ?? [];
+        acc.add({
+          ...extractAnthropicUsage(payload.usage),
+          reasoningReplayState: anthropicReasoningReplayState(content)
+        });
+        const toolUses = content.filter((part) => part.type === "tool_use" && part.id && part.name);
+        let text = content
+          .filter((part) => part.type === "text" && typeof part.text === "string")
+          .map((part) => part.text as string)
+          .join("\n")
+          .trim();
+        if (!toolUses.length) {
+          try {
+            text = anthropicPayloadText(payload, "Anthropic-compatible provider");
+          } catch (error) {
+            if (completedToolRounds > 0 || !shouldRetryAnthropicWithoutThinking(error, body)) throw error;
+            options.onProgress?.({
+              stream: "stderr",
+              text: "Anthropic thinking consumed the full response budget before returning text. Retrying once without Anthropic thinking controls."
+            });
+            const retryResponse = await postAnthropicMessages(
+              baseUrl,
+              apiKey,
+              anthropicBodyWithoutThinkingControls(body, policy, profile),
+              "Anthropic-compatible provider",
+              options.signal
+            );
+            if (!retryResponse.ok) {
+              throw new Error(`Anthropic-compatible provider failed with ${retryResponse.status}: ${await retryResponse.text()}`);
+            }
+            const retryPayload = await retryResponse.json() as AnthropicMessagePayload;
+            acc.add({
+              ...extractAnthropicUsage(retryPayload.usage),
+              reasoningReplayState: anthropicReasoningReplayState(retryPayload.content)
+            });
+            text = anthropicPayloadText(retryPayload, "Anthropic-compatible provider");
+          }
+        }
+        const toolCalls = toolUses.map((toolUse) => ({
+          id: toolUse.id as string,
+          providerToolName: toolUse.name as string,
+          argumentsJson: JSON.stringify(toolUse.input ?? {})
+        }));
+        options.prepareToolBatch?.(toolCalls.map(({ providerToolName, argumentsJson }) => ({ providerToolName, argumentsJson })));
+        return { text, toolCalls, raw: { content } };
+      },
+      commitToolResults(turn, results) {
+        messages.push({ role: "assistant", content: turn.raw.content });
+        messages.push({
+          role: "user",
+          content: results.map(({ toolCall, result }) => ({
+            type: "tool_result",
+            tool_use_id: toolCall.id,
+            content: result
+          }))
+        });
+        completedToolRounds += 1;
       }
+    },
+    completionAfterTools({ results }) {
+      const executedToolCalls = results.map(({ toolCall, rawResult }) => ({
+        providerToolName: toolCall.providerToolName,
+        argumentsJson: toolCall.argumentsJson,
+        result: rawResult
+      }));
+      return options.shouldCompleteToolBatch?.(executedToolCalls)
+        ? { complete: true, fallbackText: "Structured source handoff completed." }
+        : undefined;
     }
-    messages.push({ role: "assistant", content });
-    options.prepareToolBatch?.(toolUses.map((toolUse) => ({
-      providerToolName: toolUse.name as string,
-      argumentsJson: JSON.stringify(toolUse.input ?? {})
-    })));
-    const toolResults = [];
-    const executedToolCalls = [];
-    for (const toolUse of toolUses) {
-      const providerToolName = toolUse.name as string;
-      const argumentsJson = JSON.stringify(toolUse.input ?? {});
-      const loopWarning = toolLoopDetector.record(providerToolName, argumentsJson);
-      const result = await options.callMcpTool({
-        providerToolName,
-        argumentsJson
-      });
-      executedToolCalls.push({ providerToolName, argumentsJson, result });
-      toolResults.push({
-        type: "tool_result",
-        tool_use_id: toolUse.id,
-        content: loopWarning ? `${result}\n\n${loopWarning}` : result
-      });
-    }
-    if (options.shouldCompleteToolBatch?.(executedToolCalls)) {
-      const visibleText = content
-        .filter((part) => part.type === "text" && typeof part.text === "string")
-        .map((part) => part.text as string)
-        .join("\n")
-        .trim();
-      return emitAndReturn(visibleText || "Structured source handoff completed.");
-    }
-    messages.push({ role: "user", content: toolResults });
-    completedToolRounds += 1;
-  }
+  });
+  return emitAndReturn(answer);
 }
 
 export async function callAnthropicResearch(
@@ -499,86 +555,98 @@ export async function callAnthropicResearch(
     return result;
   };
   const tools = anthropicMcpTools(options.mcpTools ?? []);
-  if (!tools.length) {
-    // Cache the conversation tail so later chat turns reuse the prior transcript
-    // in addition to the already-cached stable system prefix.
-    setRollingMessageCacheBreakpoint(body.messages as Array<Record<string, unknown>>);
-    return emitAndReturn(await callAnthropicStreamingMessages(baseUrl, apiKey, body, "Anthropic-compatible research provider", options.onToken, options.signal, acc.add));
-  }
-  body.tools = [...(Array.isArray(body.tools) ? body.tools : []), ...tools];
-  const messages = body.messages as Array<Record<string, unknown>>;
+  if (tools.length) body.tools = [...(Array.isArray(body.tools) ? body.tools : []), ...tools];
   const label = "Anthropic-compatible research provider";
-  const toolLoopDetector = createConsecutiveToolCallLoopDetector();
 
   // Resume: replace the working transcript with the persisted continuation and
   // splice in the just-approved tool result, so the pre-approval work is reused.
   if (options.resumeContinuation?.transport === "anthropic" && options.resumeContinuation.messages) {
     body.messages = anthropicResumeMessages(options.resumeContinuation);
   }
-
-  while (true) {
-    // Roll the cache breakpoint to the transcript tail so each tool round reuses
-    // the cached prefix instead of re-billing the accumulated tool results.
-    setRollingMessageCacheBreakpoint(messages);
-    // Stream every iteration so tool-assisted turns are no longer silent.
-    const result = await streamAnthropicMessages(baseUrl, apiKey, body, label, options.onToken, options.signal, acc.add);
-    if (!result.toolUses.length || !options.callMcpTool) {
-      return emitAndReturn(result.text.trim()
-        ? result.text
-        : anthropicPayloadText({ content: [], stop_reason: result.stopReason, usage: result.usage }, label));
-    }
-    const assistantContent = [
-      ...(result.text ? [{ type: "text", text: result.text }] : []),
-      ...result.toolUses.map((toolUse) => ({ type: "tool_use", id: toolUse.id, name: toolUse.name, input: toolUse.input ?? {} }))
-    ];
-    const loopWarnings = result.toolUses.map((toolUse) => toolLoopDetector.record(toolUse.name, JSON.stringify(toolUse.input ?? {})));
-    // Execute all tool calls concurrently (sink tools capture, external tools
-    // produce results to feed back). Settle so one approval-required tool does
-    // not discard the results of tools that already completed.
-    const settled = await Promise.allSettled(result.toolUses.map((toolUse) => options.callMcpTool!({
-      providerToolName: toolUse.name,
-      argumentsJson: JSON.stringify(toolUse.input ?? {})
-    })));
-    const toolResults: Array<{ type: "tool_result"; tool_use_id: string; content: string }> = [];
-    let pendingApproval: { toolUse: AnthropicToolUse; error: unknown } | undefined;
-    let firstError: unknown;
-    settled.forEach((outcome, index) => {
-      const toolUse = result.toolUses[index]!;
-      const loopWarning = loopWarnings[index];
-      if (outcome.status === "fulfilled") {
-        toolResults.push({ type: "tool_result", tool_use_id: toolUse.id, content: loopWarning ? `${outcome.value}\n\n${loopWarning}` : outcome.value });
-      } else if (options.isApprovalError?.(outcome.reason) && !pendingApproval) {
-        pendingApproval = { toolUse, error: outcome.reason };
-      } else if (firstError === undefined) {
-        firstError = outcome.reason;
-      }
-    });
-    if (pendingApproval) {
-      const continuationMessages: Array<Record<string, unknown>> = [...messages, { role: "assistant", content: assistantContent }];
-      if (toolResults.length) continuationMessages.push({ role: "user", content: toolResults });
-      attachProviderContinuation(pendingApproval.error, {
-        transport: "anthropic",
-        messages: continuationMessages,
-        pendingToolCall: {
-          id: pendingApproval.toolUse.id,
-          providerToolName: pendingApproval.toolUse.name,
-          argumentsJson: JSON.stringify(pendingApproval.toolUse.input ?? {})
+  const messages = body.messages as Array<Record<string, unknown>>;
+  type AnthropicAgentTurn = {
+    result: AnthropicStreamResult;
+    assistantContent: Array<Record<string, unknown>>;
+  };
+  const resultBlocks = (results: AgentToolResult[]): Array<{ type: "tool_result"; tool_use_id: string; content: string }> =>
+    results.map(({ toolCall, result }) => ({
+      type: "tool_result",
+      tool_use_id: toolCall.id,
+      content: result
+    }));
+  try {
+    const answer = await runAgentLoop<AnthropicAgentTurn>({
+      signal: options.signal,
+      executeTool: options.callMcpTool
+        ? (toolCall) => options.callMcpTool!({ providerToolName: toolCall.providerToolName, argumentsJson: toolCall.argumentsJson })
+        : undefined,
+      isApprovalError: options.isApprovalError,
+      onTransientRetry: options.onTransientRetry,
+      isTerminalTool: options.isTerminalTool,
+      terminalToolCompletesTurn: options.terminalToolCompletesTurn,
+      adapter: {
+        async nextTurn() {
+          // Roll the cache breakpoint to the transcript tail so each tool
+          // round reuses the stable prefix and only bills the new suffix.
+          setRollingMessageCacheBreakpoint(messages);
+          const result = await streamAnthropicMessages(baseUrl, apiKey, body, label, options.onToken, options.signal, acc.add);
+          delete body.tool_choice;
+          const text = result.toolUses.length || result.text.trim()
+            ? result.text
+            : anthropicPayloadText({ content: [], stop_reason: result.stopReason, usage: result.usage }, label);
+          return {
+            text,
+            toolCalls: result.toolUses.map((toolUse) => ({
+              id: toolUse.id,
+              providerToolName: toolUse.name,
+              argumentsJson: JSON.stringify(toolUse.input ?? {})
+            })),
+            raw: { result, assistantContent: result.content }
+          };
+        },
+        commitToolResults(turn, results) {
+          messages.push({ role: "assistant", content: turn.raw.assistantContent });
+          messages.push({ role: "user", content: resultBlocks(results) });
+        },
+        commitInvalidAnswer(turn, feedback) {
+          messages.push({ role: "assistant", content: turn.raw.assistantContent });
+          messages.push({ role: "user", content: feedback });
+        },
+        commitFeedback(feedback) {
+          messages.push({ role: "user", content: feedback });
+        },
+        attachApprovalContinuation({ turn, completedResults, pendingToolCall, error }) {
+          const continuationMessages: Array<Record<string, unknown>> = [
+            ...messages,
+            { role: "assistant", content: turn.raw.assistantContent }
+          ];
+          const completedBlocks = resultBlocks(completedResults);
+          if (completedBlocks.length) continuationMessages.push({ role: "user", content: completedBlocks });
+          attachProviderContinuation(error, {
+            transport: "anthropic",
+            messages: continuationMessages,
+            pendingToolCall: {
+              id: pendingToolCall.id,
+              providerToolName: pendingToolCall.providerToolName,
+              argumentsJson: pendingToolCall.argumentsJson
+            }
+          });
+        },
+        requestFinalAnswer() {
+          messages.push({
+            role: "user",
+            content: "The requested internal update completed. Return the concise visible answer now in normal prose. Do not call tools."
+          });
+          delete body.tools;
+          delete body.tool_choice;
         }
-      });
-      emitUsage();
-      throw pendingApproval.error;
-    }
-    if (firstError !== undefined) {
-      emitUsage();
-      throw firstError;
-    }
-    const needsContinuation = result.toolUses.some((toolUse) => !options.isTerminalTool?.(toolUse.name));
-    if (!needsContinuation) {
-      // Only sink tools were called: the answer is this turn's streamed prose.
-      return emitAndReturn(result.text.trim() || "Prepared the requested update for your review.");
-    }
-    messages.push({ role: "assistant", content: assistantContent });
-    messages.push({ role: "user", content: toolResults });
+      },
+      validateFinalAnswer: options.validateFinalAnswer
+    });
+    return emitAndReturn(answer);
+  } catch (error) {
+    emitUsage();
+    throw error;
   }
 }
 

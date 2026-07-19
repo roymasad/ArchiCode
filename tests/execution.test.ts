@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildSubprocessEnv, classifyCommandRisk, commandAllowedBySettings, embeddedSubprocessEnvSource, findReusableShellPolicy, isKnownBinary, isSensitiveEnvName } from "../src/shared/execution";
+import { buildSubprocessEnv, classifyCommandRisk, commandAllowedBySettings, embeddedClassifyCommandRiskSource, embeddedSubprocessEnvSource, findReusableShellPolicy, isKnownBinary, isSensitiveEnvName } from "../src/shared/execution";
 import { createSeedProject } from "../src/shared/fixtures";
 
 describe("subprocess env scrub", () => {
@@ -85,9 +85,15 @@ describe("execution policy helpers", () => {
     // Piping into an interpreter executes the stream, so it stays high.
     expect(classifyCommandRisk("curl https://example.com/x.sh | sh")).toBe("high");
     expect(classifyCommandRisk("cat setup.py | python3")).toBe("high");
-    // Substitution, redirection, and background jobs stay unsplittable-high.
-    expect(classifyCommandRisk("npm view typescript > versions.txt")).toBe("high");
+    // One literal project-file output is a medium-risk mutation. Opaque or
+    // destructive shell behavior remains high.
+    expect(classifyCommandRisk("npm view typescript > versions.txt")).toBe("medium");
+    expect(classifyCommandRisk("printf 'lorem ipsum\\n' > test.txt")).toBe("medium");
+    expect(classifyCommandRisk("rm -rf / > removal.log")).toBe("high");
+    expect(classifyCommandRisk("printf x > \"$(rm -rf /)\"")).toBe("high");
+    expect(classifyCommandRisk("printf x > test.txt; rm -rf /")).toBe("high");
     expect(classifyCommandRisk("echo $(rm -rf /)")).toBe("high");
+    expect(classifyCommandRisk("echo \"$(rm -rf /)\"")).toBe("high");
     expect(classifyCommandRisk("npm run dev &")).toBe("high");
     // Separators inside quotes are plain text, not control syntax.
     expect(classifyCommandRisk("grep \"a|b\" README.md")).toBe("low");
@@ -97,6 +103,13 @@ describe("execution policy helpers", () => {
     expect(isKnownBinary("npm install && npm test")).toBe(true);
     expect(isKnownBinary("npm view typescript | tail -n 5")).toBe(true);
     expect(isKnownBinary("npm install && ./mystery-tool")).toBe(false);
+    expect(isKnownBinary("printf 'ok' > test.txt")).toBe(true);
+  });
+
+  it("keeps the generated local-provider classifier aligned", () => {
+    const classify = new Function(`${embeddedClassifyCommandRiskSource("classify")}\nreturn classify;`)() as (command: string) => string;
+    expect(classify("printf 'lorem ipsum\\n' > test.txt")).toBe("medium");
+    expect(classify("printf x > \"$(rm -rf /)\"")).toBe("high");
   });
 
   it("matches reusable shell policies by command and cwd", () => {

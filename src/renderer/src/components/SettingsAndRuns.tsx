@@ -1,5 +1,6 @@
 import { AlertTriangle, Bot, Check, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, FileDiff, GitBranch, Loader2, MessageSquare, MoreHorizontal, MoveUpRight, Terminal } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { ReactNode, WheelEvent as ReactWheelEvent } from "react";
 import type { Artifact, Note, Run } from "@shared/schema";
 import type { ProjectMaintenanceChangedFile } from "@shared/projectMaintenance";
@@ -46,7 +47,18 @@ function hasLiveTrace(run: Run): boolean {
 }
 
 export function SettingsAndRuns({ open, height, onToggleOpen, panelAction, showCollapseControl = true }: SettingsAndRunsProps) {
-  const { bundle, rootPath, selectRun, selectNode, addNote, updateNoteResolved, dismissRunError, setWorkbenchView, refreshProjectFiles, selectProjectFile } = useArchicodeStore();
+  const { bundle, rootPath, selectRun, selectNode, addNote, updateNoteResolved, dismissRunError, setWorkbenchView, refreshProjectFiles, selectProjectFile } = useArchicodeStore(useShallow((state) => ({
+    bundle: state.bundle,
+    rootPath: state.rootPath,
+    selectRun: state.selectRun,
+    selectNode: state.selectNode,
+    addNote: state.addNote,
+    updateNoteResolved: state.updateNoteResolved,
+    dismissRunError: state.dismissRunError,
+    setWorkbenchView: state.setWorkbenchView,
+    refreshProjectFiles: state.refreshProjectFiles,
+    selectProjectFile: state.selectProjectFile
+  })));
   const [activeTab, setActiveTab] = useState(defaultActivityTab);
   const [visibleOptionalTabs, setVisibleOptionalTabs] = useState<string[]>([]);
   const [questionAnswers, setQuestionAnswers] = useState<Record<string, string>>({});
@@ -513,7 +525,7 @@ export function SettingsAndRuns({ open, height, onToggleOpen, panelAction, showC
 }
 
 function ActivityArtifactPreview({ artifacts, empty }: { artifacts: Artifact[]; empty: string }) {
-  const { rootPath } = useArchicodeStore();
+  const rootPath = useArchicodeStore((state) => state.rootPath);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [preview, setPreview] = useState<{ artifactId: string; text: string } | null>(null);
   const [previewError, setPreviewError] = useState<string | null>(null);

@@ -1,5 +1,6 @@
 import { CircleHelp, FileArchive, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { Artifact } from "@shared/schema";
 import { useArchicodeStore } from "../store/useArchicodeStore";
 import { explainArtifactPrompt } from "../utils/explainPrompts";
@@ -11,7 +12,11 @@ type ArtifactBrowserProps = {
 };
 
 export function ArtifactBrowser({ embedded = false }: ArtifactBrowserProps) {
-  const { bundle, rootPath, startScopedResearchChat } = useArchicodeStore();
+  const { bundle, rootPath, startScopedResearchChat } = useArchicodeStore(useShallow((state) => ({
+    bundle: state.bundle,
+    rootPath: state.rootPath,
+    startScopedResearchChat: state.startScopedResearchChat
+  })));
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [typeFilter, setTypeFilter] = useState("all");

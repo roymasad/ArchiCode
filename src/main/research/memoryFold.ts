@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
-import type { ProjectBundle, ProjectSettings, ResearchChatMessage, ResearchChatScope, ResearchChatSession, ResearchGraphChangeResult, ResearchMemory, ResearchMemoryDelta, ResearchOrchestration } from "../../shared/schema";
-import { researchChatSessionSchema, researchGraphChangeSetSchema, researchMemoryDeltaSchema, researchMemorySchema } from "../../shared/schema";
+import type { ProjectBundle, ProjectSettings, ResearchChatMessage, ResearchChatScope, ResearchChatSession, ResearchGoalCheckpointInput, ResearchGoalStartInput, ResearchGraphChangeResult, ResearchMemory, ResearchMemoryDelta, ResearchOrchestration } from "../../shared/schema";
+import { researchChatSessionSchema, researchGoalCheckpointInputSchema, researchGoalStartInputSchema, researchGraphChangeSetSchema, researchMemoryDeltaSchema, researchMemorySchema, researchOrchestrationSchema } from "../../shared/schema";
 import { extractResearchMemoryDelta } from "../../shared/researchExtraction";
 import { researchChangeSetCategory } from "../../shared/researchChangeSetSemantics";
 import { callResearchProvider, researchHistoryWindowStart } from "../providers";
@@ -112,6 +112,7 @@ export function unwrapCapturedMemoryDelta(raw: unknown): unknown {
 export function researchMemoryDeltaHasContent(delta: ResearchMemoryDelta): boolean {
   return Boolean(
     delta.summary?.trim() ||
+    delta.supersedesFactIds.length ||
     delta.decisions.length ||
     delta.todos.length ||
     delta.openQuestions.length ||
@@ -128,9 +129,9 @@ export function researchMemoryDeltaHasContent(delta: ResearchMemoryDelta): boole
 }
 
 /**
- * Applies memory only when the model explicitly calls update_memory. Omitting
- * the tool is the model's structured decision that this turn has no durable
- * state worth carrying forward; the harness never infers or synthesizes one.
+ * Applies an optional semantic memory delta supplied by the model. Observable
+ * continuity is folded separately from persisted host events, so omitting this
+ * tool is ordinary completion rather than a missing bookkeeping decision.
  */
 export function applyResearchTurnMemory(
   session: ResearchChatSession,
@@ -162,6 +163,44 @@ export function applyResearchTurnMemory(
   });
 }
 
+/**
+ * Fold host-observed facts into memory without asking the model to perform a
+ * bookkeeping tool call. The transcript remains the semantic source; this
+ * fold records only facts the host can prove from persisted turn state.
+ */
+export function applyHostObservedResearchMemory(
+  session: ResearchChatSession,
+  turn: ResearchMemoryTurnInput
+): ResearchChatSession {
+  const sourceMessageIds = [turn.userMessage.id, turn.assistantMessage.id];
+  const terminalRuns = turn.assistantMessage.subagentRuns.filter((run) =>
+    run.status === "completed" || run.status === "failed" || run.status === "blocked" || run.status === "rejected");
+  const delta = researchMemoryDeltaSchema.parse({
+    summary: session.summary || session.memory.summary,
+    runRefs: terminalRuns.map((run) => ({
+      runId: run.id,
+      title: run.title,
+      status: run.status,
+      note: run.resultSummary ?? run.error ?? `${run.kind} finished with status ${run.status}.`,
+      sourceMessageIds
+    })),
+    debugFindings: terminalRuns
+      .filter((run) => run.status === "failed" || run.status === "blocked")
+      .map((run) => ({
+        text: `${run.title}: ${run.error ?? run.resultSummary ?? run.status}`,
+        sourceMessageIds
+      }))
+  });
+  if (!researchMemoryDeltaHasContent(delta)) return session;
+  const memory = applyResearchMemoryDelta(session.memory, delta, iso());
+  return researchChatSessionSchema.parse({
+    ...session,
+    memory,
+    summary: memory.summary || session.summary,
+    updatedAt: iso()
+  });
+}
+
 export async function requestResearchMemoryDelta(
   provider: ResearchProvider,
   session: ResearchChatSession,
@@ -175,6 +214,7 @@ export async function requestResearchMemoryDelta(
     "{",
     "  \"researchMemoryDelta\": {",
     "    \"summary\": string,",
+    "    \"supersedesFactIds\": string[],",
     "    \"decisions\": [{ \"text\": string, \"sourceMessageIds\": string[] }],",
     "    \"todos\": [{ \"title\": string, \"status\": \"open\" | \"awaiting-approval\" | \"doing\" | \"blocked\" | \"done\" | \"cancelled\", \"notes\": string, \"sourceMessageIds\": string[] }],",
     "    \"openQuestions\": [{ \"question\": string, \"status\": \"open\" | \"answered\" | \"resolved\", \"answer\": string, \"sourceMessageIds\": string[] }],",
@@ -189,7 +229,7 @@ export async function requestResearchMemoryDelta(
     "    \"debugFindings\": [{ \"text\": string, \"sourceMessageIds\": string[] }]",
     "  }",
     "}",
-    "All fields inside researchMemoryDelta are optional, but use arrays for collection fields. Do not use raw string arrays. In graphRefs, omit flowId, subflowId, or nodeId when that identifier does not apply; never emit null placeholders.",
+    "All fields inside researchMemoryDelta are optional, but use arrays for collection fields. Do not use raw string arrays except supersedesFactIds. In graphRefs, omit flowId, subflowId, or nodeId when that identifier does not apply; never emit null placeholders.",
     "Valid memory update example:",
     "{",
     "  \"researchMemoryDelta\": {",
@@ -204,6 +244,7 @@ export async function requestResearchMemoryDelta(
     "Return only a JSON object shaped as { \"researchMemoryDelta\": { ... } }.",
     memoryDeltaJsonContract,
     "Capture durable decisions, todos, open questions, links, facts, assumptions, graph/run/file/artifact/image references, and debug findings.",
+    "When conclusive new evidence contradicts or makes an existing currentMemory fact obsolete, list that fact's exact id in supersedesFactIds and add the corrected fact. Never keep mutually contradictory facts active.",
     "When project files, artifacts, screenshots, or images were read or inspected, capture concise durable findings plus fileRefs, artifactRefs, or imageRefs; do not copy raw file dumps or image data into memory.",
     "The researchMemoryDelta.summary field is the long-term compass for future research turns: write concise cumulative meeting notes about what has been discussed so far, ordered chronologically where useful.",
     "When writing summary, preserve important existing currentMemory.summary content and revise it with new durable information, including what the user asked or directed, what Archi answered or clarified, decisions/current direction, unresolved questions, and next likely focus.",
@@ -258,8 +299,26 @@ export function formatResearchMemoryForPrompt(memory: ResearchMemory): string {
 
 export function formatResearchOrchestrationForPrompt(orchestration: ResearchOrchestration): string {
   const activeTodos = orchestration.todos.filter((todo) => todo.status !== "done" && todo.status !== "cancelled");
-  if (!activeTodos.length) return "";
+  const goal = orchestration.goal;
+  if (!activeTodos.length && !goal) return "";
   return JSON.stringify({
+    goal: goal ? {
+      id: goal.id,
+      objective: goal.objective,
+      successCriteria: goal.successCriteria,
+      status: goal.status,
+      currentStepId: goal.currentStepId,
+      checkpointSummary: goal.checkpointSummary,
+      blockers: goal.blockers,
+      waitingFor: goal.waitingFor,
+      steps: goal.steps.map((step) => ({
+        id: step.id,
+        title: step.title,
+        status: step.status,
+        notes: step.notes,
+        evidence: step.evidence
+      }))
+    } : undefined,
     todos: activeTodos.map((todo) => ({
       title: todo.title,
       status: todo.status,
@@ -270,6 +329,125 @@ export function formatResearchOrchestrationForPrompt(orchestration: ResearchOrch
     })),
     updatedAt: orchestration.updatedAt
   }, null, 2);
+}
+
+function uniqueGoalStepId(preferred: string | undefined, index: number, used: Set<string>): string {
+  const base = (preferred?.trim() || `step-${index + 1}`)
+    .replace(/[^a-zA-Z0-9_-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60) || `step-${index + 1}`;
+  let candidate = base;
+  let suffix = 2;
+  while (used.has(candidate)) candidate = `${base}-${suffix++}`;
+  used.add(candidate);
+  return candidate;
+}
+
+export function startResearchGoal(
+  orchestration: ResearchOrchestration,
+  rawInput: ResearchGoalStartInput,
+  updatedAt: string
+): ResearchOrchestration {
+  const input = researchGoalStartInputSchema.parse(rawInput);
+  const usedIds = new Set<string>();
+  const steps = input.steps.map((step, index) => ({
+    id: uniqueGoalStepId(step.id, index, usedIds),
+    title: step.title,
+    status: index === 0 ? "doing" as const : "open" as const,
+    evidence: [],
+    createdAt: updatedAt,
+    updatedAt
+  }));
+  return researchOrchestrationSchema.parse({
+    ...orchestration,
+    goal: {
+      id: id("research-goal"),
+      objective: input.objective,
+      successCriteria: input.successCriteria,
+      status: "active",
+      steps,
+      currentStepId: steps[0]?.id,
+      checkpointSummary: input.summary,
+      completionEvidence: [],
+      blockers: [],
+      waitingFor: [],
+      createdAt: updatedAt,
+      updatedAt
+    },
+    updatedAt
+  });
+}
+
+export function checkpointResearchGoal(
+  orchestration: ResearchOrchestration,
+  rawInput: ResearchGoalCheckpointInput,
+  updatedAt: string
+): ResearchOrchestration {
+  const input = researchGoalCheckpointInputSchema.parse(rawInput);
+  const goal = orchestration.goal;
+  if (!goal || goal.status === "completed" || goal.status === "cancelled") {
+    throw new Error("There is no active durable goal to checkpoint.");
+  }
+  const updates = new Map(input.stepUpdates.map((update) => [update.id, update]));
+  for (const stepId of updates.keys()) {
+    if (!goal.steps.some((step) => step.id === stepId)) {
+      throw new Error(`Goal step ${stepId} was not found.`);
+    }
+  }
+  const steps = goal.steps.map((step) => {
+    const update = updates.get(step.id);
+    if (!update) return step;
+    return {
+      ...step,
+      status: update.status,
+      notes: update.notes ?? step.notes,
+      evidence: [...new Set([...step.evidence, ...update.evidence])],
+      updatedAt
+    };
+  });
+  const currentStepId = input.status === "completed" || input.status === "cancelled" || input.currentStepId === null
+    ? undefined
+    : input.currentStepId ?? goal.currentStepId;
+  if (currentStepId && !steps.some((step) => step.id === currentStepId)) {
+    throw new Error(`Current goal step ${currentStepId} was not found.`);
+  }
+  if (input.status === "completed") {
+    const unfinished = steps.filter((step) => step.status !== "done" && step.status !== "cancelled");
+    if (unfinished.length) {
+      throw new Error(`Goal cannot be completed while steps remain unfinished: ${unfinished.map((step) => step.id).join(", ")}.`);
+    }
+    if (!input.evidence.length && !steps.some((step) => step.evidence.length)) {
+      throw new Error("Goal completion requires concrete evidence.");
+    }
+  }
+  if (input.status === "waiting" && !input.waitingFor.length) {
+    throw new Error("A waiting goal checkpoint must identify the run, runtime, subagent, or approval event it is waiting for.");
+  }
+  if (input.status === "waiting" && input.waitingFor.some((reference) => !reference.id)) {
+    throw new Error("A waiting goal checkpoint requires the exact id of every external event.");
+  }
+  if (input.status === "blocked" && !input.blockers.length) {
+    throw new Error("A blocked goal checkpoint must include a concrete blocker.");
+  }
+  const status = input.status === "continue" ? "active" : input.status;
+  return researchOrchestrationSchema.parse({
+    ...orchestration,
+    goal: {
+      ...goal,
+      status,
+      steps,
+      currentStepId,
+      checkpointSummary: input.summary,
+      completionEvidence: input.status === "completed"
+        ? [...new Set([...goal.completionEvidence, ...input.evidence])]
+        : goal.completionEvidence,
+      blockers: input.blockers,
+      waitingFor: input.waitingFor,
+      updatedAt,
+      completedAt: input.status === "completed" ? updatedAt : undefined
+    },
+    updatedAt
+  });
 }
 
 export function trackResearchChangeSetTodo(
@@ -298,6 +476,7 @@ export function trackResearchChangeSetTodo(
     ? orchestration.todos.map((item, index) => index === existingIndex ? todo : item)
     : [...orchestration.todos, todo];
   return {
+    ...orchestration,
     todos: todos.slice(-RESEARCH_ORCHESTRATION_TODO_LIMIT),
     updatedAt
   };
@@ -317,6 +496,7 @@ export function reviewResearchChangeSetTodo(
   const status = failed ? "blocked" : applied ? "done" : "cancelled";
   const notes = `${applied} applied, ${rejected} rejected, ${failed} failed.`;
   return {
+    ...orchestration,
     todos: orchestration.todos.map((todo, index) => index === existingIndex
       ? { ...todo, status, notes, updatedAt }
       : todo),
@@ -330,6 +510,7 @@ export function applyResearchMemoryDelta(
   updatedAt: string,
   lastCompactedMessageId?: string
 ): ResearchMemory {
+  const supersededFactIds = new Set(delta.supersedesFactIds);
   return researchMemorySchema.parse({
     ...memory,
     summary: mergeMemorySummary(memory.summary, delta.summary),
@@ -337,7 +518,7 @@ export function applyResearchMemoryDelta(
     todos: mergeTodoMemory(memory.todos, delta.todos, updatedAt, RESEARCH_MEMORY_TEXT_LIMIT),
     openQuestions: mergeQuestionMemory(memory.openQuestions, delta.openQuestions, updatedAt, RESEARCH_MEMORY_TEXT_LIMIT),
     links: mergeLinkMemory(memory.links, delta.links, updatedAt, RESEARCH_MEMORY_LINK_LIMIT),
-    facts: mergeTextMemory(memory.facts, delta.facts, "fact", updatedAt, RESEARCH_MEMORY_TEXT_LIMIT),
+    facts: mergeTextMemory(memory.facts.filter((fact) => !supersededFactIds.has(fact.id)), delta.facts, "fact", updatedAt, RESEARCH_MEMORY_TEXT_LIMIT),
     assumptions: mergeTextMemory(memory.assumptions, delta.assumptions, "assumption", updatedAt, RESEARCH_MEMORY_TEXT_LIMIT),
     graphRefs: mergeGraphRefMemory(memory.graphRefs, delta.graphRefs, updatedAt, RESEARCH_MEMORY_REF_LIMIT),
     runRefs: mergeRunRefMemory(memory.runRefs, delta.runRefs, updatedAt, RESEARCH_MEMORY_REF_LIMIT),

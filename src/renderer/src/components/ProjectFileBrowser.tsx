@@ -1,5 +1,6 @@
 import { Check, ChevronDown, ChevronRight, CircleHelp, ExternalLink, FileCode2, FileDiff, Folder, FolderOpen, Loader2, Maximize2, Minimize2, Palette, RefreshCw, Search, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { GitFileStatus, ProjectFileTreeNode } from "@shared/projectTools";
 import { useArchicodeStore } from "../store/useArchicodeStore";
 import { explainFilePrompt } from "../utils/explainPrompts";
@@ -287,7 +288,19 @@ export function ProjectFileBrowser({ expanded = false, onToggleExpanded }: { exp
     refreshProjectFiles,
     selectProjectFile,
     startScopedResearchChat
-  } = useArchicodeStore();
+  } = useArchicodeStore(useShallow((state) => ({
+    rootPath: state.rootPath,
+    bundle: state.bundle,
+    fileBrowser: state.fileBrowser,
+    filePreviewRequest: state.filePreviewRequest,
+    filePreview: state.filePreview,
+    fileDiff: state.fileDiff,
+    fileBusy: state.fileBusy,
+    selectedFilePath: state.selectedFilePath,
+    refreshProjectFiles: state.refreshProjectFiles,
+    selectProjectFile: state.selectProjectFile,
+    startScopedResearchChat: state.startScopedResearchChat
+  })));
   const [previewTab, setPreviewTab] = useState("preview");
   const [searchQuery, setSearchQuery] = useState("");
   const [activeSearchMatchIndex, setActiveSearchMatchIndex] = useState(0);

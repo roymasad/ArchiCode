@@ -137,7 +137,8 @@ export const agentToolSettingsSchema = z.object({
   subagents: z.object({
     mergeConflictResolution: z.boolean().default(true),
     graphReconciliation: z.boolean().default(true),
-    sherlockResearch: z.boolean().default(true)
+    sherlockResearch: z.boolean().default(true),
+    delphiTesting: z.boolean().default(true)
   }).optional()
 }).default({
   projectFiles: true,
@@ -146,7 +147,8 @@ export const agentToolSettingsSchema = z.object({
   subagents: {
     mergeConflictResolution: true,
     graphReconciliation: true,
-    sherlockResearch: true
+    sherlockResearch: true,
+    delphiTesting: true
   }
 });
 
@@ -705,14 +707,15 @@ export const phaseModelPoliciesSchema = z.object({
 
 export const defaultPhaseModelPolicies = phaseModelPoliciesSchema.parse({});
 
-export const subagentModelProfileSchema = z.enum(["picasso", "sherlock", "solomon"]);
+export const subagentModelProfileSchema = z.enum(["picasso", "sherlock", "solomon", "delphi"]);
 
 export const subagentModelPoliciesSchema = z.object({
   // Match the previous shared Research policy by default. These become
   // independent only when the user customizes a subagent card.
   picasso: phaseModelPolicySchema.default({ temperature: 0.6, reasoningMode: "medium", maxOutputTokens: 32000 }),
   sherlock: phaseModelPolicySchema.default({ temperature: 0.6, reasoningMode: "high", maxOutputTokens: 32000 }),
-  solomon: phaseModelPolicySchema.default({ temperature: 0.6, reasoningMode: "medium", maxOutputTokens: 32000 })
+  solomon: phaseModelPolicySchema.default({ temperature: 0.6, reasoningMode: "medium", maxOutputTokens: 32000 }),
+  delphi: phaseModelPolicySchema.default({ temperature: 0.1, reasoningMode: "high", maxOutputTokens: 32000 })
 });
 
 export const defaultSubagentModelPolicies = subagentModelPoliciesSchema.parse({});
@@ -751,6 +754,7 @@ export const llmUsageSchema = z.object({
   thinkingTokens: z.number().int().nonnegative().optional(),
   cacheReadTokens: z.number().int().nonnegative().optional(),
   cacheCreationTokens: z.number().int().nonnegative().optional(),
+  reasoningReplayState: z.enum(["received", "absent", "mixed"]).optional(),
   calls: z.number().int().positive().default(1),
   estimated: z.boolean().optional(),
   unavailable: z.boolean().optional(),
@@ -843,6 +847,7 @@ export const runTargetProfileSchema = z.object({
   buildCommand: z.string().optional(),
   testCommand: z.string().optional(),
   stopCommand: z.string().optional(),
+  targetStopCommand: z.string().optional(),
   healthCommand: z.string().optional(),
   url: z.string().optional(),
   ports: z.array(z.number().int().positive().max(65535)).optional(),
@@ -859,6 +864,7 @@ export const runTargetProfileSchema = z.object({
   readyPattern: z.string().optional(),
   notReadyPattern: z.string().optional(),
   readyTargetPattern: z.string().optional(),
+  runtimeReadyPattern: z.string().optional(),
   diagnosticCommands: z.array(z.string()).default([]),
   recoveryCommands: z.array(z.string()).default([]),
   retryAfterRecovery: z.boolean().default(true),
@@ -884,6 +890,9 @@ export const runtimeServiceSchema = z.object({
   relativeCwd: z.string().default(""),
   pid: z.number().int().positive().optional(),
   url: z.string().optional(),
+  targetId: z.string().optional(),
+  runTargetId: z.string().optional(),
+  targetStartedByService: z.boolean().optional(),
   ports: z.array(z.number().int().positive().max(65535)).default([]),
   startedAt: z.string().optional(),
   stoppedAt: z.string().optional(),
@@ -1303,7 +1312,8 @@ export const microRunKindSchema = z.enum([
   "merge-resolution",
   "graph-reconciliation",
   "test-authoring",
-  "sherlock-research"
+  "sherlock-research",
+  "delphi-testing"
 ]);
 export type MicroRunKind = z.infer<typeof microRunKindSchema>;
 
@@ -1313,7 +1323,7 @@ export type MicroRunStatus = z.infer<typeof microRunStatusSchema>;
 // Tracks one subagent invocation as a standalone activity card in the chat,
 // independent of the generic mcpToolCalls list (which is not distinctive
 // enough for a subagent that can run for tens of minutes and write files).
-export const subagentRunStatusSchema = z.enum(["awaiting-approval", "running", "completed", "failed", "rejected"]);
+export const subagentRunStatusSchema = z.enum(["awaiting-approval", "running", "completed", "blocked", "failed", "rejected"]);
 export type SubagentRunStatus = z.infer<typeof subagentRunStatusSchema>;
 
 export const subagentRunSchema = z.object({
@@ -1330,9 +1340,45 @@ export const subagentRunSchema = z.object({
   // Why this subagent is being proposed. For graph reconciliation this should
   // explain the concrete stale-graph risk that was detected.
   reviewReason: z.string().optional(),
+  // When Delphi finds several compatible Run App profiles and the user did
+  // not name one, the approval card becomes an explicit multi-select target
+  // choice. Approving that card authorizes the selected set as one audit.
+  runtimeTargetSelection: z.object({
+    options: z.array(z.object({
+      profileId: z.string(),
+      label: z.string(),
+      kind: z.string(),
+      targetRequired: z.boolean().default(false),
+      defaultTargetId: z.string().optional()
+    })).min(2),
+    minSelections: z.number().int().positive().default(1),
+    allowMultiple: z.boolean().default(true)
+  }).optional(),
+  selectedRuntimeTargetProfileIds: z.array(z.string()).optional(),
+  // Corrective Delphi retries can inherit approval only after the host proves
+  // their finite commands and target lifecycle match a prior approved run.
+  approvalInheritedFromRunId: z.string().optional(),
+  approvedRuntimeCommands: z.array(z.string()).optional(),
+  approvedRuntimeCleanupCommands: z.array(z.string()).optional(),
+  // Capability of the exact effective model selected for this Delphi run.
+  // The renderer uses this to distinguish pending visual inspection from a
+  // terminal/non-vision "not inspected" result while evidence streams in.
+  imageInputSupport: z.enum(["supported", "unsupported", "unknown"]).optional(),
   progress: z.array(z.string()).default([]),
+  // Runtime evidence captured independently of the model-authored summary.
+  // Delphi uses this to keep screenshots observable in the chat card even if
+  // the final model response forgets to repeat a tool artifact.
+  artifacts: z.array(z.object({
+    id: z.string(),
+    label: z.string(),
+    path: z.string(),
+    mediaType: z.string()
+  })).optional(),
   resultSummary: z.string().optional(),
   error: z.string().optional(),
+  // Terminal cause is kept separate from the backward-compatible `failed`
+  // state so the UI can distinguish a provider timeout from a failed audit.
+  failureKind: z.enum(["timeout", "error"]).optional(),
   // Aggregated LLM cost/usage for this subagent's own multi-turn LLM session.
   usage: llmUsageSchema.optional(),
   // Bounded, secret-redacted completion diagnostics. These make provider/model
@@ -1343,7 +1389,8 @@ export const subagentRunSchema = z.object({
     responseTruncated: z.boolean().optional(),
     repairAttempted: z.boolean().optional(),
     validationErrors: z.array(z.string()).optional(),
-    toolCallNames: z.array(z.string()).optional()
+    toolCallNames: z.array(z.string()).optional(),
+    visuallyAnalyzedArtifactIds: z.array(z.string()).optional()
   }).optional(),
   createdAt: z.string(),
   updatedAt: z.string()
@@ -1442,6 +1489,94 @@ export const sherlockResearchOutputSchema = z.object({
   recommendedNextSteps: z.array(z.string()).default([])
 });
 export type SherlockResearchOutput = z.infer<typeof sherlockResearchOutputSchema>;
+
+export const delphiTestPlatformSchema = z.enum(["web", "electron", "flutter", "android", "ios", "generic"]);
+export type DelphiTestPlatform = z.infer<typeof delphiTestPlatformSchema>;
+
+export const delphiTestingInputSchema = z.object({
+  objective: z.string().min(1),
+  mode: z.enum(["plan", "audit", "retest", "setup"]).default("audit"),
+  scope: z.string().optional(),
+  codePaths: z.array(z.string()).default([]),
+  platforms: z.array(delphiTestPlatformSchema).default([]),
+  observation: z.object({
+    mode: z.enum(["visible", "headless"]).default("visible"),
+    capture: z.enum(["key-steps", "final", "none"]).default("key-steps")
+  }).default({ mode: "visible", capture: "key-steps" }),
+  target: z.object({
+    profileId: z.string().optional(),
+    deviceId: z.string().optional(),
+    baseUrl: z.string().optional(),
+    appiumServerUrl: z.string().optional(),
+    appiumSessionId: z.string().optional(),
+    launch: z.enum(["never", "if-needed"]).default("never"),
+    cleanup: z.enum(["stop-if-started", "keep-running"]).default("stop-if-started")
+  }).optional(),
+  setup: z.object({
+    adapters: z.array(z.enum(["playwright", "appium"])).min(1),
+    playwrightBrowsers: z.array(z.enum(["chromium", "firefox", "webkit"])).default(["chromium"]),
+    appiumDrivers: z.array(z.enum(["uiautomator2", "xcuitest"])).default([]),
+    resumeMode: z.enum(["audit", "retest"]).default("audit")
+  }).optional(),
+  acceptanceCriteria: z.array(z.string()).default([]),
+  commands: z.array(z.string().min(1)).max(20).default([]),
+  commandReview: z.object({
+    details: z.array(z.object({
+      command: z.string(),
+      source: z.enum(["requested", "discovered"]),
+      definition: z.string().optional()
+    })).max(20).default([]),
+    omittedDiscoveredCount: z.number().int().nonnegative().default(0)
+  }).optional(),
+  maxAttempts: z.number().int().min(1).max(5).default(5)
+});
+export type DelphiTestingInput = z.infer<typeof delphiTestingInputSchema>;
+
+export const delphiToolchainPlanSchema = z.object({
+  adapter: z.enum(["playwright", "flutter-integration-test", "appium", "project-native", "generic"]),
+  status: z.enum(["ready", "missing", "unsupported"]),
+  evidence: z.array(z.string()).default([]),
+  installPlan: z.object({
+    scope: z.enum(["managed-cache", "project", "system"]),
+    packages: z.array(z.string()).default([]),
+    actions: z.array(z.string()).default([]),
+    requiresApproval: z.literal(true).default(true)
+  }).optional()
+});
+export type DelphiToolchainPlan = z.infer<typeof delphiToolchainPlanSchema>;
+
+export const delphiTestingOutputSchema = z.object({
+  status: z.enum(["completed", "blocked", "needs-setup"]),
+  verdict: z.enum(["passed", "failed", "blocked", "not-run"]),
+  summary: z.string(),
+  attempts: z.number().int().nonnegative().default(0),
+  checks: z.array(z.object({
+    name: z.string(),
+    status: z.enum(["passed", "failed", "blocked", "skipped"]),
+    command: z.string().optional(),
+    durationMs: z.number().int().nonnegative().optional(),
+    outputSummary: z.string().optional(),
+    evidence: z.array(z.string()).default([])
+  })).default([]),
+  findings: z.array(z.object({
+    title: z.string(),
+    severity: z.enum(["info", "low", "medium", "high", "critical"]),
+    category: z.enum(["functional", "visual", "accessibility", "performance", "compatibility", "tooling", "other"]),
+    detail: z.string(),
+    reproductionSteps: z.array(z.string()).default([]),
+    evidence: z.array(z.string()).default([])
+  })).default([]),
+  toolchains: z.array(delphiToolchainPlanSchema).default([]),
+  artifacts: z.array(z.object({
+    id: z.string().optional(),
+    label: z.string(),
+    path: z.string(),
+    mediaType: z.string().optional()
+  })).default([]),
+  blockers: z.array(z.string()).default([]),
+  recommendedNextSteps: z.array(z.string()).default([])
+});
+export type DelphiTestingOutput = z.infer<typeof delphiTestingOutputSchema>;
 
 export const picassoGraphInputSchema = graphReconciliationInputSchema.extend({
   objective: z.string().min(1),
@@ -1908,6 +2043,14 @@ export const researchGraphOperationSchema = z.discriminatedUnion("kind", [
     reusableApproval: z.boolean().default(false)
   }),
   z.object({
+    kind: z.literal("stop-runtime-service"),
+    serviceId: z.string().min(1)
+  }),
+  z.object({
+    kind: z.literal("restart-runtime-service"),
+    serviceId: z.string().min(1)
+  }),
+  z.object({
     kind: z.literal("retry-run"),
     runId: z.string(),
     guidance: runGuidanceSchema.optional()
@@ -2123,7 +2266,76 @@ const researchOrchestrationTodoSchema = z.object({
   updatedAt: z.string().optional()
 });
 
+export const researchGoalStepStatusSchema = z.enum([
+  "open",
+  "doing",
+  "awaiting-approval",
+  "waiting",
+  "blocked",
+  "done",
+  "cancelled"
+]);
+
+const researchGoalWaitRefSchema = z.object({
+  kind: z.enum(["approval", "subagent", "run", "runtime"]),
+  id: z.string().trim().min(1).optional(),
+  label: z.string().trim().min(1).optional()
+});
+
+const researchGoalStepSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  status: researchGoalStepStatusSchema.default("open"),
+  notes: z.string().optional(),
+  evidence: z.array(z.string()).default([]),
+  createdAt: z.string(),
+  updatedAt: z.string().optional()
+});
+
+export const researchGoalSchema = z.object({
+  id: z.string(),
+  objective: z.string(),
+  successCriteria: z.array(z.string()).default([]),
+  status: z.enum(["active", "awaiting-approval", "waiting", "blocked", "completed", "cancelled"]).default("active"),
+  steps: z.array(researchGoalStepSchema).default([]),
+  currentStepId: z.string().optional(),
+  checkpointSummary: z.string().optional(),
+  completionEvidence: z.array(z.string()).default([]),
+  blockers: z.array(z.string()).default([]),
+  waitingFor: z.array(researchGoalWaitRefSchema).default([]),
+  continuationCount: z.number().int().nonnegative().default(0),
+  createdAt: z.string(),
+  updatedAt: z.string(),
+  completedAt: z.string().optional()
+});
+
+export const researchGoalStartInputSchema = z.object({
+  objective: z.string().trim().min(1),
+  successCriteria: z.array(z.string().trim().min(1)).min(1),
+  steps: z.array(z.object({
+    id: z.string().trim().min(1).optional(),
+    title: z.string().trim().min(1)
+  })).min(1),
+  summary: z.string().trim().min(1).optional()
+});
+
+export const researchGoalCheckpointInputSchema = z.object({
+  status: z.enum(["continue", "awaiting-approval", "waiting", "blocked", "completed", "cancelled"]),
+  summary: z.string().trim().min(1),
+  currentStepId: z.string().trim().min(1).nullable().optional(),
+  stepUpdates: z.array(z.object({
+    id: z.string().trim().min(1),
+    status: researchGoalStepStatusSchema,
+    notes: z.string().trim().min(1).optional(),
+    evidence: z.array(z.string().trim().min(1)).default([])
+  })).default([]),
+  evidence: z.array(z.string().trim().min(1)).default([]),
+  blockers: z.array(z.string().trim().min(1)).default([]),
+  waitingFor: z.array(researchGoalWaitRefSchema).default([])
+});
+
 export const researchOrchestrationSchema = z.object({
+  goal: researchGoalSchema.optional(),
   todos: z.array(researchOrchestrationTodoSchema).default([]),
   updatedAt: z.string().default("")
 }).default({
@@ -2138,6 +2350,7 @@ const researchMemoryDeltaTextRecordSchema = researchMemoryTextRecordSchema.omit(
 
 export const researchMemoryDeltaSchema = z.object({
   summary: z.string().optional(),
+  supersedesFactIds: z.array(z.string().trim().min(1)).default([]),
   decisions: z.array(researchMemoryDeltaTextRecordSchema).default([]),
   todos: z.array(researchMemoryTodoSchema.omit({ id: true, createdAt: true }).extend({
     id: z.string().optional(),
@@ -2238,6 +2451,10 @@ export const researchChatMessageSchema = z.object({
     argumentsJson: z.string().optional(),
     originalContent: z.string(),
     filePaths: z.array(z.string()).default([]),
+    // Approval cards can be raised while the host is privately resuming a
+    // durable goal. Preserve that provenance so the approval decision resumes
+    // the private turn instead of presenting its host prompt as user speech.
+    internalContinuation: z.boolean().optional(),
     // Persisted provider conversation state so an approved tool can be resumed
     // without re-generating the assistant work that preceded the approval. When
     // absent (or stale/oversized), the turn falls back to replay.
@@ -2394,6 +2611,9 @@ export type ResearchGraphChangeSet = z.infer<typeof researchGraphChangeSetSchema
 export type ResearchGraphOperation = z.infer<typeof researchGraphOperationSchema>;
 export type ResearchMemory = z.infer<typeof researchMemorySchema>;
 export type ResearchMemoryDelta = z.infer<typeof researchMemoryDeltaSchema>;
+export type ResearchGoal = z.infer<typeof researchGoalSchema>;
+export type ResearchGoalStartInput = z.input<typeof researchGoalStartInputSchema>;
+export type ResearchGoalCheckpointInput = z.input<typeof researchGoalCheckpointInputSchema>;
 export type ResearchOrchestration = z.infer<typeof researchOrchestrationSchema>;
 export type ResearchChatMessage = z.infer<typeof researchChatMessageSchema>;
 export type ResearchChatSession = z.infer<typeof researchChatSessionSchema>;

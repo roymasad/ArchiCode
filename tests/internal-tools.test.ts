@@ -476,22 +476,25 @@ describe("ArchiCode internal provider tools", () => {
     expect(preview).not.toBe("**Decision: proceed**\n\n```json\n{\"archicodePatch\":{\"summary\":\"Generated plan summary.\"}}\n```");
   });
 
-  it("runs low-risk finite console commands and rejects runtime commands", async () => {
+  it("runs low-risk commands and routes an unapproved runtime action through the shared broker", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-internal-console-"));
-    const settings = (await ensureProject(projectRoot)).project.settings;
+    const settings = {
+      ...(await ensureProject(projectRoot)).project.settings,
+      autoApproveShellCommands: false
+    };
 
     const ok = await runInternalConsoleCommand(projectRoot, settings, {
       command: "git --version",
       cwd: projectRoot
     });
-    const rejected = await runInternalConsoleCommand(projectRoot, settings, {
+    const gated = await runInternalConsoleCommand(projectRoot, settings, {
       command: "npm run dev"
     });
 
     expect(ok.status).toBe("succeeded");
     expect(ok.cwd).toBe(".");
     expect(ok.stdout).toContain("git version");
-    expect(rejected.status).toBe("rejected");
+    expect(gated.status).toBe("approval-required");
   });
 
   it("requires approval for strengthened medium and high risk console commands", async () => {

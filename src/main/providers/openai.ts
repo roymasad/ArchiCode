@@ -1,6 +1,7 @@
 import type { LlmPhase, PhaseModelPolicy, ProjectSettings } from "../../shared/schema";
 import type { ProviderMcpTool } from "../mcp";
-import { type Provider, type ProviderCallOptions, type ProviderImageAttachment, type RawLlmUsage, type ResearchProviderContinuation, type ResearchProviderOptions, appendTextAttachmentBlock, applyOpenRouterSessionId, createConsecutiveToolCallLoopDetector, createUsageAccumulator, extractContextWindowFromModels, extractModelCapabilitiesFromModels, extractModelIdsFromModels, extractionSystemPrompt, imageAttachmentsForPrompt, imageLabelText, inferModelCapabilityProfile, isOpenRouterProvider, orchestratorSystemPrompt, orchestratorUserPromptParts, orchestratorUserPromptText, phasePolicyText, reasoningEffort, researchCurrentMessageText, researchHistoryThread, researchStableContextText, researchSystemInstructions, resolveModelId } from "../providers";
+import { type Provider, type ProviderCallOptions, type ProviderImageAttachment, type RawLlmUsage, type ResearchProviderContinuation, type ResearchProviderOptions, appendTextAttachmentBlock, applyOpenRouterSessionId, createUsageAccumulator, extractContextWindowFromModels, extractModelCapabilitiesFromModels, extractModelIdsFromModels, extractionSystemPrompt, imageAttachmentsForPrompt, imageLabelText, inferModelCapabilityProfile, isOpenRouterProvider, orchestratorSystemPrompt, orchestratorUserPromptParts, orchestratorUserPromptText, phasePolicyText, reasoningEffort, researchCurrentMessageText, researchHistoryThread, researchStableContextText, researchSystemInstructions, resolveModelId } from "../providers";
+import { runAgentLoop, type AgentToolResult } from "../agentRuntime";
 import { attachProviderContinuation } from "./anthropic";
 
 export const openAiHealthProbeMaxOutputTokens = 16;
@@ -22,6 +23,30 @@ export function extractOpenAIChatUsage(usage: {
     cacheReadTokens: cached || undefined,
     cacheCreationTokens: 0
   };
+}
+
+export type OpenAIChatReasoningState = {
+  reasoning?: string;
+  reasoning_content?: string;
+  reasoning_details?: unknown[];
+};
+
+function openAIChatReasoningFields(message: OpenAIChatReasoningState | undefined): OpenAIChatReasoningState {
+  if (!message) return {};
+  return {
+    ...(message.reasoning !== undefined ? { reasoning: message.reasoning } : {}),
+    ...(message.reasoning_content !== undefined ? { reasoning_content: message.reasoning_content } : {}),
+    ...(message.reasoning_details !== undefined ? { reasoning_details: message.reasoning_details } : {})
+  };
+}
+
+function openAIChatReasoningReplayState(message: OpenAIChatReasoningState | undefined): RawLlmUsage["reasoningReplayState"] {
+  if (!message) return "absent";
+  return (
+    (typeof message.reasoning === "string" && message.reasoning.length > 0) ||
+    (typeof message.reasoning_content === "string" && message.reasoning_content.length > 0) ||
+    (Array.isArray(message.reasoning_details) && message.reasoning_details.length > 0)
+  ) ? "received" : "absent";
 }
 
 export function extractOpenAIResponsesUsage(usage: {
@@ -66,6 +91,10 @@ export type OpenAiResponsesPayload = {
     output_tokens_details?: { reasoning_tokens?: number };
   };
 };
+
+function openAIResponsesReasoningReplayState(payload: OpenAiResponsesPayload): RawLlmUsage["reasoningReplayState"] {
+  return (payload.output ?? []).some((item) => item.type === "reasoning") ? "received" : "absent";
+}
 
 export function openAiEndpointMode(provider: Provider): OpenAiEndpointMode {
   if (provider.openAiEndpointMode === "responses" || provider.openAiEndpointMode === "chat-completions") return provider.openAiEndpointMode;
@@ -215,27 +244,14 @@ export async function callOpenAIChatCompatible(
       body.tools = tools;
       delete body.reasoning_effort;
     }
-    const toolLoopDetector = createConsecutiveToolCallLoopDetector();
-    while (true) {
-      const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${apiKey}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(body),
-        signal: options.signal
-      });
-
-      if (!response.ok) {
-        throw new Error(`OpenAI-compatible provider failed with ${response.status}: ${await response.text()}`);
-      }
-
-      const payload = await response.json() as {
+    type OpenAIProviderPayload = {
         choices?: {
           message?: {
             content?: string | null;
             tool_calls?: Array<{ id: string; type: string; function?: { name?: string; arguments?: string } }>;
+            reasoning?: string;
+            reasoning_content?: string;
+            reasoning_details?: unknown[];
           };
         }[];
         usage?: {
@@ -245,45 +261,79 @@ export async function callOpenAIChatCompatible(
           completion_tokens_details?: { reasoning_tokens?: number };
         };
       };
-      acc.add(extractOpenAIChatUsage(payload.usage));
-      const message = payload.choices?.[0]?.message;
-      const toolCalls = message?.tool_calls ?? [];
-      if (!toolCalls.length || !options.callMcpTool) {
-        return emitAndReturn(message?.content ?? "Provider returned no content.");
+    type OpenAIProviderTurn = {
+      payload: OpenAIProviderPayload;
+      assistantMessage: Record<string, unknown>;
+    };
+    const answer = await runAgentLoop<OpenAIProviderTurn>({
+      signal: options.signal,
+      executeTool: options.callMcpTool
+        ? (toolCall) => options.callMcpTool!({ providerToolName: toolCall.providerToolName, argumentsJson: toolCall.argumentsJson })
+        : undefined,
+      adapter: {
+        async nextTurn() {
+          const response = await fetch(`${baseUrl.replace(/\/$/, "")}/chat/completions`, {
+            method: "POST",
+            headers: {
+              "Authorization": `Bearer ${apiKey}`,
+              "Content-Type": "application/json"
+            },
+            body: JSON.stringify(body),
+            signal: options.signal
+          });
+          if (!response.ok) {
+            throw new Error(`OpenAI-compatible provider failed with ${response.status}: ${await response.text()}`);
+          }
+          const payload = await response.json() as OpenAIProviderPayload;
+          const message = payload.choices?.[0]?.message;
+          acc.add({
+            ...extractOpenAIChatUsage(payload.usage),
+            reasoningReplayState: openAIChatReasoningReplayState(message)
+          });
+          const toolCalls = (message?.tool_calls ?? []).flatMap((toolCall) => {
+            const providerToolName = toolCall.function?.name;
+            return providerToolName ? [{
+              id: toolCall.id,
+              providerToolName,
+              argumentsJson: toolCall.function?.arguments ?? "{}"
+            }] : [];
+          });
+          options.prepareToolBatch?.(toolCalls.map(({ providerToolName, argumentsJson }) => ({ providerToolName, argumentsJson })));
+          return {
+            text: message?.content ?? "",
+            toolCalls,
+            raw: {
+              payload,
+              assistantMessage: {
+                role: "assistant",
+                content: message?.content ?? null,
+                tool_calls: message?.tool_calls ?? [],
+                ...openAIChatReasoningFields(message)
+              }
+            }
+          };
+        },
+        commitToolResults(turn, results) {
+          messages.push(turn.raw.assistantMessage);
+          messages.push(...results.map(({ toolCall, result }) => ({
+            role: "tool",
+            tool_call_id: toolCall.id,
+            content: result
+          })));
+        }
+      },
+      completionAfterTools({ results }) {
+        const executedToolCalls = results.map(({ toolCall, rawResult }) => ({
+          providerToolName: toolCall.providerToolName,
+          argumentsJson: toolCall.argumentsJson,
+          result: rawResult
+        }));
+        return options.shouldCompleteToolBatch?.(executedToolCalls)
+          ? { complete: true, fallbackText: "Structured source handoff completed." }
+          : undefined;
       }
-      messages.push({
-        role: "assistant",
-        content: message?.content ?? null,
-        tool_calls: toolCalls
-      });
-      options.prepareToolBatch?.(toolCalls.flatMap((toolCall) => {
-        const providerToolName = toolCall.function?.name;
-        return providerToolName ? [{
-          providerToolName,
-          argumentsJson: toolCall.function?.arguments ?? "{}"
-        }] : [];
-      }));
-      const executedToolCalls = [];
-      for (const toolCall of toolCalls) {
-        const providerToolName = toolCall.function?.name;
-        if (!providerToolName) continue;
-        const argumentsJson = toolCall.function?.arguments ?? "{}";
-        const loopWarning = toolLoopDetector.record(providerToolName, argumentsJson);
-        const result = await options.callMcpTool({
-          providerToolName,
-          argumentsJson
-        });
-        executedToolCalls.push({ providerToolName, argumentsJson, result });
-        messages.push({
-          role: "tool",
-          tool_call_id: toolCall.id,
-          content: loopWarning ? `${result}\n\n${loopWarning}` : result
-        });
-      }
-      if (options.shouldCompleteToolBatch?.(executedToolCalls)) {
-        return emitAndReturn(message?.content ?? "Structured source handoff completed.");
-      }
-    }
+    });
+    return emitAndReturn(answer);
   } catch (error) {
     const retryOptions = isOpenAiImageContentUnsupported(error) ? dropContextOnlyImageAttachments(options) : null;
     if (retryOptions) {
@@ -351,6 +401,7 @@ export async function callOpenAIResearch(
       ...((resume.messages as Array<Record<string, unknown>> | undefined) ?? []),
       { type: "function_call_output", call_id: resume.pendingToolCall.id, output: resume.approvedResult }
     ];
+    body.tool_choice = "auto";
   }
   const modelId = resolveModelId(provider, policy);
   const acc = createUsageAccumulator();
@@ -365,15 +416,12 @@ export async function callOpenAIResearch(
     isTerminalTool: options.isTerminalTool,
     terminalToolCompletesTurn: options.terminalToolCompletesTurn,
     isApprovalError: options.isApprovalError,
+    validateFinalAnswer: options.validateFinalAnswer,
+    onTransientRetry: options.onTransientRetry,
     onUsage: acc.add
   };
   try {
-    if (options.mcpTools?.length) {
-      const result = await callOpenAIResponsesToolLoop(baseUrl, apiKey, body, "OpenAI-compatible research Responses provider", toolLoopOptions);
-      emitUsage();
-      return result;
-    }
-    const result = await callOpenAIResponsesStreaming(baseUrl, apiKey, body, "OpenAI-compatible research Responses provider", options.onToken, options.signal, acc.add);
+    const result = await callOpenAIResponsesToolLoop(baseUrl, apiKey, body, "OpenAI-compatible research Responses provider", toolLoopOptions);
     emitUsage();
     return result;
   } catch (error) {
@@ -409,83 +457,102 @@ export async function callOpenAIResearchChatCompatible(
     const body = await buildOpenAIResearchChatCompletionsBody(provider, userMessage, options, policy);
     applyOpenRouterSessionId(body, provider, options.cacheSessionId);
     const imageContent = profile.supportsImageInput ? await openAiImageContent(options.imageAttachments) : [];
-    const messages = body.messages as Array<Record<string, unknown>>;
     // Attach image bytes to the current (last) user turn. Text attachments are
     // already embedded in that turn's text by researchCurrentMessageText.
-    const userMessageRecord = [...messages].reverse().find((message) => message.role === "user");
+    const userMessageRecord = [...(body.messages as Array<Record<string, unknown>>)].reverse().find((message) => message.role === "user");
     if (imageContent.length && typeof userMessageRecord?.content === "string") {
       userMessageRecord.content = [{ type: "text", text: userMessageRecord.content }, ...imageContent];
     }
     const tools = openAiMcpTools(options.mcpTools ?? []);
-    if (!tools.length) {
-      return emitAndReturn(await callOpenAIChatStreaming(baseUrl, apiKey, body, "OpenAI-compatible research Chat Completions provider", options.onToken, options.signal, acc.add));
+    if (tools.length) {
+      body.tools = tools;
+      delete body.reasoning_effort;
     }
-    body.tools = tools;
-    delete body.reasoning_effort;
-
     // Resume: continue from the persisted transcript plus the approved result.
     if (options.resumeContinuation?.transport === "openai-chat" && options.resumeContinuation.messages) {
       body.messages = openAIChatResumeMessages(options.resumeContinuation);
     }
 
     const label = "OpenAI-compatible research Chat Completions provider";
-    const toolLoopDetector = createConsecutiveToolCallLoopDetector();
-    while (true) {
-      // Stream every iteration so tool-assisted turns are no longer silent.
-      const result = await streamOpenAIChatCompletion(baseUrl, apiKey, body, label, options.onToken, options.signal);
-      if (result.usage) acc.add(result.usage);
-      if (!result.toolCalls.length || !options.callMcpTool) {
-        return emitAndReturn(result.text || "Provider returned no content.");
-      }
-      const assistantMessage = {
-        role: "assistant",
-        content: result.text || null,
-        tool_calls: result.toolCalls.map((toolCall) => ({
-          id: toolCall.id,
-          type: "function",
-          function: { name: toolCall.name, arguments: toolCall.arguments }
-        }))
-      };
-      const loopWarnings = result.toolCalls.map((toolCall) => toolLoopDetector.record(toolCall.name, toolCall.arguments || "{}"));
-      // Execute all tool calls concurrently, settling so an approval-required
-      // tool does not discard results of tools that already completed.
-      const settled = await Promise.allSettled(result.toolCalls.map((toolCall) =>
-        options.callMcpTool!({ providerToolName: toolCall.name, argumentsJson: toolCall.arguments || "{}" })));
-      const toolMessages: Array<Record<string, unknown>> = [];
-      let pendingApproval: { toolCall: OpenAIChatToolCall; error: unknown } | undefined;
-      let firstError: unknown;
-      settled.forEach((outcome, index) => {
-        const toolCall = result.toolCalls[index]!;
-        const loopWarning = loopWarnings[index];
-        if (outcome.status === "fulfilled") {
-          toolMessages.push({ role: "tool", tool_call_id: toolCall.id, content: loopWarning ? `${outcome.value}\n\n${loopWarning}` : outcome.value });
-        } else if (options.isApprovalError?.(outcome.reason) && !pendingApproval) {
-          pendingApproval = { toolCall, error: outcome.reason };
-        } else if (firstError === undefined) {
-          firstError = outcome.reason;
+    const messages = body.messages as Array<Record<string, unknown>>;
+    type OpenAIChatAgentTurn = {
+      result: OpenAIChatStreamResult;
+      assistantMessage: Record<string, unknown>;
+    };
+    const toolMessages = (results: AgentToolResult[]): Array<Record<string, unknown>> => results.map(({ toolCall, result }) => ({
+      role: "tool",
+      tool_call_id: toolCall.id,
+      content: result
+    }));
+    const answer = await runAgentLoop<OpenAIChatAgentTurn>({
+      signal: options.signal,
+      executeTool: options.callMcpTool
+        ? (toolCall) => options.callMcpTool!({ providerToolName: toolCall.providerToolName, argumentsJson: toolCall.argumentsJson })
+        : undefined,
+      isApprovalError: options.isApprovalError,
+      onTransientRetry: options.onTransientRetry,
+      isTerminalTool: options.isTerminalTool,
+      terminalToolCompletesTurn: options.terminalToolCompletesTurn,
+      adapter: {
+        async nextTurn() {
+          // Stream every iteration so tool-assisted turns are no longer silent.
+          const result = await streamOpenAIChatCompletion(baseUrl, apiKey, body, label, options.onToken, options.signal);
+          delete body.tool_choice;
+          delete body.parallel_tool_calls;
+          if (result.usage) acc.add(result.usage);
+          const serializedToolCalls = result.toolCalls.map((toolCall) => ({
+            id: toolCall.id,
+            type: "function",
+            function: { name: toolCall.name, arguments: toolCall.arguments }
+          }));
+          const assistantMessage = {
+            role: "assistant",
+            content: result.text || null,
+            ...(serializedToolCalls.length ? { tool_calls: serializedToolCalls } : {}),
+            ...openAIChatReasoningFields(result)
+          };
+          return {
+            text: result.text,
+            toolCalls: result.toolCalls.map((toolCall) => ({
+              id: toolCall.id,
+              providerToolName: toolCall.name,
+              argumentsJson: toolCall.arguments || "{}"
+            })),
+            raw: { result, assistantMessage }
+          };
+        },
+        commitToolResults(turn, results) {
+          messages.push(turn.raw.assistantMessage, ...toolMessages(results));
+        },
+        commitInvalidAnswer(turn, feedback) {
+          messages.push(turn.raw.assistantMessage, { role: "user", content: feedback });
+        },
+        commitFeedback(feedback) {
+          messages.push({ role: "user", content: feedback });
+        },
+        attachApprovalContinuation({ turn, completedResults, pendingToolCall, error }) {
+          attachProviderContinuation(error, {
+            transport: "openai-chat",
+            messages: [...messages, turn.raw.assistantMessage, ...toolMessages(completedResults)],
+            pendingToolCall: {
+              id: pendingToolCall.id,
+              providerToolName: pendingToolCall.providerToolName,
+              argumentsJson: pendingToolCall.argumentsJson
+            }
+          });
+        },
+        requestFinalAnswer() {
+          messages.push({
+            role: "user",
+            content: "The requested internal update completed. Return the concise visible answer now in normal prose. Do not call tools."
+          });
+          delete body.tools;
+          body.tool_choice = "none";
         }
-      });
-      if (pendingApproval) {
-        attachProviderContinuation(pendingApproval.error, {
-          transport: "openai-chat",
-          messages: [...messages, assistantMessage, ...toolMessages],
-          pendingToolCall: {
-            id: pendingApproval.toolCall.id,
-            providerToolName: pendingApproval.toolCall.name,
-            argumentsJson: pendingApproval.toolCall.arguments || "{}"
-          }
-        });
-        throw pendingApproval.error;
-      }
-      if (firstError !== undefined) throw firstError;
-      const needsContinuation = result.toolCalls.some((toolCall) => !options.isTerminalTool?.(toolCall.name));
-      if (!needsContinuation) {
-        // Only sink tools were called: the answer is this turn's streamed prose.
-        return emitAndReturn(result.text || "Provider returned no content.");
-      }
-      messages.push(assistantMessage);
-      messages.push(...toolMessages);
-    }
+      },
+      validateFinalAnswer: options.validateFinalAnswer
+    });
+    return emitAndReturn(answer);
   } catch (error) {
     const retryOptions = isOpenAiImageContentUnsupported(error) ? dropContextOnlyImageAttachments(options) : null;
     if (retryOptions) {
@@ -540,31 +607,29 @@ export function extractOpenAIResponsesText(payload: OpenAiResponsesPayload, labe
 }
 
 export async function postOpenAIResponses(baseUrl: string, apiKey: string, body: Record<string, unknown>, label: string, signal?: AbortSignal): Promise<OpenAiResponsesPayload> {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    try {
-      const response = await fetch(`${baseUrl.replace(/\/$/, "")}/responses`, {
-        method: "POST",
-        headers: {
-          "Authorization": `Bearer ${apiKey}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify(body),
-        signal
-      });
-      if (!response.ok) {
-        const error = new Error(`${label} failed with ${response.status}: ${await response.text()}`);
-        if (attempt === 0 && !signal?.aborted && isTransientOpenAiResponsesError(error)) continue;
-        throw error;
-      }
-      const payload = await response.json() as OpenAiResponsesPayload;
-      if (attempt === 0 && !signal?.aborted && payload.error?.message && isTransientOpenAiResponsesError(payload.error.message)) continue;
-      return payload;
-    } catch (error) {
-      if (attempt === 0 && !signal?.aborted && isTransientOpenAiResponsesError(error)) continue;
-      throw error;
-    }
+  const response = await fetch(`${baseUrl.replace(/\/$/, "")}/responses`, {
+    method: "POST",
+    headers: {
+      "Authorization": `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body),
+    signal
+  });
+  if (!response.ok) {
+    throw new Error(`${label} failed with ${response.status}: ${await response.text()}`);
   }
-  throw new Error(`${label} transient retry exhausted.`);
+  return await response.json() as OpenAiResponsesPayload;
+}
+
+function isRetryableOpenAIResponsesAgentError(error: unknown): boolean {
+  if (error && typeof error === "object" && (error as { agentRetryable?: unknown }).agentRetryable === false) return false;
+  return isTransientOpenAiResponsesError(error);
+}
+
+function markAgentErrorNonRetryable(error: unknown): unknown {
+  if (error && typeof error === "object") (error as { agentRetryable?: boolean }).agentRetryable = false;
+  return error;
 }
 
 export async function callOpenAIResponsesToolLoop(
@@ -572,7 +637,7 @@ export async function callOpenAIResponsesToolLoop(
   apiKey: string,
   body: Record<string, unknown>,
   label: string,
-  options: { callMcpTool?: (input: { providerToolName: string; argumentsJson: string }) => Promise<string>; onToken?: (text: string) => void; signal?: AbortSignal; isTerminalTool?: (providerToolName: string) => boolean; terminalToolCompletesTurn?: (providerToolName: string) => boolean; prepareToolBatch?: ProviderCallOptions["prepareToolBatch"]; shouldCompleteToolBatch?: ProviderCallOptions["shouldCompleteToolBatch"]; isApprovalError?: (error: unknown) => boolean; onUsage?: (raw: RawLlmUsage) => void }
+  options: { callMcpTool?: (input: { providerToolName: string; argumentsJson: string }) => Promise<string>; onToken?: (text: string) => void; signal?: AbortSignal; stream?: boolean; isTerminalTool?: (providerToolName: string) => boolean; terminalToolCompletesTurn?: (providerToolName: string) => boolean; prepareToolBatch?: ProviderCallOptions["prepareToolBatch"]; shouldCompleteToolBatch?: ProviderCallOptions["shouldCompleteToolBatch"]; isApprovalError?: (error: unknown) => boolean; validateFinalAnswer?: ResearchProviderOptions["validateFinalAnswer"]; onTransientRetry?: ResearchProviderOptions["onTransientRetry"]; onUsage?: (raw: RawLlmUsage) => void }
 ): Promise<string> {
   const initialInput = Array.isArray(body.input)
     ? [...body.input]
@@ -580,123 +645,127 @@ export async function callOpenAIResponsesToolLoop(
       ? []
       : [{ role: "user", content: [{ type: "input_text", text: String(body.input) }] }];
   const transcript: unknown[] = initialInput;
-  const toolLoopDetector = createConsecutiveToolCallLoopDetector();
   const extractVisibleText = (payload: OpenAiResponsesPayload): string => {
     const text = extractOpenAIResponsesText(payload, label);
     return text === "Provider returned no content." ? "" : text;
   };
-  while (true) {
-    const streamed = options.onToken
-      ? await callOpenAIResponsesStreamingPayload(baseUrl, apiKey, body, label, options.onToken, options.signal)
-      : null;
-    const payload = streamed
-      ? streamed.payload ?? { status: "completed", output_text: streamed.text }
-      : await postOpenAIResponses(baseUrl, apiKey, body, label, options.signal);
-    if (payload.usage) options.onUsage?.(extractOpenAIResponsesUsage(payload.usage));
-    if (payload.error?.message || (payload.status && payload.status !== "completed")) {
-      extractOpenAIResponsesText(payload, label);
-    }
-    const functionCalls = (payload.output ?? []).filter((item) =>
-      item.type === "function_call" && typeof item.name === "string" && typeof item.call_id === "string"
-    );
-    if (!functionCalls.length || !options.callMcpTool) {
-      if (streamed?.text.trim()) return streamed.text;
-      const text = extractVisibleText(payload);
-      return text || "Provider returned no content.";
-    }
-    options.prepareToolBatch?.(functionCalls.map((toolCall) => ({
-      providerToolName: toolCall.name as string,
-      argumentsJson: toolCall.arguments ?? "{}"
-    })));
-    const loopWarnings = functionCalls.map((toolCall) => toolLoopDetector.record(toolCall.name!, toolCall.arguments ?? "{}"));
-    // Capture/execute every tool call, settling so an approval-required tool
-    // does not discard results of tools that already completed.
-    const settled = await Promise.allSettled(functionCalls.map((toolCall) => options.callMcpTool!({
-      providerToolName: toolCall.name!,
-      argumentsJson: toolCall.arguments ?? "{}"
-    })));
-    const toolOutputs: Array<Record<string, unknown>> = [];
-    let pendingApproval: { callId: string; name: string; args: string; error: unknown } | undefined;
-    let firstError: unknown;
-    settled.forEach((outcome, index) => {
-      const toolCall = functionCalls[index]!;
-      const loopWarning = loopWarnings[index];
-      if (outcome.status === "fulfilled") {
-        toolOutputs.push({ type: "function_call_output", call_id: toolCall.call_id, output: loopWarning ? `${outcome.value}\n\n${loopWarning}` : outcome.value });
-      } else if (options.isApprovalError?.(outcome.reason) && !pendingApproval) {
-        pendingApproval = { callId: toolCall.call_id as string, name: toolCall.name as string, args: toolCall.arguments ?? "{}", error: outcome.reason };
-      } else if (firstError === undefined) {
-        firstError = outcome.reason;
+  type OpenAIResponsesAgentTurn = {
+    payload: OpenAiResponsesPayload;
+    output: Array<Record<string, unknown>>;
+  };
+  const toolOutputs = (results: AgentToolResult[]): Array<Record<string, unknown>> => results.map(({ toolCall, result }) => ({
+    type: "function_call_output",
+    call_id: toolCall.id,
+    output: result
+  }));
+  return runAgentLoop<OpenAIResponsesAgentTurn>({
+    signal: options.signal,
+    executeTool: options.callMcpTool
+      ? (toolCall) => options.callMcpTool!({ providerToolName: toolCall.providerToolName, argumentsJson: toolCall.argumentsJson })
+      : undefined,
+    isTransientError: isRetryableOpenAIResponsesAgentError,
+    isApprovalError: options.isApprovalError,
+    onTransientRetry: options.onTransientRetry,
+    isTerminalTool: options.isTerminalTool,
+    terminalToolCompletesTurn: options.terminalToolCompletesTurn,
+    adapter: {
+      async nextTurn() {
+        const streamed = options.stream || options.onToken
+          ? await callOpenAIResponsesStreamingPayload(baseUrl, apiKey, body, label, options.onToken, options.signal)
+          : null;
+        const payload = streamed
+          ? streamed.payload ?? { status: "completed", output_text: streamed.text }
+          : await postOpenAIResponses(baseUrl, apiKey, body, label, options.signal);
+        if (body.tool_choice !== "none") body.tool_choice = "auto";
+        delete body.parallel_tool_calls;
+        if (payload.usage) options.onUsage?.({
+          ...extractOpenAIResponsesUsage(payload.usage),
+          reasoningReplayState: openAIResponsesReasoningReplayState(payload)
+        });
+        if (payload.error?.message || (payload.status && payload.status !== "completed")) {
+          try {
+            extractOpenAIResponsesText(payload, label);
+          } catch (error) {
+            throw streamed?.emittedVisibleText ? markAgentErrorNonRetryable(error) : error;
+          }
+        }
+        const functionCalls = (payload.output ?? []).filter((item) =>
+          item.type === "function_call" && typeof item.name === "string" && typeof item.call_id === "string"
+        );
+        const normalizedCalls = functionCalls.map((toolCall) => ({
+          id: toolCall.call_id as string,
+          providerToolName: toolCall.name as string,
+          argumentsJson: toolCall.arguments ?? "{}"
+        }));
+        options.prepareToolBatch?.(normalizedCalls.map(({ providerToolName, argumentsJson }) => ({ providerToolName, argumentsJson })));
+        return {
+          text: streamed?.text.trim() ? streamed.text : extractVisibleText(payload),
+          toolCalls: normalizedCalls,
+          raw: {
+            payload,
+            output: (payload.output ?? []) as Array<Record<string, unknown>>
+          }
+        };
+      },
+      commitToolResults(turn, results) {
+        transcript.push(...turn.raw.output, ...toolOutputs(results));
+        body.input = transcript;
+        delete body.previous_response_id;
+      },
+      commitInvalidAnswer(turn, feedback) {
+        transcript.push(...turn.raw.output, {
+          role: "user",
+          content: [{ type: "input_text", text: feedback }]
+        });
+        body.input = transcript;
+        delete body.previous_response_id;
+      },
+      commitFeedback(feedback) {
+        transcript.push({
+          role: "user",
+          content: [{ type: "input_text", text: feedback }]
+        });
+        body.input = transcript;
+        delete body.previous_response_id;
+      },
+      attachApprovalContinuation({ turn, completedResults, pendingToolCall, error }) {
+        attachProviderContinuation(error, {
+          transport: "openai-responses",
+          messages: [...transcript, ...turn.raw.output, ...toolOutputs(completedResults)],
+          pendingToolCall: {
+            id: pendingToolCall.id,
+            providerToolName: pendingToolCall.providerToolName,
+            argumentsJson: pendingToolCall.argumentsJson
+          }
+        });
+      },
+      requestFinalAnswer() {
+        transcript.push({
+          role: "user",
+          content: [{
+            type: "input_text",
+            text: "The requested internal update completed. Return the concise visible answer now in normal prose. Do not call tools."
+          }]
+        });
+        body.input = transcript;
+        delete body.previous_response_id;
+        delete body.tools;
+        body.tool_choice = "none";
       }
-    });
-    if (pendingApproval) {
-      attachProviderContinuation(pendingApproval.error, {
-        transport: "openai-responses",
-        messages: [...transcript, ...(payload.output ?? []), ...toolOutputs],
-        pendingToolCall: { id: pendingApproval.callId, providerToolName: pendingApproval.name, argumentsJson: pendingApproval.args }
-      });
-      throw pendingApproval.error;
-    }
-    if (firstError !== undefined) throw firstError;
-    const executedToolCalls = settled.flatMap((outcome, index) => {
-      if (outcome.status !== "fulfilled") return [];
-      const toolCall = functionCalls[index]!;
-      return [{
-        providerToolName: toolCall.name as string,
-        argumentsJson: toolCall.arguments ?? "{}",
-        result: outcome.value
-      }];
-    });
-    if (options.shouldCompleteToolBatch?.(executedToolCalls)) {
-      if (streamed?.text.trim()) return streamed.text;
-      const text = extractVisibleText(payload);
-      return text || "Structured source handoff completed.";
-    }
-    const needsContinuation = functionCalls.some((toolCall) => !options.isTerminalTool?.(toolCall.name as string));
-    if (!needsContinuation) {
-      // Only sink tools were called: the answer is this turn's streamed prose.
-      if (streamed?.text.trim()) return streamed.text;
-      const text = extractVisibleText(payload);
-      if (text) return text;
-      if (functionCalls.some((toolCall) => options.terminalToolCompletesTurn?.(toolCall.name as string))) {
-        return "Prepared the requested update for review.";
+    },
+    completionAfterTools({ results }) {
+      const executedToolCalls = results.map(({ toolCall, rawResult }) => ({
+        providerToolName: toolCall.providerToolName,
+        argumentsJson: toolCall.argumentsJson,
+        result: rawResult
+      }));
+      if (options.shouldCompleteToolBatch?.(executedToolCalls)) {
+        return { complete: true, fallbackText: "Structured source handoff completed." };
       }
-      transcript.push(...(payload.output ?? []), ...toolOutputs, {
-        role: "user",
-        content: [{
-          type: "input_text",
-          text: "The previous turn only called internal sink tools and did not include a visible chat answer. Provide the concise visible assistant answer now in normal prose. Do not call any tools."
-        }]
-      });
-      body.input = transcript;
-      delete body.previous_response_id;
-      delete body.tools;
-      body.tool_choice = "none";
-      continue;
-    }
-    transcript.push(...(payload.output ?? []), ...toolOutputs);
-    body.input = transcript;
-    delete body.previous_response_id;
-  }
-}
-
-export async function callOpenAIResponsesStreaming(
-  baseUrl: string,
-  apiKey: string,
-  body: Record<string, unknown>,
-  label: string,
-  onToken?: (text: string) => void,
-  signal?: AbortSignal,
-  onUsage?: (raw: RawLlmUsage) => void
-): Promise<string> {
-  const result = await callOpenAIResponsesStreamingPayload(baseUrl, apiKey, body, label, onToken, signal);
-  if (result.payload?.usage) onUsage?.(extractOpenAIResponsesUsage(result.payload.usage));
-  if (result.payload?.error?.message || (result.payload?.status && result.payload.status !== "completed")) {
-    return extractOpenAIResponsesText(result.payload, label);
-  }
-  if (result.text.trim()) return result.text;
-  if (result.payload) return extractOpenAIResponsesText(result.payload, label);
-  return "Provider returned no content.";
+      return undefined;
+    },
+    validateFinalAnswer: options.validateFinalAnswer
+  });
 }
 
 export async function callOpenAIResponsesStreamingPayload(
@@ -706,30 +775,20 @@ export async function callOpenAIResponsesStreamingPayload(
   label: string,
   onToken?: (text: string) => void,
   signal?: AbortSignal
-): Promise<{ text: string; payload: OpenAiResponsesPayload | null }> {
-  for (let attempt = 0; attempt < 2; attempt += 1) {
-    let emittedVisibleText = false;
-    try {
-      const result = await callOpenAIResponsesStreamingPayloadOnce(
-        baseUrl,
-        apiKey,
-        body,
-        label,
-        (text) => {
-          if (text) emittedVisibleText = true;
-          onToken?.(text);
-        },
-        signal
-      );
-      const terminalError = result.payload?.error?.message;
-      if (attempt === 0 && !emittedVisibleText && !signal?.aborted && terminalError && isTransientOpenAiResponsesError(terminalError)) continue;
-      return result;
-    } catch (error) {
-      if (attempt === 0 && !emittedVisibleText && !signal?.aborted && isTransientOpenAiResponsesError(error)) continue;
-      throw error;
-    }
-  }
-  throw new Error(`${label} transient retry exhausted.`);
+): Promise<{ text: string; payload: OpenAiResponsesPayload | null; emittedVisibleText: boolean }> {
+  let emittedVisibleText = false;
+  const result = await callOpenAIResponsesStreamingPayloadOnce(
+    baseUrl,
+    apiKey,
+    body,
+    label,
+    (text) => {
+      if (text) emittedVisibleText = true;
+      onToken?.(text);
+    },
+    signal
+  );
+  return { ...result, emittedVisibleText };
 }
 
 async function callOpenAIResponsesStreamingPayloadOnce(
@@ -835,6 +894,7 @@ export async function callOpenAIChatStreaming(
   let text = "";
   let terminalMessageText: string | null = null;
   let rawUsage: RawLlmUsage | undefined;
+  let sawReplayableReasoning = false;
 
   const extractChatContentText = (content: unknown): string | null => {
     if (typeof content === "string") return content;
@@ -862,7 +922,10 @@ export async function callOpenAIChatStreaming(
     const dataText = dataLines.join("\n");
     if (!dataText || dataText === "[DONE]") return;
     let event: {
-      choices?: Array<{ delta?: { content?: unknown }; message?: { content?: unknown } }>;
+      choices?: Array<{
+        delta?: { content?: unknown; reasoning?: unknown; reasoning_content?: unknown; reasoning_details?: unknown };
+        message?: { content?: unknown; reasoning?: unknown; reasoning_content?: unknown; reasoning_details?: unknown };
+      }>;
       usage?: {
         prompt_tokens?: number;
         completion_tokens?: number;
@@ -872,7 +935,10 @@ export async function callOpenAIChatStreaming(
     };
     try {
       event = JSON.parse(dataText) as {
-        choices?: Array<{ delta?: { content?: unknown }; message?: { content?: unknown } }>;
+        choices?: Array<{
+          delta?: { content?: unknown; reasoning?: unknown; reasoning_content?: unknown; reasoning_details?: unknown };
+          message?: { content?: unknown; reasoning?: unknown; reasoning_content?: unknown; reasoning_details?: unknown };
+        }>;
         usage?: {
           prompt_tokens?: number;
           completion_tokens?: number;
@@ -885,6 +951,12 @@ export async function callOpenAIChatStreaming(
     }
     if (event.usage) rawUsage = extractOpenAIChatUsage(event.usage);
     const choice = event.choices?.[0];
+    const reasoningStates = [choice?.delta, choice?.message];
+    if (reasoningStates.some((reasoningState) =>
+      (typeof reasoningState?.reasoning === "string" && reasoningState.reasoning.length > 0) ||
+      (typeof reasoningState?.reasoning_content === "string" && reasoningState.reasoning_content.length > 0) ||
+      (Array.isArray(reasoningState?.reasoning_details) && reasoningState.reasoning_details.length > 0)
+    )) sawReplayableReasoning = true;
     const delta = extractChatContentText(choice?.delta?.content);
     if (delta) {
       text += delta;
@@ -915,7 +987,10 @@ export async function callOpenAIChatStreaming(
   }
   buffer += decoder.decode();
   if (buffer.trim()) consumeEvent(buffer);
-  if (rawUsage) onUsage?.(rawUsage);
+  if (rawUsage) onUsage?.({
+    ...rawUsage,
+    reasoningReplayState: sawReplayableReasoning ? "received" : "absent"
+  });
   let finalText = text;
   const terminalText = typeof terminalMessageText === "string" ? terminalMessageText : "";
   if (terminalText.trim()) {
@@ -926,7 +1001,7 @@ export async function callOpenAIChatStreaming(
 }
 
 export type OpenAIChatToolCall = { id: string; name: string; arguments: string };
-export type OpenAIChatStreamResult = { text: string; toolCalls: OpenAIChatToolCall[]; usage?: RawLlmUsage };
+export type OpenAIChatStreamResult = OpenAIChatReasoningState & { text: string; toolCalls: OpenAIChatToolCall[]; usage?: RawLlmUsage };
 
 /**
  * Streams an OpenAI Chat Completions response, surfacing text token deltas via
@@ -956,8 +1031,25 @@ export async function streamOpenAIChatCompletion(
   const reader = response.body.getReader();
   let buffer = "";
   let text = "";
+  let terminalMessageText: string | null = null;
+  let reasoning = "";
+  let reasoningContent = "";
+  let sawReasoning = false;
+  let sawReasoningContent = false;
+  const reasoningDetails: unknown[] = [];
   let rawUsage: RawLlmUsage | undefined;
   const toolAcc = new Map<number, { id: string; name: string; arguments: string }>();
+
+  const chatContentText = (content: unknown): string | null => {
+    if (typeof content === "string") return content;
+    if (!Array.isArray(content)) return null;
+    const joined = content.flatMap((part) => {
+      if (!part || typeof part !== "object") return [];
+      const record = part as Record<string, unknown>;
+      return typeof record.text === "string" ? [record.text] : typeof record.content === "string" ? [record.content] : [];
+    }).join("");
+    return joined || null;
+  };
 
   const consumeEvent = (eventText: string): void => {
     const dataLines = eventText.split(/\r?\n/)
@@ -970,8 +1062,12 @@ export async function streamOpenAIChatCompletion(
       choices?: Array<{
         delta?: {
           content?: unknown;
+          reasoning?: unknown;
+          reasoning_content?: unknown;
+          reasoning_details?: unknown;
           tool_calls?: Array<{ index?: number; id?: string; function?: { name?: string; arguments?: string } }>;
         };
+        message?: { content?: unknown };
       }>;
       usage?: {
         prompt_tokens?: number;
@@ -991,6 +1087,29 @@ export async function streamOpenAIChatCompletion(
     if (typeof delta?.content === "string" && delta.content) {
       text += delta.content;
       onToken?.(delta.content);
+    }
+    const messageText = chatContentText(event.choices?.[0]?.message?.content);
+    if (messageText) {
+      terminalMessageText = messageText;
+      if (!text) {
+        text = messageText;
+        onToken?.(messageText);
+      } else if (messageText.startsWith(text) && messageText.length > text.length) {
+        const suffix = messageText.slice(text.length);
+        text = messageText;
+        onToken?.(suffix);
+      }
+    }
+    if (typeof delta?.reasoning === "string") {
+      sawReasoning = true;
+      reasoning += delta.reasoning;
+    }
+    if (typeof delta?.reasoning_content === "string") {
+      sawReasoningContent = true;
+      reasoningContent += delta.reasoning_content;
+    }
+    if (Array.isArray(delta?.reasoning_details)) {
+      reasoningDetails.push(...delta.reasoning_details);
     }
     for (const toolCall of delta?.tool_calls ?? []) {
       const index = typeof toolCall.index === "number" ? toolCall.index : 0;
@@ -1016,7 +1135,23 @@ export async function streamOpenAIChatCompletion(
   const toolCalls = [...toolAcc.values()]
     .filter((toolCall) => toolCall.name)
     .map((toolCall) => ({ id: toolCall.id || `call_${toolCall.name}`, name: toolCall.name, arguments: toolCall.arguments }));
-  return { text, toolCalls, usage: rawUsage };
+  let finalText = text;
+  const terminalText = typeof terminalMessageText === "string" ? terminalMessageText : "";
+  if (terminalText.trim()) {
+    if (terminalText.startsWith(text)) finalText = terminalText;
+    else if (!text.startsWith(terminalText) && terminalText.length > text.length) finalText = terminalText;
+  }
+  return {
+    text: finalText,
+    toolCalls,
+    usage: {
+      ...(rawUsage ?? {}),
+      reasoningReplayState: sawReasoning || sawReasoningContent || reasoningDetails.length ? "received" : "absent"
+    },
+    ...(sawReasoning ? { reasoning } : {}),
+    ...(sawReasoningContent ? { reasoning_content: reasoningContent } : {}),
+    ...(reasoningDetails.length ? { reasoning_details: reasoningDetails } : {})
+  };
 }
 
 export async function buildOpenAIResearchResponsesBody(

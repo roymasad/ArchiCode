@@ -114,7 +114,7 @@ function terminalTheme(): NonNullable<ConstructorParameters<typeof Terminal>[0]>
 }
 
 export function ProjectConsole() {
-  const { rootPath } = useArchicodeStore();
+  const rootPath = useArchicodeStore((state) => state.rootPath);
   const [tabs, setTabs] = useState<ConsoleTab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const tabsRef = useRef<ConsoleTab[]>([]);

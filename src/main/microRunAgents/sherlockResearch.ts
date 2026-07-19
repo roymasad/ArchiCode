@@ -1,6 +1,7 @@
 import type { MicroRunAgent, MicroRunContext, MicroRunToolInvocation } from "../microRuns";
 import { sherlockResearchInputSchema, type SherlockResearchInput, type SherlockResearchOutput } from "../../shared/schema";
 import { createReadOnlyInvestigationTools, extractJsonObject } from "./readOnlyTools";
+import { createGuardedConsoleTool } from "./guardedConsole";
 
 const SHERLOCK_TIMEOUT_MS = 45 * 60 * 1000;
 
@@ -14,6 +15,7 @@ function systemPrompt(input: unknown, context: MicroRunContext): string {
   return [
     "You are Sherlock, ArchiCode's private-detective research subagent.",
     "Work in a fresh isolated context and investigate the assigned objective deeply without modifying source files, project settings, runs, or the graph.",
+    "A shared guarded CLI is available when direct project inspection or diagnostics materially improve the investigation. Choose commands and iteration autonomously; the host evaluates their actual scope and risk. Do not use it to bypass your read-only research role.",
     "Use project tools to gather direct evidence before drawing conclusions. Distinguish facts, inferences, and unresolved possibilities.",
     task.mode === "codebase" || task.mode === "mixed"
       ? "For codebase work, inspect the relevant source tree and source files—not only root configuration or dependency manifests. Do not finalize until you have read or searched the code paths needed to support the conclusion."
@@ -22,7 +24,7 @@ function systemPrompt(input: unknown, context: MicroRunContext): string {
       ? "Online research is allowed. Prefer primary sources, record URLs, and cite every time-sensitive or externally sourced claim."
       : "Online research is unavailable for this task. Do not claim that current external facts were verified.",
     "Keep raw investigation inside this run. Return a compact evidence dossier for the caller instead of a transcript.",
-    "Do not spawn another agent. Do not ask the caller to perform searches you can perform with the available read-only tools.",
+    "Do not spawn another agent. Do not ask the caller to perform investigation you can perform with the available project, web, or guarded CLI tools.",
     "Never claim project tools are unavailable after they have returned results. If a required tool genuinely fails, identify the exact failed tool/path and return the limitation honestly instead of presenting an incomplete investigation as completed.",
     "Return one JSON object with: status, blockers, summary, findings, sources, openQuestions, recommendedNextSteps.",
     "Set status to completed only when the assigned investigation is complete. If required evidence cannot be collected, set status to blocked and list the concrete tool, path, access, or evidence blockers in blockers.",
@@ -38,8 +40,18 @@ function validateOutput(output: unknown, toolCalls: MicroRunToolInvocation[], in
   const task = sherlockResearchInputSchema.parse(input);
   const dossier = output as SherlockResearchOutput;
   if (dossier.status === "blocked") {
-    const blockerSummary = dossier.blockers.join("; ").trim() || dossier.summary.trim();
-    return `Sherlock reported an evidence-collection blocker instead of completing the investigation: ${blockerSummary.slice(0, 500)}`;
+    if (!dossier.blockers.length) {
+      return "Sherlock marked the investigation blocked without naming a concrete evidence or access blocker.";
+    }
+    const claimedUnavailableTool = dossier.blockers.some((blocker) =>
+      /\b(?:tool|tools|project reader|project search|structured research).{0,120}\b(?:unavailable|not available|not accessible|not provided)\b/i.test(blocker) ||
+      /\b(?:unavailable|not available|not accessible|not provided)\b.{0,120}\b(?:tool|tools|project reader|project search|structured research)\b/i.test(blocker)
+    );
+    const encounteredToolFailure = toolCalls.some((call) => call.succeeded === false);
+    if (claimedUnavailableTool && !encounteredToolFailure) {
+      return "Sherlock claimed an available investigation tool was unavailable without a failed tool invocation. Continue the same investigation and call the relevant listed read, search, web, or guarded CLI tool before reporting a blocker.";
+    }
+    return undefined;
   }
   if (dossier.blockers.length > 0) {
     return "Sherlock returned blockers while marking the investigation completed.";
@@ -181,7 +193,16 @@ export const sherlockResearchAgent: MicroRunAgent = {
   kind: "sherlock-research",
   systemPrompt,
   userMessage,
-  tools: (context) => createReadOnlyInvestigationTools(context, { includeWeb: true }),
+  tools: (context) => {
+    const guardedConsole = createGuardedConsoleTool(context, {
+      description: "Run a finite project-scoped diagnostic or inspection chosen for Sherlock's assigned investigation. The shared safety broker evaluates the actual action; this tool must not be used to modify the project.",
+      progressLabel: "Running guarded investigation command"
+    });
+    return [
+      ...createReadOnlyInvestigationTools(context, { includeWeb: true }),
+      ...(guardedConsole ? [guardedConsole] : [])
+    ];
+  },
   webSearchEnabled: (input, context) => {
     const task = sherlockResearchInputSchema.parse(input);
     return includeWeb(task, context) && (context.bundle.project.settings.webSearch.provider ?? "native") === "native";

@@ -9539,13 +9539,34 @@ button.activity-maintenance-indicator {
   margin: 0;
 }
 
+.llm-profile-list {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.llm-profile-group {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+}
+
+.llm-profile-group-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
 .llm-profile-section-heading {
   display: grid;
-  grid-column: 1 / -1;
   gap: 3px;
   margin-top: 8px;
   padding: 10px 2px 2px;
   border-top: 1px solid var(--border);
+}
+
+.llm-profile-group:first-child .llm-profile-section-heading {
+  margin-top: 0;
+  padding-top: 2px;
+  border-top: 0;
 }
 
 .llm-profile-section-heading small {
@@ -10580,6 +10601,11 @@ button.activity-maintenance-indicator {
   border: 1px solid color-mix(in srgb, var(--border) 74%, transparent);
   border-radius: 8px;
   background: color-mix(in srgb, var(--surface-muted) 28%, transparent);
+  container-type: inline-size;
+}
+
+.research-context-panel:not(.is-new-chat) {
+  flex-wrap: nowrap;
 }
 
 .research-context-panel.is-new-chat {
@@ -10620,6 +10646,24 @@ button.activity-maintenance-indicator {
 .research-scope-badge:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
+}
+
+.research-task-timer {
+  flex: 0 0 auto;
+  min-width: 52px;
+  height: 24px;
+  min-height: 24px;
+  justify-content: center;
+  gap: 4px;
+  padding: 0 7px;
+  border-color: color-mix(in srgb, var(--accent) 28%, var(--border));
+  color: var(--accent-strong);
+  background: color-mix(in srgb, var(--accent) 8%, var(--surface-raised));
+  font-variant-numeric: tabular-nums;
+}
+
+.research-task-timer svg {
+  flex: 0 0 auto;
 }
 
 .research-history-toggle.is-active,
@@ -11056,7 +11100,7 @@ button.activity-maintenance-indicator {
   display: inline-flex;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 6px;
   flex: 1 1 auto;
   min-width: 0;
   max-width: 100%;
@@ -11071,11 +11115,11 @@ button.activity-maintenance-indicator {
 }
 
 .research-session-controls .research-memory-panel {
-  flex: 0 1 auto;
+  flex: 0 0 auto;
 }
 
-.research-session-controls .research-todo-capsule {
-  flex: 0 1 auto;
+.research-session-controls .research-work-capsule {
+  flex: 0 0 auto;
 }
 
 .research-session-controls .ui-switch-row {
@@ -11087,6 +11131,31 @@ button.activity-maintenance-indicator {
   min-width: 0;
   font-size: 11px;
   overflow-wrap: anywhere;
+}
+
+.research-auto-approve {
+  display: flex;
+  flex: 0 1 112px;
+  width: 112px;
+  min-width: 34px;
+  max-width: 112px;
+  overflow: hidden;
+}
+
+.research-auto-approve-fit {
+  container-type: inline-size;
+  width: 100%;
+  min-width: 0;
+}
+
+@container (max-width: 107px) {
+  .research-auto-approve-fit .ui-switch-row {
+    gap: 0;
+  }
+
+  .research-auto-approve-fit .ui-switch-row > span {
+    display: none;
+  }
 }
 
 .research-messages {
@@ -11388,6 +11457,14 @@ button.activity-maintenance-indicator {
   background: var(--surface-raised);
 }
 
+/* Long chats can contain hundreds of rich Markdown and evidence nodes. Keep
+   their layout footprint for scroll positioning while allowing Chromium to
+   skip paint/layout work for turns well outside the viewport. */
+.research-message {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 280px;
+}
+
 .research-message-user {
   justify-self: end;
   width: min(86%, 420px);
@@ -11412,38 +11489,53 @@ button.activity-maintenance-indicator {
   font-style: italic;
 }
 
-/* A subagent turn is a chronological activity timeline: the card happens
-   first, then the parent continuation/tool activity, then the final prose. */
-.research-message-has-subagents > * {
+/* Assistant turns are one chronological timeline even though their persisted
+   reply and activity cards share a message record. Terminal work happened
+   before the final reply; live/actionable work is the newest event and stays
+   below the current prose. This applies to every subagent kind. */
+.research-message-has-activity > * {
   order: 6;
 }
 
-.research-message-has-subagents > .research-message-head {
+.research-message-has-activity > .research-message-head {
   order: 0;
 }
 
-.research-message-has-subagents > :is(.research-message-image-grid, .research-message-file-list) {
+.research-message-has-activity > :is(.research-message-image-grid, .research-message-file-list) {
   order: 1;
 }
 
-.research-message-has-subagents > .research-subagent-runs {
+.research-message-has-activity > .research-tool-traces {
+  order: 1;
+}
+
+.research-message-has-activity .research-timeline-terminal {
   order: 2;
 }
 
-.research-message-has-subagents > .research-parent-activity {
+.research-message-has-activity > :is(.research-parent-activity-completed, .research-parent-activity-failed) {
   order: 3;
 }
 
-.research-message-has-subagents > .research-markdown {
+.research-message-has-activity > .research-message-content {
   order: 4;
 }
 
-.research-message-has-subagents > .research-thinking {
-  order: 5;
+.research-message-has-activity .research-timeline-active {
+  order: 10;
 }
 
-.research-message-has-subagents > .research-message-timestamp {
-  order: 10;
+.research-message-has-activity > .research-parent-activity-running {
+  order: 11;
+}
+
+.research-message-has-activity > .research-message-timestamp {
+  order: 8;
+}
+
+.research-message-content {
+  display: grid;
+  gap: 7px;
 }
 
 .research-stream-placeholder {
@@ -12032,6 +12124,203 @@ button.activity-maintenance-indicator {
   overflow-wrap: anywhere;
 }
 
+.research-command-approval-proposal {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.research-command-approval-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.research-command-approval-heading > strong {
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.research-command-risk-badge {
+  flex: 0 0 auto;
+}
+
+.research-command-approval-code {
+  position: relative;
+  min-width: 0;
+}
+
+.research-command-approval-code .research-markdown pre {
+  max-height: 180px;
+  margin: 0;
+  padding: 9px 38px 9px 9px;
+  border-radius: 6px;
+  font: 11px/1.45 var(--font-mono);
+}
+
+.research-command-approval-code .research-markdown pre code {
+  min-width: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.research-command-copy-button.ui-icon-button {
+  position: absolute;
+  top: 5px;
+  right: 5px;
+  width: 23px;
+  height: 23px;
+  border-color: color-mix(in srgb, var(--border) 65%, transparent);
+  background: color-mix(in srgb, var(--surface-elevated) 92%, transparent);
+  color: var(--text-muted);
+  opacity: 0.78;
+  z-index: 2;
+}
+
+.research-command-copy-button.ui-icon-button:hover,
+.research-command-copy-button.ui-icon-button:focus-visible {
+  color: var(--text);
+  opacity: 1;
+}
+
+.research-command-risk-hint {
+  color: var(--text-muted);
+}
+
+.research-tool-traces {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.research-tool-trace {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid color-mix(in srgb, var(--border) 78%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--surface-raised) 54%, transparent);
+}
+
+.research-tool-trace > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 28px;
+  padding: 4px 7px;
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.25;
+  cursor: pointer;
+  list-style: none;
+}
+
+.research-tool-trace > summary::-webkit-details-marker {
+  display: none;
+}
+
+.research-tool-trace > summary > svg:first-child {
+  flex: 0 0 auto;
+  color: var(--accent-strong);
+}
+
+.research-tool-trace-status {
+  flex: 0 0 auto;
+  color: var(--text);
+  font-weight: 750;
+}
+
+.research-tool-trace.is-failed .research-tool-trace-status {
+  color: var(--danger);
+}
+
+.research-tool-trace.is-approval-required .research-tool-trace-status {
+  color: var(--warning);
+}
+
+.research-tool-trace-activity {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.research-tool-trace-chevron {
+  flex: 0 0 auto;
+  margin-left: auto;
+  transition: transform 120ms ease;
+}
+
+.research-tool-trace[open] .research-tool-trace-chevron {
+  transform: rotate(180deg);
+}
+
+.research-tool-trace-details {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+  padding: 8px;
+  border-top: 1px solid color-mix(in srgb, var(--border) 72%, transparent);
+}
+
+.research-tool-trace-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
+.research-tool-trace-meta > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.research-tool-trace-details > strong {
+  color: var(--text-muted);
+  font-size: 10px;
+  line-height: 1.2;
+  text-transform: uppercase;
+}
+
+.research-tool-trace-details > pre {
+  max-height: 180px;
+  margin: 0;
+  padding: 8px;
+  overflow: auto;
+  border: 1px solid var(--code-border);
+  border-radius: 6px;
+  background: var(--code-surface);
+  color: var(--code-text);
+  font: 11px/1.45 var(--font-mono);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.research-tool-trace-details > pre.is-error {
+  color: var(--danger);
+}
+
+.research-tool-trace-details > small,
+.research-tool-trace-details > time {
+  color: var(--text-muted);
+  font-size: 10.5px;
+  line-height: 1.35;
+}
+
+.research-command-approval-proposal > small {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+  white-space: normal;
+}
+
 .research-mcp-remember {
   display: inline-flex;
   align-items: center;
@@ -12054,7 +12343,7 @@ button.activity-maintenance-indicator {
   gap: 8px;
 }
 
-.research-todo-capsule {
+.research-work-capsule {
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -12071,33 +12360,34 @@ button.activity-maintenance-indicator {
   cursor: pointer;
 }
 
-.research-todo-capsule svg,
+.research-work-capsule svg,
 .research-todo-status-icon svg {
   flex: 0 0 auto;
 }
 
-.research-todo-capsule > svg {
+.research-work-capsule > svg {
   color: var(--text);
 }
 
-.research-todo-capsule span {
+.research-work-capsule span {
   min-width: 1ch;
   color: var(--text);
   font-weight: 800;
   text-align: center;
 }
 
-.research-todo-capsule-warning {
+.research-work-capsule-warning {
   border-color: color-mix(in srgb, var(--warning) 48%, var(--border-subtle));
+  color: var(--warning);
 }
 
-.research-todo-capsule-danger {
+.research-work-capsule-danger {
   border-color: color-mix(in srgb, var(--danger) 48%, var(--border-subtle));
   color: var(--danger);
 }
 
-.research-todo-capsule-success {
-  border-color: color-mix(in srgb, var(--success) 38%, var(--border-subtle));
+.research-work-capsule-success {
+  border-color: color-mix(in srgb, var(--success) 42%, var(--border-subtle));
   color: var(--success);
 }
 
@@ -12145,6 +12435,28 @@ button.activity-maintenance-indicator {
   margin: 0;
   padding: 0;
   list-style: none;
+}
+
+.research-todo-group-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 2px 3px 0;
+  color: var(--text-subtle);
+  font-size: 10px;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.research-todo-group-label:not(:first-child) {
+  margin-top: 4px;
+}
+
+.research-work-checkpoint {
+  color: var(--text-muted);
+  line-height: 1.4;
 }
 
 .research-todo-item {
@@ -12207,8 +12519,9 @@ button.activity-maintenance-indicator {
 }
 
 .research-subagent-runs {
-  display: grid;
-  gap: 8px;
+  /* Let every card participate directly in the message timeline so a turn can
+     contain completed work followed by a newer approval/running card. */
+  display: contents;
 }
 
 .research-parent-activity {
@@ -12285,6 +12598,14 @@ button.activity-maintenance-indicator {
   border-color: color-mix(in srgb, var(--success) 35%, var(--border-subtle));
 }
 
+.research-subagent-run-blocked {
+  border-color: color-mix(in srgb, var(--warning) 42%, var(--border-subtle));
+}
+
+.research-subagent-run-timed-out {
+  border-color: color-mix(in srgb, var(--warning) 42%, var(--border-subtle));
+}
+
 .research-subagent-run-failed {
   border-color: color-mix(in srgb, var(--danger) 35%, var(--border-subtle));
 }
@@ -12307,6 +12628,14 @@ button.activity-maintenance-indicator {
 
 .research-subagent-run-completed .research-subagent-run-head svg {
   color: var(--success);
+}
+
+.research-subagent-run-blocked .research-subagent-run-head svg {
+  color: var(--warning);
+}
+
+.research-subagent-run-timed-out .research-subagent-run-head svg {
+  color: var(--warning);
 }
 
 .research-subagent-run-failed .research-subagent-run-head svg {
@@ -12338,11 +12667,42 @@ button.activity-maintenance-indicator {
   flex: 0 0 auto;
 }
 
-.research-subagent-run > small {
+.research-subagent-summary small {
   color: var(--text-muted);
   font-size: 12px;
   line-height: 1.35;
   overflow-wrap: anywhere;
+}
+
+.research-subagent-summary {
+  display: grid;
+  justify-items: start;
+  gap: 3px;
+  min-width: 0;
+}
+
+.research-subagent-summary:not(.is-expanded) small {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.research-subagent-summary button {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent-strong);
+  font: inherit;
+  font-size: 11px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.research-subagent-summary button:hover,
+.research-subagent-summary button:focus-visible {
+  text-decoration: underline;
 }
 
 .research-subagent-approval {
@@ -12384,6 +12744,51 @@ button.activity-maintenance-indicator {
   line-height: 1.45;
   color: var(--text);
   overflow-wrap: anywhere;
+}
+
+.research-delphi-target-picker {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  margin: 0;
+  padding: 8px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--field) 82%, transparent);
+}
+
+.research-delphi-target-picker legend {
+  padding: 0 4px;
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 750;
+}
+
+.research-delphi-target-picker > label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 7px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--text) 4%, transparent);
+  cursor: pointer;
+}
+
+.research-delphi-target-picker > label > span {
+  display: flex;
+  min-width: 0;
+  flex: 1;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12.5px;
+}
+
+.research-delphi-target-picker > label small,
+.research-delphi-target-picker > small {
+  color: var(--text-muted);
+  font-size: 11px;
 }
 
 .research-subagent-approval-actions {
@@ -12438,8 +12843,133 @@ button.activity-maintenance-indicator {
   overflow-wrap: anywhere;
 }
 
+.research-delphi-observation-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 11.5px;
+}
+
+.research-delphi-observation-status > svg {
+  color: var(--accent);
+}
+
+.research-delphi-observation-status > small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.research-delphi-observation-status .ui-button {
+  min-height: 26px;
+  margin-left: auto;
+  padding: 3px 8px;
+}
+
+.research-delphi-observations {
+  display: grid;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border-subtle));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+}
+
+.research-delphi-observations-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.research-delphi-observations-head small {
+  margin-left: auto;
+  font-size: 10.5px;
+  font-weight: 500;
+  text-transform: none;
+}
+
+.research-delphi-observation-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+  gap: 6px;
+}
+
+/* Keep one capture at the same thumbnail width it would have in a two-item
+ * gallery. Otherwise auto-fit stretches it across the card and object-fit
+ * turns a normal screenshot into an aggressively cropped banner. */
+.research-delphi-observation-grid.is-single {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.research-delphi-observation-grid button {
+  display: grid;
+  grid-template-rows: 110px auto;
+  gap: 4px;
+  min-width: 0;
+  padding: 4px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--field);
+  color: var(--text-muted);
+  cursor: pointer;
+  font: inherit;
+  font-size: 10.5px;
+  text-align: left;
+}
+
+.research-delphi-observation-grid button:hover,
+.research-delphi-observation-grid button:focus-visible {
+  border-color: var(--accent);
+  color: var(--text);
+}
+
+.research-delphi-observation-grid img {
+  width: 100%;
+  height: 110px;
+  border-radius: 4px;
+  object-fit: cover;
+  background: var(--surface);
+}
+
+.research-delphi-observation-grid button > svg {
+  place-self: center;
+}
+
+.research-delphi-observation-grid span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.research-delphi-observation-toggle {
+  align-self: flex-start;
+  padding: 2px 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.research-delphi-observation-toggle:hover,
+.research-delphi-observation-toggle:focus-visible {
+  color: var(--text);
+  text-decoration: underline;
+}
+
 .research-subagent-run-failed .research-subagent-result {
   color: var(--danger);
+}
+
+.research-subagent-run-timed-out .research-subagent-result {
+  color: var(--warning);
 }
 
 .research-composer-actions {
@@ -12797,6 +13327,12 @@ button.activity-maintenance-indicator {
   box-shadow: 0 0 10px color-mix(in srgb, var(--danger) 45%, transparent);
   transition: height 80ms ease-out, opacity 80ms ease-out;
 }
+
+.research-speech-meter span:nth-child(1) { height: var(--speech-bar-0, 4px); }
+.research-speech-meter span:nth-child(2) { height: var(--speech-bar-1, 4px); }
+.research-speech-meter span:nth-child(3) { height: var(--speech-bar-2, 4px); }
+.research-speech-meter span:nth-child(4) { height: var(--speech-bar-3, 4px); }
+.research-speech-meter span:nth-child(5) { height: var(--speech-bar-4, 4px); }
 
 @keyframes speech-recording-pulse {
   0%,
@@ -14099,6 +14635,7 @@ button.activity-maintenance-indicator {
   }
 
   .provider-editor-list,
+  .llm-profile-group-grid,
   .command-summary {
     grid-template-columns: 1fr;
   }

@@ -63,6 +63,7 @@ export function formatUsageSummaryLine(usage: LlmUsage): string {
   if (usage.thinkingTokens) parts.push(`thinking ${formatTokenCount(usage.thinkingTokens)}`);
   if (usage.cacheReadTokens) parts.push(`cache-read ${formatTokenCount(usage.cacheReadTokens)}`);
   if (usage.cacheCreationTokens) parts.push(`cache-write ${formatTokenCount(usage.cacheCreationTokens)}`);
+  if (usage.reasoningReplayState) parts.push(`reasoning-state ${usage.reasoningReplayState}`);
   parts.push(`${usage.calls} call${usage.calls === 1 ? "" : "s"}`);
   return parts.join(", ");
 }
@@ -147,11 +148,11 @@ export type ResearchContentPresentation = {
   speech: string;
 };
 
-export type ResearchTodoStatus = ResearchChatSession["memory"]["todos"][number]["status"];
+export type ResearchTodoStatus = ResearchChatSession["memory"]["todos"][number]["status"] | "waiting";
 
 export type ResearchTodoCapsuleItem = {
   id: string;
-  kind: "memory" | "orchestration";
+  kind: "memory" | "orchestration" | "goal";
   notes?: string;
   status: ResearchTodoStatus;
   title: string;
@@ -166,6 +167,7 @@ export function streamingStructuredActivityLabel(content: string): string {
   if (/archicode_spawn_sherlock/i.test(content)) return "Starting Sherlock’s investigation…";
   if (/archicode_spawn_picasso|archicode_spawn_graph_reconciliation_agent/i.test(content)) return "Starting Picasso’s graph-design pass…";
   if (/archicode_spawn_merge_resolution_agent/i.test(content)) return "Preparing Solomon’s merge-resolution review…";
+  if (/archicode_spawn_delphi/i.test(content)) return "Preparing Delphi’s test/runtime audit review…";
   if (/propose_graph_change_set|archicode_propose_graph_change_set/i.test(content)) return "Preparing graph change preview…";
   if (/archicode_project_(?:read|list|search)|read_file|list_files|search_files/i.test(content)) return "Archi is inspecting project evidence…";
   return "Archi is using research tools…";

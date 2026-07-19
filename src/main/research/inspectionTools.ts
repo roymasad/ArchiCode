@@ -1,14 +1,14 @@
 import { spawn } from "node:child_process";
 import { readdir, readFile, stat } from "node:fs/promises";
 import path from "node:path";
-import type { GraphReconciliationOutput, MergeResolutionOutput, PicassoGraphOutput, ProjectBundle, ProjectSettings, ResearchChatMessage, ResearchChatScope, ResearchChatSession, SherlockResearchOutput } from "../../shared/schema";
+import type { DelphiTestingOutput, GraphReconciliationOutput, MergeResolutionOutput, PicassoGraphOutput, ProjectBundle, ProjectSettings, ResearchChatMessage, ResearchChatScope, ResearchChatSession, SherlockResearchOutput } from "../../shared/schema";
 import { runStatusSchema } from "../../shared/schema";
 import { normalizeProjectToolArguments } from "../../shared/toolRepair";
 import type { MicroRunResult } from "../microRuns";
 import { RESEARCH_SCRATCHPAD_MAX_CODE_CHARS, runResearchJavaScript } from "./scratchpad";
 import { readArtifactText } from "../storage/patches";
 import { loadProject } from "../storage/projectStore";
-import { listRuntimeServices } from "../storage/runtimeServices";
+import { discoverRuntimeProfileTargets, listRuntimeServices } from "../storage/runtimeServices";
 import {
   createChatArtifact,
   createProjectMemoryNote,
@@ -80,7 +80,6 @@ export const RESEARCH_INTERNAL_SERVER_ID = "archicode-research-internal";
 export const RESEARCH_CHANGE_SET_TOOL = "archicode_propose_graph_change_set";
 export const RESEARCH_CANVAS_CONTROL_TOOL = "archicode_control_canvas";
 export const RESEARCH_MEMORY_TOOL = "archicode_update_memory";
-export const RESEARCH_MEMORY_UNCHANGED_TOOL = "archicode_leave_memory_unchanged";
 export const RESEARCH_CONTEXT_SERVER_ID = "archicode-research-context";
 export const RESEARCH_CONTEXT_EXPANSION_TOOL = "archicode_read_research_context";
 export const RESEARCH_GRAPH_LAYOUT_TOOL = "archicode_read_graph_layout";
@@ -167,6 +166,7 @@ export function researchSinkTools(): ProviderMcpTool[] {
         additionalProperties: true,
         properties: {
           summary: { type: "string", description: "Updated cumulative meeting-note summary for future turns." },
+          supersedesFactIds: { type: "array", items: { type: "string" }, description: "Exact current-memory fact ids disproved or made obsolete by newer conclusive evidence in this turn." },
           decisions: memoryArray("Durable decisions with sourceMessageIds."),
           todos: memoryObjectArray("Todos with title/status/notes/sourceMessageIds.", {
             title: { type: "string" },
@@ -181,7 +181,7 @@ export function researchSinkTools(): ProviderMcpTool[] {
             sourceMessageIds: { type: "array", items: { type: "string" } }
           }),
           links: memoryArray("Useful links with url/title/note."),
-          facts: memoryArray("Durable facts with text/sourceMessageIds."),
+          facts: memoryArray("Durable facts with text/sourceMessageIds. When replacing an older fact, also put its exact id in supersedesFactIds."),
           assumptions: memoryArray("Working assumptions with text/sourceMessageIds."),
           graphRefs: memoryArray("Graph references (project/flow/subflow/node)."),
           runRefs: memoryArray("Run references with runId/status/note."),
@@ -189,21 +189,6 @@ export function researchSinkTools(): ProviderMcpTool[] {
           artifactRefs: memoryArray("Artifact references with artifactId/type/note."),
           imageRefs: memoryArray("Image references with visualSummary/extractedText."),
           debugFindings: memoryArray("Debug findings with text/sourceMessageIds.")
-        }
-      }
-    },
-    {
-      providerToolName: RESEARCH_MEMORY_UNCHANGED_TOOL,
-      serverId: RESEARCH_INTERNAL_SERVER_ID,
-      serverLabel: "Research",
-      toolName: "leave_memory_unchanged",
-      description: "Explicitly record the model's semantic decision that this non-empty turn created no durable state worth retaining. Use this only when no task, goal, requirement, key context, decision, result, fact, pending work, blocker, uncertainty, or cumulative-summary change should persist. This is the alternative to archicode_update_memory; call exactly one of the two on every non-empty turn.",
-      inputSchema: {
-        type: "object",
-        additionalProperties: false,
-        required: ["reason"],
-        properties: {
-          reason: { type: "string", description: "Short semantic reason the turn is ephemeral and memory should remain unchanged." }
         }
       }
     }
@@ -477,16 +462,12 @@ export function isResearchMemoryTool(providerToolName: string): boolean {
   return providerToolName === RESEARCH_MEMORY_TOOL;
 }
 
-export function isResearchMemoryUnchangedTool(providerToolName: string): boolean {
-  return providerToolName === RESEARCH_MEMORY_UNCHANGED_TOOL;
-}
-
 export function isResearchCanvasControlTool(providerToolName: string): boolean {
   return providerToolName === RESEARCH_CANVAS_CONTROL_TOOL;
 }
 
 export function isResearchSinkTool(providerToolName: string): boolean {
-  return isResearchChangeSetTool(providerToolName) || isResearchCanvasControlTool(providerToolName) || isResearchMemoryTool(providerToolName) || isResearchMemoryUnchangedTool(providerToolName);
+  return isResearchChangeSetTool(providerToolName) || isResearchCanvasControlTool(providerToolName) || isResearchMemoryTool(providerToolName);
 }
 
 export function isResearchContextExpansionTool(providerToolName: string): boolean {
@@ -521,6 +502,15 @@ export function microRunResultText(result: MicroRunResult): string {
 // deliberately does NOT dump the proposed change set, which becomes its own
 // approvable review card below the activity card.
 export function microRunHumanSummary(result: MicroRunResult): string {
+  if (result.status === "failed" && result.kind === "delphi-testing" && result.output) {
+    const output = result.output as DelphiTestingOutput;
+    const checkCount = output.checks.length;
+    const artifactCount = output.artifacts.length;
+    const cause = result.failureKind === "timeout"
+      ? `Delphi timed out before returning its final report: ${result.error ?? "the provider stopped responding"}`
+      : `Delphi did not return a complete final report: ${result.error ?? "unknown error"}`;
+    return `${cause}. Preserved partial evidence: ${checkCount} executed check${checkCount === 1 ? "" : "s"}${artifactCount ? ` and ${artifactCount} artifact${artifactCount === 1 ? "" : "s"}` : ""}. Partial verdict: ${output.verdict}.`.slice(0, 1000);
+  }
   if (result.status === "failed") return result.error ?? "The subagent failed.";
   const clarify = result.status === "needs-clarification" && result.clarificationQuestion
     ? ` (Proceeded without clarification: ${result.clarificationQuestion})`
@@ -536,6 +526,18 @@ export function microRunHumanSummary(result: MicroRunResult): string {
     const findingCount = output?.findings.length ?? 0;
     return `${output?.summary ?? "Investigation completed."}${findingCount ? ` ${findingCount} evidence-backed finding${findingCount === 1 ? "" : "s"}.` : ""}${clarify}`.slice(0, 1000);
   }
+  if (result.kind === "delphi-testing") {
+    const output = result.output as DelphiTestingOutput | undefined;
+    const checkCount = output?.checks.length ?? 0;
+    const findingCount = output?.findings.length ?? 0;
+    const visuallyAnalyzedCount = result.diagnostics?.visuallyAnalyzedArtifactIds?.length ?? 0;
+    const observationNote = output?.artifacts.length
+      ? visuallyAnalyzedCount > 0
+        ? ` The selected vision-capable model inspected pixels from ${visuallyAnalyzedCount} captured screenshot${visuallyAnalyzedCount === 1 ? "" : "s"}.`
+        : " Screenshots were captured for user review; the selected model did not inspect their pixels."
+      : "";
+    return `${output?.summary ?? "Audit completed."} Verdict: ${output?.verdict ?? "unknown"}.${checkCount ? ` ${checkCount} check${checkCount === 1 ? "" : "s"}.` : ""}${findingCount ? ` ${findingCount} finding${findingCount === 1 ? "" : "s"}.` : ""}${observationNote}${clarify}`.slice(0, 1000);
+  }
   const output = result.output as GraphReconciliationOutput | undefined;
   const changeSet = output?.graphChangeSet as { summary?: string; operations?: unknown[] } | undefined;
   if (changeSet?.operations?.length) {
@@ -550,11 +552,13 @@ export const RESEARCH_SPAWN_MERGE_RESOLUTION_TOOL = "archicode_spawn_merge_resol
 export const RESEARCH_SPAWN_GRAPH_RECONCILIATION_TOOL = "archicode_spawn_picasso";
 export const RESEARCH_SPAWN_LEGACY_GRAPH_RECONCILIATION_TOOL = "archicode_spawn_graph_reconciliation_agent";
 export const RESEARCH_SPAWN_SHERLOCK_TOOL = "archicode_spawn_sherlock";
+export const RESEARCH_SPAWN_DELPHI_TOOL = "archicode_spawn_delphi";
 
 export function researchSubagentTools(options: {
   mergeResolutionToolEnabled: boolean;
   graphReconciliationToolEnabled: boolean;
   sherlockResearchToolEnabled: boolean;
+  delphiTestingToolEnabled: boolean;
 }): ProviderMcpTool[] {
   const tools: ProviderMcpTool[] = [];
   if (options.mergeResolutionToolEnabled) {
@@ -641,6 +645,50 @@ export function researchSubagentTools(options: {
       }
     });
   }
+  if (options.delphiTestingToolEnabled) {
+    tools.push({
+      providerToolName: RESEARCH_SPAWN_DELPHI_TOOL,
+      serverId: "archicode-subagents",
+      serverLabel: "Subagents",
+      toolName: "spawn_delphi",
+      description: "Prepare an approval-gated, observable Delphi test/runtime audit in a fresh context. The card grants a bounded verification/runtime capability rather than prescribing commands or tool order. Delphi chooses relevant finite checks and direct adapter actions, waits for readiness, captures purposeful evidence within ceilings, and stops only what it started. Missing supported adapters are offered as an isolated managed-cache download; project dependencies are never changed silently.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["objective"],
+        properties: {
+          objective: { type: "string", description: "The behavior, flow, regression, or visual/runtime concern to audit." },
+          mode: { type: "string", enum: ["plan", "audit", "retest"] },
+          scope: { type: "string", description: "Optional bounded audit scope." },
+          codePaths: { type: "array", items: { type: "string" } },
+          platforms: { type: "array", items: { type: "string", enum: ["web", "electron", "flutter", "android", "ios", "generic"] } },
+          observation: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              mode: { type: "string", enum: ["visible", "headless"], description: "Visible opens supported target windows so the user can watch; this is the default." },
+              capture: { type: "string", enum: ["key-steps", "final", "none"], description: "Evidence screenshot cadence shown in Delphi's card." }
+            }
+          },
+          target: {
+            type: "object",
+            additionalProperties: false,
+            properties: {
+              profileId: { type: "string", description: "Existing ArchiCode run-target profile id." },
+              deviceId: { type: "string", description: "Explicit emulator, simulator, or device id." },
+              baseUrl: { type: "string", description: "Explicit URL of an already-running app/site." },
+              appiumServerUrl: { type: "string", description: "Explicit localhost URL of an already-running Appium server." },
+              appiumSessionId: { type: "string", description: "Explicit existing Appium session id for the selected emulator/device." },
+              launch: { type: "string", enum: ["never", "if-needed"], description: "Use if-needed to let ArchiCode start the selected Run App profile after approval." },
+              cleanup: { type: "string", enum: ["stop-if-started", "keep-running"], description: "Whether ArchiCode stops only the runtime/device it launched for this audit." }
+            }
+          },
+          acceptanceCriteria: { type: "array", items: { type: "string" } },
+          commands: { type: "array", maxItems: 20, items: { type: "string" }, description: "Optional caller-suggested checks. Delphi may choose other relevant finite verification actions through the same safety broker." },
+        }
+      }
+    });
+  }
   return tools;
 }
 
@@ -655,6 +703,10 @@ export function isResearchSpawnGraphReconciliationTool(providerToolName: string)
 
 export function isResearchSpawnSherlockTool(providerToolName: string): boolean {
   return providerToolName === RESEARCH_SPAWN_SHERLOCK_TOOL;
+}
+
+export function isResearchSpawnDelphiTool(providerToolName: string): boolean {
+  return providerToolName === RESEARCH_SPAWN_DELPHI_TOOL;
 }
 
 export type ResearchProjectFile = { path: string; size: number; binary: boolean; truncated?: boolean };
@@ -929,53 +981,29 @@ export function researchProjectFileTools(): ProviderMcpTool[] {
       serverId: RESEARCH_PROJECT_FILE_SERVER_ID,
       serverLabel: "Project Files",
       toolName: "list_runtime_services",
-      description: "List active Run App/runtime services with status, command, profile id, and recent logs.",
+      description: "Inspect configured Run App profiles and live/stopped runtime services, including status, URL, attached target/device ids, ownership, and recent logs. This is read-only.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
         properties: {
+          profileId: { type: "string", description: "Optional configured profile id filter." },
+          serviceId: { type: "string", description: "Optional runtime service id filter." },
           maxLogs: { type: "integer", minimum: 0, maximum: 100, description: "Maximum trailing log entries per service." }
         }
       }
     },
     {
-      providerToolName: "archicode_project_inspect_cli",
+      providerToolName: "archicode_project_discover_run_targets",
       serverId: RESEARCH_PROJECT_FILE_SERVER_ID,
-      serverLabel: RESEARCH_CLI_SERVER_LABEL,
-      toolName: "inspect_cli",
-      description: "Run a whitelisted read-only project inspection CLI command with structured args. Use this for Git diffs/history, dependency metadata, framework info, platform diagnostics, and other safe local inspection. It cannot run shells, install dependencies, start services, or mutate Git/project state.",
+      serverLabel: "Project Files",
+      toolName: "discover_run_targets",
+      description: "Run one configured read-only target discovery command for a Run App profile and return exact emulator, simulator, device, or other target ids. State-changing discovery commands are rejected.",
       inputSchema: {
         type: "object",
         additionalProperties: false,
-        required: ["command"],
+        required: ["profileId"],
         properties: {
-          command: {
-            type: "string",
-            enum: RESEARCH_CLI_ALLOWED_COMMANDS,
-            description: "Executable name from the read-only inspection allowlist."
-          },
-          args: {
-            type: "array",
-            items: { type: "string" },
-            maxItems: RESEARCH_CLI_MAX_ARGS,
-            description: "Structured command arguments. Do not include shell operators, pipes, redirection, absolute paths, or parent-directory paths."
-          },
-          cwd: {
-            type: "string",
-            description: "Optional project-relative working directory. Defaults to the project root."
-          },
-          timeoutMs: {
-            type: "integer",
-            minimum: 1000,
-            maximum: RESEARCH_CLI_TIMEOUT_MS,
-            description: "Maximum execution time. Defaults to 10000 ms."
-          },
-          maxChars: {
-            type: "integer",
-            minimum: 1000,
-            maximum: RESEARCH_CLI_MAX_OUTPUT_CHARS,
-            description: "Maximum stdout/stderr characters to return per stream."
-          }
+          profileId: { type: "string", minLength: 1 }
         }
       }
     }
@@ -1021,7 +1049,8 @@ export async function callResearchProjectFileTool(
   else if (tool.toolName === "update_chat_artifact") result = await researchToolUpdateChatArtifact(projectRoot, args, context.sessionId);
   else if (tool.toolName === "scratchpad_repl") result = await runResearchJavaScript(requiredToolString(args, "code"));
   else if (tool.toolName === "list_runtime_services") result = await researchToolListRuntimeServices(projectRoot, args);
-  else result = await researchToolInspectCli(projectRoot, args);
+  else if (tool.toolName === "discover_run_targets") result = await researchToolDiscoverRunTargets(projectRoot, args);
+  else throw new Error(`Project file tool ${tool.toolName} is not implemented.`);
   return {
     serverId: tool.serverId,
     serverLabel: tool.serverLabel,
@@ -1819,7 +1848,11 @@ export async function researchToolReadFile(projectRoot: string, args: Record<str
   const lines = redacted.text.split(/\r?\n/);
   const hasRange = args.startLine !== undefined || args.endLine !== undefined;
   const startLine = hasRange ? clampInteger(args.startLine, 1, 1, Math.max(1, lines.length)) : undefined;
-  const endLine = hasRange && startLine !== undefined ? clampInteger(args.endLine, startLine, startLine, Math.max(startLine, lines.length)) : undefined;
+  // A one-sided range follows normal reader semantics: startLine alone means
+  // "from here onward", while endLine alone means "from line 1 through here".
+  // Defaulting a missing endLine to startLine silently reduced `startLine: 1`
+  // to a one-line read and caused models to retry the same file needlessly.
+  const endLine = hasRange && startLine !== undefined ? clampInteger(args.endLine, lines.length, startLine, Math.max(startLine, lines.length)) : undefined;
   const selectedText = hasRange && startLine !== undefined && endLine !== undefined
     ? lines.slice(startLine - 1, endLine).join("\n")
     : redacted.text;
@@ -1977,38 +2010,89 @@ export async function researchToolReadArtifact(projectRoot: string, args: Record
 
 export async function researchToolListRuntimeServices(projectRoot: string, args: Record<string, unknown>): Promise<unknown> {
   const maxLogs = clampInteger(args.maxLogs, 20, 0, 100);
-  const services = await listRuntimeServices(projectRoot);
+  const profileId = typeof args.profileId === "string" ? args.profileId.trim() : "";
+  const serviceId = typeof args.serviceId === "string" ? args.serviceId.trim() : "";
+  const bundle = await loadProject(projectRoot);
+  const profiles = bundle.project.settings.runTargetProfiles.filter((profile) => !profileId || profile.id === profileId);
+  const services = (await listRuntimeServices(projectRoot)).filter((service) =>
+    (!profileId || service.profileId === profileId) && (!serviceId || service.id === serviceId));
   return {
+    profiles: profiles.map((profile) => ({
+      id: profile.id,
+      label: profile.label,
+      kind: profile.kind,
+      description: profile.description,
+      relativeCwd: profile.cwd ?? "",
+      targetRequired: profile.targetRequired,
+      defaultTargetId: profile.defaultTargetId,
+      canDiscoverTargets: Boolean(profile.discoverCommand),
+      canLaunchTarget: Boolean(profile.launchCommand),
+      canStopTarget: Boolean(profile.targetStopCommand),
+      commands: {
+        discover: profile.discoverCommand,
+        setup: profile.setupCommand,
+        launch: profile.launchCommand,
+        wait: profile.waitCommand,
+        run: profile.runCommand,
+        health: profile.healthCommand,
+        stop: profile.stopCommand,
+        targetStop: profile.targetStopCommand
+      },
+      url: profile.url,
+      ports: profile.ports ?? [],
+      timeoutSeconds: profile.timeoutSeconds
+    })),
     services: services.map((service) => ({
       id: service.id,
       profileId: service.profileId,
       label: service.label,
+      kind: service.kind,
       status: service.status,
       command: service.command,
       relativeCwd: service.relativeCwd,
       url: service.url,
+      ports: service.ports,
+      pid: service.pid,
+      targetId: service.targetId,
+      runTargetId: service.runTargetId,
+      targetStartedByService: service.targetStartedByService ?? false,
       startedAt: service.startedAt,
       stoppedAt: service.stoppedAt,
+      lastOutputAt: service.lastOutputAt,
+      exitCode: service.exitCode,
       logs: service.logs.slice(-maxLogs),
       omittedLogs: Math.max(0, service.logs.length - maxLogs)
-    }))
+    })),
+    note: "Starting, stopping, and restarting are review-card actions. Use discover_run_targets only when a profile advertises target discovery."
+  };
+}
+
+export async function researchToolDiscoverRunTargets(projectRoot: string, args: Record<string, unknown>): Promise<unknown> {
+  const profileId = requiredToolString(args, "profileId");
+  const bundle = await loadProject(projectRoot);
+  const profile = bundle.project.settings.runTargetProfiles.find((item) => item.id === profileId);
+  if (!profile) throw new Error(`Run App profile ${profileId} was not found.`);
+  if (!profile.discoverCommand) return { profileId, profileLabel: profile.label, targets: [], note: "This profile has no target discovery command." };
+  const targets = await discoverRuntimeProfileTargets(projectRoot, profileId);
+  return {
+    profileId,
+    profileLabel: profile.label,
+    kind: profile.kind,
+    targets,
+    defaultTargetId: profile.defaultTargetId,
+    targetRequired: profile.targetRequired
   };
 }
 
 export function researchProjectFileAccessContext(projectRoot: string): Record<string, unknown> {
   return {
     rootPath: path.resolve(projectRoot),
-    access: "Use project file and read-only CLI inspection tools on demand instead of assuming all file contents or command output are in context. Managed writes are limited to small project memory notes and artifacts inside the current chat's local artifact directory.",
+    access: "Use project file tools and the separate guarded console capability on demand instead of assuming all file contents or command output are in context. Safe in-scope commands execute; risky or uncertain commands pause for approval. Application-source implementation remains delegated to graph/build runs.",
     tools: researchProjectFileTools().map((tool) => ({
       name: tool.providerToolName,
       description: tool.description
     })),
-    cliInspection: {
-      tool: "archicode_project_inspect_cli",
-      safety: "Runs an allowlisted command with structured args, no shell, project-confined cwd, capped output, and read-only verb validation. It must not install packages, start servers, write files, or change Git/project state.",
-      allowedCommands: RESEARCH_CLI_ALLOWED_COMMANDS,
-      allowedUseSummary: RESEARCH_CLI_ALLOWLIST_SUMMARY
-    },
+    commandSafety: "archicode_console_run_command evaluates the actual requested action through the shared safety broker; it does not rely on a static executable allowlist.",
     ignoredDirectories: [...RESEARCH_FILE_IGNORE_DIRS],
     limits: {
       maxListedFiles: RESEARCH_FILE_MAX_FILES,

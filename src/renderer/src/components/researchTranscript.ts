@@ -109,6 +109,13 @@ export function formatResearchChatMarkdown(session: ResearchChatSession, bundle:
   if (session.summary.trim()) {
     lines.push("## Rolling Summary", "", session.summary.trim(), "");
   }
+  const goal = session.orchestration.goal;
+  if (goal) {
+    lines.push("## Durable Goal", "", `${goal.objective} (${goal.status})`, "");
+    appendMemoryList(lines, "Success Criteria", goal.successCriteria);
+    appendMemoryList(lines, "Goal Steps", goal.steps.map((step) => `${step.title} (${step.status})${step.notes ? ` - ${step.notes}` : ""}`));
+    appendMemoryList(lines, "Completion Evidence", goal.completionEvidence);
+  }
   const activeWork = session.orchestration.todos.filter((item) => item.status !== "done" && item.status !== "cancelled");
   appendMemoryList(lines, "Active Work", activeWork.map(formatResearchOrchestrationTodo));
   if (hasResearchMemory(session.memory)) {
@@ -174,4 +181,3 @@ export function hasResearchMemory(memory: ResearchChatSession["memory"]): boolea
     memory.lastUpdateError
   );
 }
-

@@ -43,7 +43,9 @@ import {
   X
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type WheelEvent } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { defaultPhaseModelPolicies, defaultSubagentModelPolicies, runTargetProfileSchema, type DebugIncident, type LlmPhase, type PhaseModelPolicy, type ProjectSettings, type RunEffort, type RunScope, type RuntimeService, type SpeechSettings, type SubagentModelProfile, type TtsSettings } from "@shared/schema";
+import { gaiaAgent, pandoraAgent } from "@shared/agentIdentities";
 import { deriveContextBudgetPlan } from "@shared/contextBudget";
 import { isSubflowIgnored } from "@shared/graph";
 import { providerHasCompletedCapabilityCheck, providerImageInputSupportStatus, providerModelOutputTokenLimit } from "@shared/providerCapabilities";
@@ -106,28 +108,69 @@ import {
 } from "./ui";
 
 
-import { RuntimeUrlLinks, contextBudgetSourceLabel, contextLabel, defaultSpeechSettings, defaultTtsSettings, encodeWav, formatBytes, formatTokenCount, isMacRuntime, mcpRegistryCategoryLabel, mcpRegistryCategoryOptions, mcpRegistryInitials, mcpRegistrySortOptions, modelHint, modelOptionLabel, modelOptionsForProvider, normalizeSpeechLanguage, openAiEndpointHint, openAiEndpointLabel, openRuntimeUrl, phaseLabels, policyPhases, projectSettingsTabs, providerCheckHint, providerDescription, providerSupportsImages, renderRuntimeInsightDetail, renderRuntimeTextWithLinks, runtimeCwdLabel, runtimeUrls, selectedModelImageHint, speechLanguageOptions, mergeAudioChunks } from "./projectToolbarShared";
+import { RuntimeUrlLinks, contextBudgetSourceLabel, contextLabel, defaultSpeechSettings, defaultTtsSettings, encodeWav, formatBytes, formatTokenCount, isMacRuntime, mcpRegistryCategoryLabel, mcpRegistryCategoryOptions, mcpRegistryInitials, mcpRegistrySortOptions, modelHint, modelOptionLabel, modelOptionsForProvider, normalizeSpeechLanguage, openAiEndpointHint, openAiEndpointLabel, openRuntimeUrl, projectSettingsTabs, providerCheckHint, providerDescription, providerSupportsImages, renderRuntimeInsightDetail, renderRuntimeTextWithLinks, runtimeCwdLabel, runtimeUrls, selectedModelImageHint, speechLanguageOptions, mergeAudioChunks } from "./projectToolbarShared";
 
-const subagentProfiles: SubagentModelProfile[] = ["picasso", "sherlock", "solomon"];
+const subagentProfiles: SubagentModelProfile[] = ["picasso", "sherlock", "solomon", "delphi"];
 const subagentProfileLabels: Record<SubagentModelProfile, string> = {
-  picasso: "Picasso",
-  sherlock: "Sherlock",
-  solomon: "Solomon"
+  picasso: "Picasso — Graph design",
+  sherlock: "Sherlock — Research",
+  solomon: "Solomon — Merge resolution",
+  delphi: "Delphi — Test & runtime"
 };
 const subagentProfileDescriptions: Record<SubagentModelProfile, string> = {
   picasso: "Used for substantial graph design, graph assessment, and reconciliation proposals. Picasso never applies graph changes directly.",
   sherlock: "Used for isolated, read-only project, codebase, topic, and web investigations that return a compact evidence dossier.",
-  solomon: "Used to investigate and resolve Git merge conflicts in an isolated merge-resolution run."
+  solomon: "Used to investigate and resolve Git merge conflicts in an isolated merge-resolution run.",
+  delphi: "Used for isolated test, visual, runtime, and emulator audits with approved target launch/cleanup, structured evidence, and bounded retries."
 };
 const phaseProfileDescriptions: Record<LlmPhase, string> = {
-  planning: "Used to understand implementation scope and prepare the plan before coding begins.",
-  coding: "Used by implementation runs while creating and updating project source files.",
-  debugging: "Used to investigate failures and prepare focused source repairs.",
+  planning: `${gaiaAgent.name} uses this to understand implementation scope and prepare the plan before implementation begins.`,
+  coding: `${gaiaAgent.name} uses this while creating and updating project source files.`,
+  debugging: `${pandoraAgent.name} uses this to investigate failures and prepare focused source repairs.`,
   review: "Used to review build and runtime results, logs, and implementation outcomes.",
   verifying: "Used for final verification decisions after implementation or debugging work.",
   summarizing: "Used to compact long run and chat context into a smaller durable summary.",
   brainstorming: "Used by the main Archi Research chat. A chat-specific model selection overrides this model choice for that chat."
 };
+
+const phaseProfileGroups: Array<{
+  id: "archi" | "gaia" | "pandora" | "system";
+  title: string;
+  description: string;
+  profiles: Array<{ phase: LlmPhase; label: string }>;
+}> = [
+  {
+    id: "archi",
+    title: "Archi — Research Chat",
+    description: "The main chat agent. A model selected inside an individual chat overrides this default for that chat.",
+    profiles: [{ phase: "brainstorming", label: "Chat" }]
+  },
+  {
+    id: "gaia",
+    title: gaiaAgent.title,
+    description: "Planning and implementation remain independently configurable phases of the same AI Implement agent.",
+    profiles: [
+      { phase: "planning", label: "Planning" },
+      { phase: "coding", label: "Implementation / Coding" }
+    ]
+  },
+  {
+    id: "pandora",
+    title: pandoraAgent.title,
+    description: "The AI Debug agent for focused failure investigation, repair, and recovery.",
+    profiles: [{ phase: "debugging", label: "Debugging" }]
+  },
+  {
+    id: "system",
+    title: "System tasks",
+    description: "Supporting model calls that are not standalone agents.",
+    profiles: [
+      { phase: "review", label: "Build/runtime review" },
+      { phase: "verifying", label: "Verification" },
+      { phase: "summarizing", label: "Context summary" }
+    ]
+  }
+];
 
 export function ProjectToolbar({
   onResetLayout,
@@ -199,7 +242,64 @@ export function ProjectToolbar({
     globalTtsSettings,
     updateGlobalSpeechSettings,
     updateGlobalTtsSettings
-  } = useArchicodeStore();
+  } = useArchicodeStore(useShallow((state) => ({
+    bundle: state.bundle,
+    rootPath: state.rootPath,
+    activeFlowId: state.activeFlowId,
+    selectedNodeId: state.selectedNodeId,
+    selectedNodeIds: state.selectedNodeIds,
+    reload: state.reload,
+    runAgent: state.runAgent,
+    runProfile: state.runProfile,
+    reportBug: state.reportBug,
+    updateBugIncident: state.updateBugIncident,
+    startIncidentDebugRun: state.startIncidentDebugRun,
+    startRuntimeDebugRun: state.startRuntimeDebugRun,
+    startScopedResearchChat: state.startScopedResearchChat,
+    runtimeServices: state.runtimeServices,
+    stopRuntimeService: state.stopRuntimeService,
+    restartRuntimeService: state.restartRuntimeService,
+    refreshRuntimeServices: state.refreshRuntimeServices,
+    updateProjectDetails: state.updateProjectDetails,
+    updateSettings: state.updateSettings,
+    checkProvider: state.checkProvider,
+    providerHealth: state.providerHealth,
+    projectSkills: state.projectSkills,
+    mcpServers: state.mcpServers,
+    mcpRegistryEntries: state.mcpRegistryEntries,
+    mcpRegistryNextCursor: state.mcpRegistryNextCursor,
+    mcpRegistryCount: state.mcpRegistryCount,
+    capabilityBusy: state.capabilityBusy,
+    refreshCapabilities: state.refreshCapabilities,
+    createProjectSkill: state.createProjectSkill,
+    searchMcpRegistry: state.searchMcpRegistry,
+    installMcpRegistryServer: state.installMcpRegistryServer,
+    refreshMcpServerCapabilities: state.refreshMcpServerCapabilities,
+    theme: state.theme,
+    uiScale: state.uiScale,
+    toggleTheme: state.toggleTheme,
+    setUiScale: state.setUiScale,
+    autoLayout: state.autoLayout,
+    importFlow: state.importFlow,
+    importDrawioFlow: state.importDrawioFlow,
+    exportActiveFlow: state.exportActiveFlow,
+    exportActiveDrawioFlow: state.exportActiveDrawioFlow,
+    exportProjectBundle: state.exportProjectBundle,
+    exportProjectDocument: state.exportProjectDocument,
+    repairProject: state.repairProject,
+    openInitialCodebaseImportReport: state.openInitialCodebaseImportReport,
+    deleteProjectState: state.deleteProjectState,
+    purgeResolvedNotes: state.purgeResolvedNotes,
+    projectSettingsRequest: state.projectSettingsRequest,
+    clearProjectSettingsRequest: state.clearProjectSettingsRequest,
+    workbenchView: state.workbenchView,
+    setWorkbenchView: state.setWorkbenchView,
+    openProjectInVsCode: state.openProjectInVsCode,
+    globalSpeechSettings: state.globalSpeechSettings,
+    globalTtsSettings: state.globalTtsSettings,
+    updateGlobalSpeechSettings: state.updateGlobalSpeechSettings,
+    updateGlobalTtsSettings: state.updateGlobalTtsSettings
+  })));
   const [detailsDraft, setDetailsDraft] = useState({ name: "" });
   const [draft, setDraft] = useState<ProjectSettings | null>(null);
   const [speechDraft, setSpeechDraft] = useState<SpeechSettings>(defaultSpeechSettings);
@@ -375,10 +475,17 @@ export function ProjectToolbar({
 
   useEffect(() => {
     if (!bundle) return;
+    const refreshVisibleRuntimeServices = () => {
+      if (document.visibilityState !== "hidden") void refreshRuntimeServices();
+    };
     const timer = window.setInterval(() => {
-      void refreshRuntimeServices();
+      refreshVisibleRuntimeServices();
     }, 2000);
-    return () => window.clearInterval(timer);
+    document.addEventListener("visibilitychange", refreshVisibleRuntimeServices);
+    return () => {
+      window.clearInterval(timer);
+      document.removeEventListener("visibilitychange", refreshVisibleRuntimeServices);
+    };
   }, [bundle, refreshRuntimeServices]);
 
   useEffect(() => {
@@ -590,18 +697,18 @@ export function ProjectToolbar({
   const providerStatusOk = Boolean(enabledProvider && activeProviderHealth?.ok !== false);
   const providerStatusClass = providerStatusOk ? "is-ok" : "is-bad";
   const implementTooltip = runChangeBlocked
-    ? "A run is already active or waiting for review."
+    ? `${gaiaAgent.title}. A run is already active or waiting for review.`
     : buildCommand
-      ? `Choose Project, Flow, or Nodes scope, then plan, code, test, and verify with: ${buildCommand}`
-      : "Choose Project, Flow, or Nodes scope, then plan, code, and identify the right tests/verification.";
+      ? `${gaiaAgent.title}. Choose Project, Flow, or Nodes scope, then plan, code, test, and verify with: ${buildCommand}`
+      : `${gaiaAgent.title}. Choose Project, Flow, or Nodes scope, then plan, code, and identify the right tests/verification.`;
   const buildTooltip = buildCommand
     ? `Run configured build command: ${buildCommand}`
     : "Ask AI to detect the build or verification target and troubleshoot setup.";
   const debugTooltip = runChangeBlocked
-    ? "Review flow logic or manage bug reports while the active run finishes. Starting another repair run remains unavailable."
+    ? `${pandoraAgent.title}. Review flow logic or manage bug reports while the active run finishes. Starting another repair run remains unavailable.`
     : debugSignalCount
-      ? `Review flow logic, or debug ${debugSignalCount} flagged bug/failure signal${debugSignalCount === 1 ? "" : "s"}.`
-      : "Review flow logic in chat, report a bug, or wait for a failed run/runtime before starting AI Debug.";
+      ? `${pandoraAgent.title}. Review flow logic, or debug ${debugSignalCount} flagged bug/failure signal${debugSignalCount === 1 ? "" : "s"}.`
+      : `${pandoraAgent.title}. Review flow logic in chat, report a bug, or wait for a failed run/runtime before starting AI Debug.`;
   const runTooltip = runProfiles.length
     ? "Choose a runtime profile to start as an independent service."
     : runCommand
@@ -1781,7 +1888,7 @@ export function ProjectToolbar({
                 <MenuLabel>Debug</MenuLabel>
                 <MenuItem
                   tooltip={openBugReports.length
-                    ? "Review, edit, select, or resolve reported bugs before asking AI Debug to fix them."
+                    ? "Review, edit, select, or resolve reported bugs before asking Pandora to fix them."
                     : "No open bug reports found."}
                   disabled={!openBugReports.length}
                   onSelect={openBugReview}
@@ -1789,7 +1896,7 @@ export function ProjectToolbar({
                   <Bug size={15} /> Review reported bugs{openBugReports.length ? ` (${openBugReports.length})` : ""}
                 </MenuItem>
                 <MenuItem
-                  tooltip="Create a project bug report for AI Debug to pick up."
+                  tooltip="Create a project bug report for Pandora to pick up."
                   onSelect={() => setReportBugOpen(true)}
                 >
                   <MessageSquare size={15} /> Report Bug
@@ -2183,8 +2290,8 @@ export function ProjectToolbar({
       }}>
         {pendingImplementScope ? (
           <DialogContent
-            title="Start AI Implement?"
-            description="Queue an implementation run with the selected scope and effort."
+            title="Start AI Implement with Gaia?"
+            description={`${gaiaAgent.title} will take the selected implementation scope and effort.`}
           >
             <div className="confirm-summary">
               <div className="confirm-badges">
@@ -2258,7 +2365,7 @@ export function ProjectToolbar({
             <TextArea
               rows={3}
               value={runtimeDebugGuidance}
-              placeholder="Optional guidance for AI Debug"
+              placeholder="Optional guidance for Pandora"
               onChange={(event) => setRuntimeDebugGuidance(event.target.value)}
             />
             <div className="dialog-actions">
@@ -2343,12 +2450,12 @@ export function ProjectToolbar({
                     </Field>
                   </div>
                   <div className="action-row compact">
-                    <Tooltip content="Save this report's edited title, description, and priority without starting AI Debug.">
+                    <Tooltip content="Save this report's edited title, description, and priority without starting Pandora.">
                       <Button type="button" size="sm" variant="primary" onClick={() => void saveBugEdit(incident.id)}>
                         <Save size={14} /> Update
                       </Button>
                     </Tooltip>
-                    <Tooltip content="Remove this report from the open bug list. This does not run AI Debug or delete project files.">
+                    <Tooltip content="Remove this report from the open bug list. This does not run Pandora or delete project files.">
                       <Button type="button" size="sm" variant="danger" onClick={() => setRemoveBugIncidentId(incident.id)}>
                         <Trash2 size={14} /> Remove
                       </Button>
@@ -2382,7 +2489,7 @@ export function ProjectToolbar({
           <div className="confirm-summary">
             <div className="confirm-summary-grid">
               <span><b>Report</b>{openBugReports.find((incident) => incident.id === removeBugIncidentId)?.title ?? "Selected bug report"}</span>
-              <span><b>Effect</b>No AI Debug run will start, and no project source files will be changed.</span>
+              <span><b>Effect</b>Pandora will not start, and no project source files will be changed.</span>
             </div>
           </div>
           <div className="dialog-actions">
@@ -2407,7 +2514,7 @@ export function ProjectToolbar({
       <DialogRoot open={reportBugOpen} onOpenChange={setReportBugOpen}>
         <DialogContent
           title="Report Bug"
-          description="Create an open bug incident for AI Debug."
+          description="Create an open bug incident for Pandora — Debug & Recovery."
         >
           <div className="form-grid">
             <Field label="Title">
@@ -2965,7 +3072,7 @@ export function ProjectToolbar({
                     checked={draft.planningReviewMode === "manual"}
                     onCheckedChange={(checked) => updateDraft({ planningReviewMode: checked ? "manual" : "auto" })}
                     label="Review plans before coding"
-                    tooltip="When enabled, AI Implement pauses after planning so you can approve or reject the plan before any coding phase starts."
+                    tooltip="When enabled, Gaia's AI Implement run pauses after planning so you can approve or reject the plan before any coding phase starts."
                   />
                   <Switch
                     checked={draft.codeReviewMode === "manual"}
@@ -3079,7 +3186,8 @@ export function ProjectToolbar({
                           ...draft.agentTools.subagents,
                           mergeConflictResolution: checked,
                           graphReconciliation: draft.agentTools.subagents?.graphReconciliation ?? true,
-                          sherlockResearch: draft.agentTools.subagents?.sherlockResearch ?? true
+                          sherlockResearch: draft.agentTools.subagents?.sherlockResearch ?? true,
+                          delphiTesting: draft.agentTools.subagents?.delphiTesting ?? true
                         }
                       }
                     })}
@@ -3095,7 +3203,8 @@ export function ProjectToolbar({
                           ...draft.agentTools.subagents,
                           mergeConflictResolution: draft.agentTools.subagents?.mergeConflictResolution ?? true,
                           graphReconciliation: checked,
-                          sherlockResearch: draft.agentTools.subagents?.sherlockResearch ?? true
+                          sherlockResearch: draft.agentTools.subagents?.sherlockResearch ?? true,
+                          delphiTesting: draft.agentTools.subagents?.delphiTesting ?? true
                         }
                       }
                     })}
@@ -3111,12 +3220,30 @@ export function ProjectToolbar({
                           ...draft.agentTools.subagents,
                           mergeConflictResolution: draft.agentTools.subagents?.mergeConflictResolution ?? true,
                           graphReconciliation: draft.agentTools.subagents?.graphReconciliation ?? true,
-                          sherlockResearch: checked
+                          sherlockResearch: checked,
+                          delphiTesting: draft.agentTools.subagents?.delphiTesting ?? true
                         }
                       }
                     })}
                     label="Allow Sherlock — Research Detective"
                     tooltip="Lets chat and run agents delegate substantial read-only codebase, online, or topic research to an isolated evidence-focused subagent."
+                  />
+                  <Switch
+                    checked={draft.agentTools.subagents?.delphiTesting ?? true}
+                    onCheckedChange={(checked) => updateDraft({
+                      agentTools: {
+                        ...draft.agentTools,
+                        subagents: {
+                          ...draft.agentTools.subagents,
+                          mergeConflictResolution: draft.agentTools.subagents?.mergeConflictResolution ?? true,
+                          graphReconciliation: draft.agentTools.subagents?.graphReconciliation ?? true,
+                          sherlockResearch: draft.agentTools.subagents?.sherlockResearch ?? true,
+                          delphiTesting: checked
+                        }
+                      }
+                    })}
+                    label="Allow Delphi — Test & Runtime Oracle"
+                    tooltip="Lets chat and build/debug runs delegate bounded test, visual, runtime, and emulator audits. Delphi can approval-gated start an existing Run App profile, wait for it, and stop only what it started; missing tools use a separate setup card."
                   />
                 </section>
 
@@ -3281,24 +3408,38 @@ export function ProjectToolbar({
                       Editing profiles for <strong>{enabledProvider.label}</strong>. Model choices are remembered separately for each provider card.
                     </p>
                     <div className="provider-editor-list llm-profile-list">
-                      {policyPhases.map((phase) => renderModelPolicyCard(
-                        phase,
-                        phaseLabels[phase],
-                        phaseProfileDescriptions[phase],
-                        enabledProvider.phaseModelPolicies?.[phase] ?? defaultPhaseModelPolicies[phase],
-                        (patch) => updateProviderPhasePolicy(enabledProvider.id, phase, patch)
+                      {phaseProfileGroups.map((group) => (
+                        <section key={group.id} className="llm-profile-group" data-llm-profile-group={group.id}>
+                          <div className="llm-profile-section-heading">
+                            <strong>{group.title}</strong>
+                            <small>{group.description}</small>
+                          </div>
+                          <div className="llm-profile-group-grid">
+                            {group.profiles.map(({ phase, label }) => renderModelPolicyCard(
+                              phase,
+                              label,
+                              phaseProfileDescriptions[phase],
+                              enabledProvider.phaseModelPolicies?.[phase] ?? defaultPhaseModelPolicies[phase],
+                              (patch) => updateProviderPhasePolicy(enabledProvider.id, phase, patch)
+                            ))}
+                          </div>
+                        </section>
                       ))}
-                      <div className="llm-profile-section-heading">
-                        <strong>Subagents</strong>
-                        <small>Independent profiles; Default inherits the selected provider model, including a chat-specific model when spawned from that chat.</small>
-                      </div>
-                      {subagentProfiles.map((profile) => renderModelPolicyCard(
-                        `subagent-${profile}`,
-                        subagentProfileLabels[profile],
-                        subagentProfileDescriptions[profile],
-                        enabledProvider.subagentModelPolicies?.[profile] ?? defaultSubagentModelPolicies[profile],
-                        (patch) => updateProviderSubagentPolicy(enabledProvider.id, profile, patch)
-                      ))}
+                      <section className="llm-profile-group" data-llm-profile-group="specialists">
+                        <div className="llm-profile-section-heading">
+                          <strong>Specialist agents</strong>
+                          <small>Independent profiles; Default inherits the selected provider model, including a chat-specific model when spawned from that chat.</small>
+                        </div>
+                        <div className="llm-profile-group-grid">
+                          {subagentProfiles.map((profile) => renderModelPolicyCard(
+                            `subagent-${profile}`,
+                            subagentProfileLabels[profile],
+                            subagentProfileDescriptions[profile],
+                            enabledProvider.subagentModelPolicies?.[profile] ?? defaultSubagentModelPolicies[profile],
+                            (patch) => updateProviderSubagentPolicy(enabledProvider.id, profile, patch)
+                          ))}
+                        </div>
+                      </section>
                     </div>
                   </>
                 ) : (

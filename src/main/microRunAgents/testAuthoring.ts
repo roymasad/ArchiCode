@@ -22,6 +22,9 @@ export interface TestAuthoringInput {
   moduleCwd: string | null;
   stackAssumptions: string[];
   suggestedTestDir: string;
+  /** True only when the invoking user action or an approved review operation
+   * explicitly authorized this agent to create/overwrite test files. */
+  writeAuthorizedByUser: boolean;
 }
 
 // One authored check the agent reports back: a criterion bound to the real test
@@ -48,8 +51,10 @@ export function resolveSafeProjectPath(projectRoot: string, relativePath: string
   return resolved.startsWith(rootWithSep) ? resolved : null;
 }
 
-function createTestAuthoringTools(context: MicroRunContext): MicroRunTool[] {
+function createTestAuthoringTools(context: MicroRunContext, input: TestAuthoringInput): MicroRunTool[] {
   const { projectRoot, onProgress } = context;
+  let writeAuthorized = input.writeAuthorizedByUser === true;
+  const assignedTestDirectory = resolveSafeProjectPath(projectRoot, input.suggestedTestDir);
 
   const listProjectFilesTool: MicroRunTool = {
     serverId: "micro-run-tools",
@@ -168,8 +173,17 @@ function createTestAuthoringTools(context: MicroRunContext): MicroRunTool[] {
       required: ["filePath", "content", "checks", "testCommand"]
     },
     handler: async (args: { filePath: string; content: string; checks?: unknown; testCommand?: unknown }) => {
+      if (!writeAuthorized) {
+        throw new Error("Writing test files requires explicit user authorization. Call request_test_write_authorization first, or return an inspection-only proposal without writing.");
+      }
       const resolved = resolveSafeProjectPath(projectRoot, args.filePath);
       if (!resolved) return { success: false, error: `Path "${args.filePath}" is outside the project or absolute; refused. Use a project-relative path inside the suggested test directory.` };
+      if (!assignedTestDirectory || (resolved !== assignedTestDirectory && !resolved.startsWith(`${assignedTestDirectory}${path.sep}`))) {
+        return {
+          success: false,
+          error: `Path "${args.filePath}" is outside this agent's assigned test directory "${input.suggestedTestDir}"; refused.`
+        };
+      }
       try {
         await fs.mkdir(path.dirname(resolved), { recursive: true });
         await fs.writeFile(resolved, args.content, "utf8");
@@ -178,6 +192,40 @@ function createTestAuthoringTools(context: MicroRunContext): MicroRunTool[] {
       } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : String(error) };
       }
+    }
+  };
+
+  const requestTestWriteAuthorizationTool: MicroRunTool = {
+    serverId: "micro-run-tools",
+    serverLabel: "Micro-Run Tools",
+    providerToolName: "request_test_write_authorization",
+    toolName: "request_test_write_authorization",
+    description: "Ask the user to authorize creating or overwriting test files within this assigned test-authoring scope. Use only when that write permission was not already granted.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        reason: { type: "string", description: "A concise explanation of the tests and scope you propose to write." }
+      },
+      required: ["reason"]
+    },
+    handler: async (args: { reason: string }) => {
+      if (writeAuthorized) return { status: "authorized", message: "The user already authorized test writes for this assigned scope." };
+      const question = [
+        "May Test Authoring create or overwrite test files for this assigned acceptance-test scope?",
+        args.reason.trim() ? `Proposed work: ${args.reason.trim()}` : ""
+      ].filter(Boolean).join("\n\n");
+      const answer = await context.onClarification?.(question) ?? "";
+      const explicitlyApproved = /^\s*(?:yes|y|approved?|allow(?:ed)?|go ahead|do it|proceed)\b/i.test(answer);
+      if (explicitlyApproved) {
+        writeAuthorized = true;
+        return { status: "authorized", answer };
+      }
+      return {
+        status: "not-authorized",
+        answer,
+        message: "The user did not explicitly authorize test-file writes. Continue inspection-only and report the proposed tests."
+      };
     }
   };
 
@@ -214,21 +262,36 @@ function createTestAuthoringTools(context: MicroRunContext): MicroRunTool[] {
     }
   };
 
-  return [listProjectFilesTool, readProjectFileTool, searchFilesTool, writeTestFileTool, reportAcceptanceTestsTool];
+  return [
+    listProjectFilesTool,
+    readProjectFileTool,
+    searchFilesTool,
+    requestTestWriteAuthorizationTool,
+    writeTestFileTool,
+    reportAcceptanceTestsTool
+  ];
 }
 
 function buildTestAuthoringSystemPrompt(input: unknown): string {
   const typed = input as TestAuthoringInput;
+  const writeAuthorized = typed.writeAuthorizedByUser === true;
   return [
     "You are a test-authoring specialist practicing test-driven development (TDD) inside the ArchiCode app.",
-    "Your job: for ONE graph node, write real automated test files that verify its acceptance criteria, using the project's actual test framework and conventions.",
+    writeAuthorized
+      ? "Goal: for one graph node, write real automated test files that verify its automatable acceptance criteria using the project's actual or intended framework and conventions."
+      : "Goal: inspect the assigned acceptance-test scope and design meaningful automated tests. You may write them only after obtaining explicit user authorization through request_test_write_authorization.",
+    "Own the investigation and authoring tactics. Inspect whatever project evidence is useful, adapt to greenfield or established repositories, and keep working while a useful test-authoring action remains.",
     "",
-    "Rules:",
-    "- First briefly inspect the project (list/read/search) to learn the test framework, directory layout, and conventions.",
-    "- IMPORTANT — greenfield projects: if the project has NO scaffold, NO package.json, and NO test framework yet, do NOT give up. Author the test files anyway using the INTENDED framework from the node's tech stack and the project's stack assumptions (for example: Vue 3 + Vite → Vitest with @vue/test-utils; React → Vitest/Jest + Testing Library; Python → pytest). Place them in that framework's conventional location (e.g. `tests/` or alongside source). These tests are EXPECTED to fail until the app is scaffolded and implemented — that is the whole point of writing tests first.",
-    "- ALWAYS write at least one test file for each acceptance criterion you can automate. You must call write_test_file — do not finish without writing files unless every single criterion is genuinely un-automatable.",
+    "Safety and output contract:",
+    writeAuthorized
+      ? "- The user explicitly authorized test-file writes for this assigned scope. That permission does not extend to feature/source implementation files."
+      : "- Test-file writes are not authorized yet. Inspect and propose freely, but call request_test_write_authorization and receive an explicit approval before write_test_file. If approval is unavailable or declined, do not write; return the proposed coverage and limitation honestly.",
+    writeAuthorized
+      ? "- IMPORTANT — greenfield projects: if the project has NO scaffold, NO package.json, and NO test framework yet, do NOT give up. Author the test files anyway using the INTENDED framework from the node's tech stack and the project's stack assumptions (for example: Vue 3 + Vite → Vitest with @vue/test-utils; React → Vitest/Jest + Testing Library; Python → pytest). Place them in that framework's conventional location (e.g. `tests/` or alongside source). These tests are EXPECTED to fail until the app is scaffolded and implemented — that is the whole point of writing tests first."
+      : "- Greenfield projects are still valid test-design work. Infer the intended framework from the node tech stack and stack assumptions, but do not create those files until the user authorizes the write.",
+    "- Cover each acceptance criterion that can be automated with meaningful test behavior. If none can be automated, report that honestly instead of writing hollow tests.",
     `- LOCATION: put ALL test files you write for this node under the dedicated directory "${typed.suggestedTestDir}" (create it as needed). Do not scatter tests at the repo root or outside this folder.`,
-    "- WIRING: every write_test_file call must include `checks` (one entry per criterion it verifies: { criterion: the exact acceptance-criterion text verbatim, testName: the name of the it()/test()/describe block in the file that checks it }) and `testCommand` (how to run that file). ArchiCode builds the checklist from these, and shows the test name so multiple checks that share one file are distinguishable — so give each criterion a distinct, descriptive testName. A file written without them will not be linked, so never omit them.",
+    "- WIRING CONTRACT: every written test file must identify its exact acceptance-criterion text, a distinct descriptive testName, and the real testCommand. ArchiCode builds the checklist from this structured write payload.",
     "- The tests are expected to FAIL until the feature is implemented — intentional red-phase TDD. Do NOT implement or scaffold the feature source itself; write only tests.",
     "- Never write inline-script or one-liner 'tests'. Author proper test files that a normal test runner executes.",
     "- Skip only a criterion that cannot be verified by ANY automated test (e.g. subjective visual style) — do not force a hollow test, but do not skip a criterion just because the app doesn't exist yet.",
@@ -250,7 +313,9 @@ function buildTestAuthoringUserMessage(input: unknown): string {
     acceptanceCriteria: typed.acceptanceCriteria,
     alreadyCoveredCriteria: typed.existingCheckCriteria,
     suggestedTestDir: typed.suggestedTestDir,
-    instruction: `Author failing tests for the acceptance criteria above, writing them under "${typed.suggestedTestDir}". Each write_test_file call must carry its criteria + testCommand so the checklist links up.`
+    instruction: typed.writeAuthorizedByUser
+      ? `The user authorized this action. Author meaningful red-phase tests for the automatable criteria under "${typed.suggestedTestDir}" and return the required criterion-to-test wiring.`
+      : `Inspect and propose meaningful red-phase tests under "${typed.suggestedTestDir}". Obtain explicit user authorization through request_test_write_authorization before writing any file.`
   }, null, 2);
 }
 
@@ -365,7 +430,7 @@ export const testAuthoringAgent: MicroRunAgent = {
   kind: "test-authoring",
   systemPrompt: buildTestAuthoringSystemPrompt,
   userMessage: buildTestAuthoringUserMessage,
-  tools: (context) => createTestAuthoringTools(context),
+  tools: (context, input) => createTestAuthoringTools(context, input as TestAuthoringInput),
   timeoutMs: TEST_AUTHORING_TIMEOUT_MS,
   parseOutput: parseTestAuthoringOutput
 };

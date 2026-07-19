@@ -1,4 +1,5 @@
 import type { ArchicodeNode, Flow, FlowEdge, FlowGroup, FlowSubflow, Note, NodePatch, ProjectBundle, ProjectSettings, ResearchChatMessage, ResearchChatScope, RunGuidance } from "../../shared/schema";
+import { gaiaAgent, pandoraAgent } from "../../shared/agentIdentities";
 import {
   applyNodePatch,
   archicodeNodeSchema,
@@ -16,6 +17,7 @@ import { recordGraphChange } from "../storage/ledgers";
 import { addNote, deleteNote, updateNoteResolved } from "../storage/notes";
 import { loadProject, saveFlow, updateNode, updateProjectMetadata, updateProjectSettings } from "../storage/projectStore";
 import { retryRun, startAgentRun, startDebuggingRun, startIncidentDebugRun, startRunProfile, startRuntimeDebugRun } from "../storage/runEngine";
+import { listRuntimeServices, restartRuntimeService, stopRuntimeService } from "../storage/runtimeServices";
 import { id, iso, layoutResearchCreatedNodes } from "../research";
 
 export type ResearchOperation = NonNullable<ResearchChatMessage["changeSet"]>["operations"][number];
@@ -223,7 +225,7 @@ export async function applyResearchOperation(projectRoot: string, operation: Res
       guidance: researchAgentGuidance(operation.guidance),
       scope: operation.scope
     });
-    return `Queued AI Implement run ${runId}.`;
+    return `Queued AI Implement run ${runId} with ${gaiaAgent.title}.`;
   } else if (operation.kind === "start-run-profile") {
     const { runId } = await startRunProfile({
       projectRoot,
@@ -235,14 +237,35 @@ export async function applyResearchOperation(projectRoot: string, operation: Res
       reusableApproval: operation.reusableApproval
     });
     return `Queued run profile ${operation.profileId} as run ${runId}.`;
+  } else if (operation.kind === "stop-runtime-service") {
+    const service = (await listRuntimeServices(projectRoot)).find((item) => item.id === operation.serviceId);
+    if (!service) throw new Error(`Runtime service ${operation.serviceId} was not found.`);
+    if (service.status === "stopped") return `Runtime service ${service.label} was already stopped.`;
+    await stopRuntimeService(projectRoot, operation.serviceId);
+    return `Stopped runtime service ${service.label} (${operation.serviceId}).`;
+  } else if (operation.kind === "restart-runtime-service") {
+    const service = (await listRuntimeServices(projectRoot)).find((item) => item.id === operation.serviceId);
+    if (!service) throw new Error(`Runtime service ${operation.serviceId} was not found.`);
+    const services = await restartRuntimeService(projectRoot, operation.serviceId);
+    const restarted = services.find((item) => item.id === operation.serviceId && item.status === "running")
+      ?? services.find((item) => item.status === "running"
+        && item.profileId === service.profileId
+        && item.targetId === service.targetId
+        && item.relativeCwd === service.relativeCwd);
+    if (!restarted) throw new Error(`Runtime service ${service.label} failed to restart.`);
+    return `Restarted runtime service ${service.label} (${restarted.id}).`;
   } else if (operation.kind === "retry-run") {
     const { runId } = await retryRun(projectRoot, operation.runId, researchAgentGuidance(operation.guidance));
     return `Queued retry ${runId} for run ${operation.runId}.`;
   } else if (operation.kind === "start-debugging-run") {
     const { runId } = await startDebuggingRun(projectRoot, operation.runId, researchAgentGuidance(operation.guidance));
-    return `Queued debug run ${runId} for failed run ${operation.runId}.`;
+    return `Queued AI Debug run ${runId} with ${pandoraAgent.title} for failed run ${operation.runId}.`;
   } else if (operation.kind === "author-acceptance-tests") {
-    const result = await authorAcceptanceTestsScoped(projectRoot, operation.flowId, operation.nodeId, await researchOperationProviderId(projectRoot));
+    // This operation reaches execution only after the user accepts its review
+    // card, which is the explicit authorization Test Authoring requires.
+    const result = await authorAcceptanceTestsScoped(projectRoot, operation.flowId, operation.nodeId, await researchOperationProviderId(projectRoot), {
+      writeAuthorizedByUser: true
+    });
     return operation.nodeId
       ? `Regenerated acceptance tests for ${result.results[0]?.title ?? operation.nodeId}.`
       : `Regenerated acceptance tests for ${result.results.length} node${result.results.length === 1 ? "" : "s"}.`;
@@ -257,7 +280,7 @@ export async function applyResearchOperation(projectRoot: string, operation: Res
       providerId: await researchOperationProviderId(projectRoot),
       guidance: researchAgentGuidance(operation.guidance)
     });
-    return `Queued runtime debug run ${runId} for service ${operation.serviceId}.`;
+    return `Queued AI Debug run ${runId} with ${pandoraAgent.title} for service ${operation.serviceId}.`;
   } else if (operation.kind === "start-incident-debug-run") {
     const { runId } = await startIncidentDebugRun({
       projectRoot,
@@ -265,7 +288,7 @@ export async function applyResearchOperation(projectRoot: string, operation: Res
       providerId: await researchOperationProviderId(projectRoot),
       guidance: researchAgentGuidance(operation.guidance)
     });
-    return `Queued incident debug run ${runId}.`;
+    return `Queued AI Debug incident run ${runId} with ${pandoraAgent.title}.`;
   } else if (operation.kind === "delete-node") {
     await deleteNode(projectRoot, operation.flowId, operation.nodeId);
   } else if (operation.kind === "delete-edge") {
@@ -752,6 +775,7 @@ export function validateResearchOperationReferences(
     if (!bundle.project.settings.runTargetProfiles.some((profile) => profile.id === operation.profileId)) throw new Error(`Run profile ${operation.profileId} was not found.`);
     return;
   }
+  if (operation.kind === "stop-runtime-service" || operation.kind === "restart-runtime-service") return;
   if (operation.kind === "run-acceptance-checks") {
     if (!nodeIds.has(operation.nodeId)) throw new Error(`Node ${operation.nodeId} was not found.`);
     return;

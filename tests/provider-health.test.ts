@@ -4,9 +4,9 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { applyOpenRouterSessionId, callProvider, callResearchProvider, checkProviderHealth, createConsecutiveToolCallLoopDetector, researchHistoryThread, extractModelCapabilitiesFromModels, extractContextWindowFromModels, extractModelIdsFromModels, inferModelCapabilityProfile, researchResponseStyleDirective, type ResearchProviderContinuation, resolveProviderApiKey, resolvePhaseModelPolicy } from "../src/main/providers";
+import { applyOpenRouterSessionId, callProvider, callResearchProvider, checkProviderHealth, createConsecutiveToolCallLoopDetector, createUsageAccumulator, isExplicitDelphiAuditRequest, localResearchToolLoopInstructions, localResearchTurnValidationFeedback, researchHistoryThread, extractModelCapabilitiesFromModels, extractContextWindowFromModels, extractModelIdsFromModels, inferModelCapabilityProfile, researchResponseStyleDirective, type ResearchProviderContinuation, resolveProviderApiKey, resolvePhaseModelPolicy } from "../src/main/providers";
 import { buildAnthropicCompatibleBody, buildAnthropicResearchBody } from "../src/main/providers/anthropic";
-import { buildClaudeLocalArgs, buildClaudeLocalResearchArgs, buildCodexLocalArgs, buildCodexLocalResearchArgs, windowsBatchCommandLine, windowsExecutableCandidates } from "../src/main/providers/localCli";
+import { activeLocalProviderProcesses, buildClaudeLocalArgs, buildClaudeLocalResearchArgs, buildCodexLocalArgs, buildCodexLocalResearchArgs, runLocalProcess, windowsBatchCommandLine, windowsExecutableCandidates } from "../src/main/providers/localCli";
 import { buildOpenAICompatibleBody, buildOpenAIResearchChatCompletionsBody, buildOpenAIResponsesBody, buildOpenAIResearchResponsesBody } from "../src/main/providers/openai";
 import { createSeedProject } from "../src/shared/fixtures";
 import { defaultPhaseModelPolicies, defaultSubagentModelPolicies } from "../src/shared/schema";
@@ -89,6 +89,43 @@ describe("provider health checks", () => {
     reset.record("submit_source_file", "{\"path\":\"a\"}");
     // Changing the arguments resets the streak instead of aborting.
     expect(reset.record("submit_source_file", "{\"path\":\"b\"}")).toBeUndefined();
+  });
+
+  it("recognizes malformed local research tool envelopes as private transport output", () => {
+    const malformed = '```json\n{"archicodeResearchTurn":{"toolCalls":[{"id":"read-1","providerToolName":"archicode_project_read_file","arguments":{"path":"README.md}}]}}}\n```';
+    const valid = JSON.stringify({
+      archicodeResearchTurn: {
+        toolCalls: [{
+          id: "read-1",
+          providerToolName: "archicode_project_read_file",
+          arguments: { path: "README.md" }
+        }]
+      }
+    });
+
+    expect(localResearchTurnValidationFeedback(malformed)).toContain("could not parse it as a valid tool turn");
+    expect(localResearchTurnValidationFeedback(valid)).toBeUndefined();
+    expect(localResearchTurnValidationFeedback("The project review is complete.")).toBeUndefined();
+  });
+
+  it("routes only explicit executable test and runtime-audit requests to Delphi", () => {
+    expect(isExplicitDelphiAuditRequest("Run and test the current website, then report what you find.")).toBe(true);
+    expect(isExplicitDelphiAuditRequest("Please retest the mobile app in the emulator.")).toBe(true);
+    expect(isExplicitDelphiAuditRequest("Perform a visual audit of this site.")).toBe(true);
+    expect(isExplicitDelphiAuditRequest("Explain why the existing test failed.")).toBe(false);
+    expect(isExplicitDelphiAuditRequest("Check the project settings for me.")).toBe(false);
+  });
+
+  it("records whether replayable reasoning state was received across provider rounds", () => {
+    const provider = createSeedProject("/tmp/archicode").project.settings.providers.find((item) => item.kind === "openai-compatible")!;
+    const received = createUsageAccumulator();
+    received.add({ inputTokens: 10, outputTokens: 5, reasoningReplayState: "received" });
+    expect(received.finalize(provider, "test-model").reasoningReplayState).toBe("received");
+
+    const mixed = createUsageAccumulator();
+    mixed.add({ reasoningReplayState: "received" });
+    mixed.add({ reasoningReplayState: "absent" });
+    expect(mixed.finalize(provider, "test-model").reasoningReplayState).toBe("mixed");
   });
 
   it("evicts research history in batches so the window start stays stable between turns", () => {
@@ -332,6 +369,39 @@ process.exit(2);
       "Plan a change",
       { projectRoot: root, phase: "planning" }
     )).rejects.toThrow(/mock codex exited before reading stdin|stdin stream error/);
+  });
+
+  it("terminates a local provider process group after sustained output inactivity", async () => {
+    const initialActiveProcesses = activeLocalProviderProcesses.size;
+
+    await expect(runLocalProcess(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      "",
+      undefined,
+      undefined,
+      undefined,
+      { inactivityTimeoutMs: 50 }
+    )).rejects.toThrow("Local provider call produced no output for 50ms");
+
+    expect(activeLocalProviderProcesses.size).toBe(initialActiveProcesses);
+  });
+
+  it("keeps a long local provider call alive while it continues producing output", async () => {
+    const result = await runLocalProcess(
+      process.execPath,
+      ["-e", "let count = 0; const timer = setInterval(() => { process.stdout.write('.'); count += 1; if (count === 7) { clearInterval(timer); process.exit(0); } }, 100)"],
+      "",
+      undefined,
+      undefined,
+      undefined,
+      // Leave enough scheduling slack for this timing test when the full suite
+      // saturates the worker pool; the child still emits every 100ms.
+      { inactivityTimeoutMs: 750 }
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(".......");
   });
 
   it("extracts context windows from OpenAI-compatible model metadata", () => {
@@ -846,6 +916,29 @@ process.exit(2);
     expect(profile.reasoningField).toBe("prompt-only");
   });
 
+  it("attaches image inputs to Codex Local invocations instead of passing paths only as text", () => {
+    const provider = createSeedProject("/tmp/archicode").project.settings.providers.find((item) => item.kind === "codex-local")!;
+    const imageAttachments = [{
+      title: "Delphi capture",
+      path: "/tmp/archicode/capture.png",
+      mediaType: "image/png" as const,
+      source: "context" as const
+    }];
+    const runArgs = buildCodexLocalArgs(provider, { phase: "brainstorming", imageAttachments }, "/tmp/out.txt");
+    const researchArgs = buildCodexLocalResearchArgs(provider, {
+      projectRoot: "/tmp/archicode",
+      webSearchEnabled: false,
+      scopeContext: "{}",
+      messages: [],
+      imageAttachments
+    }, "/tmp/research-out.txt");
+
+    expect(runArgs).toEqual(expect.arrayContaining(["--image", "/tmp/archicode/capture.png"]));
+    expect(researchArgs).toEqual(expect.arrayContaining(["--image", "/tmp/archicode/capture.png"]));
+    expect(runArgs.indexOf("--image")).toBeGreaterThan(runArgs.indexOf("exec"));
+    expect(researchArgs.indexOf("--image")).toBeGreaterThan(researchArgs.indexOf("exec"));
+  });
+
   it("passes output verbosity to every Codex Local invocation as an in-memory config override", () => {
     const provider = {
       ...createSeedProject("/tmp/archicode").project.settings.providers.find((item) => item.kind === "codex-local")!,
@@ -1090,6 +1183,8 @@ process.stdin.on("end", () => {
     expect(prompt).toContain("\\\"kind\\\": \\\"start-agent-run\\\"");
     expect(prompt).toContain("\\\"guidance\\\": {");
     expect(prompt).toContain("AI Implement can create a new codebase from the graph");
+    expect(prompt).toContain("Gaia — Build & Implementation");
+    expect(prompt).toContain("focused repairs belong to Pandora through AI Debug");
     expect(prompt).toContain("Do not include guidance on start-run-profile");
     expect(prompt).toContain("Do not include providerId in queue action operations.");
     expect(prompt).not.toContain("\\\"providerId\\\": \\\"openai-compatible\\\"");
@@ -1201,21 +1296,17 @@ process.stdin.on("end", () => {
   });
 
   it("retries OpenRouter's upstream idle timeout before any tool output", async () => {
-    const encoder = new TextEncoder();
     const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(new ReadableStream({
-        start(controller) {
-          controller.enqueue(encoder.encode('event: response.failed\ndata: {"type":"response.failed","response":{"status":"failed","error":{"message":"Upstream idle timeout exceeded"},"output":[]}}\n\n'));
-          controller.close();
-        }
-      }), { status: 200, headers: { "Content-Type": "text/event-stream" } }))
-      .mockResolvedValueOnce(new Response(new ReadableStream({
-        start(controller) {
-          controller.enqueue(encoder.encode('event: response.output_text.delta\ndata: {"type":"response.output_text.delta","delta":"Recovered bounded batch."}\n\n'));
-          controller.enqueue(encoder.encode('event: response.completed\ndata: {"type":"response.completed","response":{"status":"completed","output":[]}}\n\n'));
-          controller.close();
-        }
-      }), { status: 200, headers: { "Content-Type": "text/event-stream" } }));
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        status: "failed",
+        error: { message: "Upstream idle timeout exceeded" },
+        output: []
+      }), { status: 200, headers: { "Content-Type": "application/json" } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        status: "completed",
+        output_text: "Recovered bounded batch.",
+        output: []
+      }), { status: 200, headers: { "Content-Type": "application/json" } }));
     vi.stubGlobal("fetch", fetchMock);
     const provider = {
       ...createSeedProject("/tmp/archicode").project.settings.providers.find((item) => item.kind === "openai-compatible")!,
@@ -1582,10 +1673,10 @@ process.stdin.on("data", (chunk) => { stdin += chunk.toString(); });
 process.stdin.on("end", () => {
   const message = count === 1
     ? JSON.stringify({ archicodeResearchTurn: { answer: "I’ll inspect the project first.", toolCalls: [{ id: "read-1", providerToolName: "archicode_project_read_file", arguments: { path: "README.md" } }] } })
-    : stdin.includes("POST-TOOL CONTINUATION REQUIREMENT") &&
-        stdin.includes("Any earlier assistant answer attached to a tool call was provisional status, not the final response") &&
-        stdin.includes("The wording ‘propose’ does not turn a concrete requested graph change into open-ended brainstorming") &&
-        !stdin.includes("Assistant answer: I’ll inspect the project first.")
+    : stdin.includes("Continue the same task from the structured transcript below") &&
+        stdin.includes("Assistant text beside tool calls is progress from this same trajectory") &&
+        stdin.includes("Assistant answer: I’ll inspect the project first.") &&
+        stdin.includes("Tool result for archicode_project_read_file: README evidence")
       ? "Final answer from the parent continuation."
       : "Missing post-tool continuation requirement.";
   process.stdout.write(JSON.stringify({ type: "agent_message_delta", delta: message }) + "\\n");
@@ -1621,6 +1712,145 @@ process.stdin.on("end", () => {
     expect(resets).toBe(1);
     expect(chunks.at(-1)).toBe("Final answer from the parent continuation.");
     expect(await readFile(countPath, "utf8")).toBe("2");
+  });
+
+  it("repairs malformed Codex Local tool envelopes on the same trajectory instead of exposing them", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "archicode-codex-research-malformed-turn-"));
+    const commandPath = path.join(root, "fake-codex-malformed-turn.cjs");
+    const countPath = path.join(root, "count.txt");
+    const malformedTurn = '```json\n{"archicodeResearchTurn":{"toolCalls":[{"id":"read-1","providerToolName":"archicode_project_read_file","arguments":{"path":"README.md}}]}}}\n```';
+    await writeFile(commandPath, `#!/usr/bin/env node
+const fs = require("fs");
+const outIndex = process.argv.indexOf("--output-last-message");
+let count = 0;
+try { count = Number(fs.readFileSync(${JSON.stringify(countPath)}, "utf8")); } catch {}
+count += 1;
+fs.writeFileSync(${JSON.stringify(countPath)}, String(count), "utf8");
+let stdin = "";
+process.stdin.on("data", (chunk) => { stdin += chunk.toString(); });
+process.stdin.on("end", () => {
+  const message = count === 1
+    ? ${JSON.stringify(malformedTurn)}
+    : count === 2 && stdin.includes("could not parse it as a valid tool turn")
+      ? JSON.stringify({ archicodeResearchTurn: { toolCalls: [{ id: "read-1", providerToolName: "archicode_project_read_file", arguments: { path: "README.md" } }] } })
+      : count === 3 && stdin.includes("README evidence")
+        ? "Recovered final answer after the corrected project read."
+        : "Malformed-turn recovery context was missing.";
+  if (outIndex >= 0) fs.writeFileSync(process.argv[outIndex + 1], message, "utf8");
+  process.exit(0);
+});
+`, "utf8");
+    await chmod(commandPath, 0o755);
+    const provider = {
+      ...createSeedProject(root).project.settings.providers.find((item) => item.kind === "codex-local")!,
+      localCommand: commandPath
+    };
+    const calls: string[] = [];
+
+    await expect(callResearchProvider(provider, "Inspect README", {
+      projectRoot: root,
+      webSearchEnabled: false,
+      scopeContext: "{}",
+      messages: [],
+      mcpTools: [{
+        providerToolName: "archicode_project_read_file",
+        serverId: "archicode-project-files",
+        serverLabel: "Project Files",
+        toolName: "read_file"
+      }],
+      callMcpTool: async (input) => {
+        calls.push(input.providerToolName);
+        return "README evidence";
+      },
+      isTerminalTool: () => false
+    })).resolves.toBe("Recovered final answer after the corrected project read.");
+
+    expect(calls).toEqual(["archicode_project_read_file"]);
+    expect(await readFile(countPath, "utf8")).toBe("3");
+  });
+
+  it("keeps Codex Local on the same trajectory after non-terminal bookkeeping tools until it returns a visible answer", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "archicode-codex-research-finalized-outcome-"));
+    const commandPath = path.join(root, "fake-codex-finalized-outcome.cjs");
+    const countPath = path.join(root, "count.txt");
+    await writeFile(commandPath, `#!/usr/bin/env node
+const fs = require("fs");
+const outIndex = process.argv.indexOf("--output-last-message");
+let count = 0;
+try { count = Number(fs.readFileSync(${JSON.stringify(countPath)}, "utf8")); } catch {}
+count += 1;
+fs.writeFileSync(${JSON.stringify(countPath)}, String(count), "utf8");
+process.stdin.resume();
+process.stdin.on("end", () => {
+  const message = count === 1 ? JSON.stringify({
+    archicodeResearchTurn: {
+      answer: "Recording optional bookkeeping before the final answer.",
+      toolCalls: [
+        {
+          id: "checkpoint-final",
+          providerToolName: "archicode_checkpoint_goal",
+          arguments: { status: "blocked", summary: "Visual coverage remains blocked." }
+        },
+        {
+          id: "memory-final",
+          providerToolName: "archicode_update_memory",
+          arguments: { summary: "Functional audit passed; visual coverage remains blocked." }
+        }
+      ]
+    }
+  }) : "The functional audit passed; visual coverage remains blocked.";
+  if (outIndex >= 0) fs.writeFileSync(process.argv[outIndex + 1], message, "utf8");
+  process.exit(0);
+});
+`, "utf8");
+    await chmod(commandPath, 0o755);
+    const provider = {
+      ...createSeedProject(root).project.settings.providers.find((item) => item.kind === "codex-local")!,
+      localCommand: commandPath
+    };
+    const calls: string[] = [];
+
+    await expect(callResearchProvider(provider, "Finalize the audit outcome", {
+      projectRoot: root,
+      webSearchEnabled: false,
+      scopeContext: "{}",
+      messages: [],
+      mcpTools: [
+        { providerToolName: "archicode_checkpoint_goal", serverId: "archicode-research-internal", serverLabel: "Research", toolName: "checkpoint_goal" },
+        { providerToolName: "archicode_update_memory", serverId: "archicode-research-internal", serverLabel: "Research", toolName: "update_memory" }
+      ],
+      isTerminalTool: () => false,
+      callMcpTool: async (input) => {
+        calls.push(input.providerToolName);
+        return input.providerToolName === "archicode_checkpoint_goal"
+          ? JSON.stringify({ status: "goal-checkpoint-recorded" })
+          : "Research memory recorded.";
+      }
+    })).resolves.toBe("The functional audit passed; visual coverage remains blocked.");
+
+    expect(calls).toEqual(["archicode_checkpoint_goal", "archicode_update_memory"]);
+    expect(await readFile(countPath, "utf8")).toBe("2");
+  });
+
+  it("keeps isolated Codex Local subagent tool loops free of parent Research obligations", () => {
+    const instructions = localResearchToolLoopInstructions({
+      projectRoot: "/tmp/archicode",
+      webSearchEnabled: false,
+      scopeContext: "{}",
+      messages: [],
+      systemInstructionsOverride: "You are Delphi.",
+      mcpTools: [
+        { providerToolName: "delphi_inspect_test_environment", serverId: "delphi", serverLabel: "Delphi", toolName: "inspect" },
+        { providerToolName: "delphi_run_playwright_flow", serverId: "delphi", serverLabel: "Delphi", toolName: "playwright" }
+      ]
+    });
+
+    expect(instructions).toContain("isolated subagent tool loop");
+    expect(instructions).toContain("Continue through the required execution tools");
+    expect(instructions).toContain("never claim a listed execution tool or its result is unavailable merely because it was not called yet");
+    expect(instructions).not.toContain("MEMORY OWNERSHIP");
+    expect(instructions).not.toContain("GRAPH WORK DELEGATION");
+    expect(instructions).not.toContain("archicode_update_memory");
   });
 
   it("sends the chatty response-style directive to Codex Local research when enabled", async () => {

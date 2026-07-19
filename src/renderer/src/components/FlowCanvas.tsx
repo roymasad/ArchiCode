@@ -54,11 +54,13 @@ import {
   ZoomIn
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { ArchicodeNode, ArchitecturePolicyViolation } from "@shared/schema";
 import type { Flow, ResearchChatScope } from "@shared/schema";
 import type { CodeKnowledgeSnapshot } from "@shared/codeKnowledge";
 import { isProductionApproved } from "@shared/schema";
 import { visibleEdgesForNodes, visibleNodesForFlow } from "@shared/graph";
+import { gaiaAgent, pandoraAgent } from "@shared/agentIdentities";
 import { ArchicodeNodeCard, nodeDetailZoomThreshold } from "./ArchicodeNodeCard";
 import { ArchicodeEdge } from "./ArchicodeEdge";
 import { FlowCanvas3DView } from "./FlowCanvas3DView";
@@ -462,7 +464,7 @@ function bugIssuePrompt(node: ArchicodeNode): string {
     "",
     "First ask me what bug, issue, or unexpected behavior I want to report.",
     "After I answer, investigate the scoped graph and codebase. Decide whether this is a formal bug, a broader issue, a graph/spec mismatch, or an implementation follow-up.",
-    "Use the available ArchiCode options appropriately: add bug-category notes, propose graph/node data edits, prepare a bug report, or propose AI Debug / implementation runs. Do not queue runs or apply graph changes without user consent."
+    `Use the available ArchiCode options appropriately: add bug-category notes, propose graph/node data edits, prepare a bug report, propose ${pandoraAgent.name} through AI Debug, or propose ${gaiaAgent.name} through AI Implement. Do not queue runs or apply graph changes without user consent.`
   ].join("\n");
 }
 
@@ -676,7 +678,50 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
     showDirectUndoNotice,
     keybindings,
     reload
-  } = useArchicodeStore();
+  } = useArchicodeStore(useShallow((state) => ({
+    bundle: state.bundle,
+    activeFlowId: state.activeFlowId,
+    activeSubflowId: state.activeSubflowId,
+    searchQuery: state.searchQuery,
+    selectedNodeId: state.selectedNodeId,
+    selectedNodeIds: state.selectedNodeIds,
+    selectedEdgeId: state.selectedEdgeId,
+    selectNode: state.selectNode,
+    selectNodes: state.selectNodes,
+    toggleNodeSelection: state.toggleNodeSelection,
+    selectEdge: state.selectEdge,
+    setActiveSubflow: state.setActiveSubflow,
+    deleteSelectedEdge: state.deleteSelectedEdge,
+    deleteSelectedNode: state.deleteSelectedNode,
+    copySelectedNode: state.copySelectedNode,
+    cutSelectedNode: state.cutSelectedNode,
+    pasteNode: state.pasteNode,
+    duplicateSelectedNode: state.duplicateSelectedNode,
+    autoLayout: state.autoLayout,
+    authorAcceptanceTestsForFlow: state.authorAcceptanceTestsForFlow,
+    busyTestNodeIds: state.busyTestNodeIds,
+    saveFlow: state.saveFlow,
+    addNode: state.addNode,
+    canvasViewport: state.canvasViewport,
+    setCanvasViewport: state.setCanvasViewport,
+    setCanvasViewportCenter: state.setCanvasViewportCenter,
+    graphNavigationRequest: state.graphNavigationRequest,
+    projectReloadNonce: state.projectReloadNonce,
+    clearGraphNavigationRequest: state.clearGraphNavigationRequest,
+    startScopedResearchChat: state.startScopedResearchChat,
+    sendResearchMessage: state.sendResearchMessage,
+    openResearchPanel: state.openResearchPanel,
+    createResearchChat: state.createResearchChat,
+    appendResearchDraftMention: state.appendResearchDraftMention,
+    requestResearchComposerFocus: state.requestResearchComposerFocus,
+    theme: state.theme,
+    selectProjectFile: state.selectProjectFile,
+    setWorkbenchView: state.setWorkbenchView,
+    navigateToGraphTarget: state.navigateToGraphTarget,
+    showDirectUndoNotice: state.showDirectUndoNotice,
+    keybindings: state.keybindings,
+    reload: state.reload
+  })));
   const flow = getActiveFlow(bundle, activeFlowId);
   const canvasRef = useRef<HTMLElement | null>(null);
   const reactFlowRef = useRef<ReactFlowInstance<Node, Edge> | null>(null);

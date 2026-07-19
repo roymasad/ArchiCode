@@ -15,6 +15,7 @@ import { isSubflowIgnored, workingNodesForFlow } from "../../shared/graph";
 import { boundedKnowledgeNeighborhood } from "../../shared/knowledgeGraph";
 import { compactImplementationScope, implementationScopeAdvisory, semanticRetrievalAdvisory } from "../../shared/implementationScope";
 import { deriveContextBudgetPlan, estimateTextTokens } from "../../shared/contextBudget";
+import { gaiaAgent } from "../../shared/agentIdentities";
 import { archicodeCapabilityDigest, archicodeCapabilityVersion, archicodeCurrentProjectOptions } from "../../shared/appCapabilities";
 import { compactProjectConventions, readProjectConventions } from "../projectConventions";
 import { getGitStatus } from "../projectTools";
@@ -41,19 +42,19 @@ export function normalizeRunScope(flow: Flow, nodeId?: string, scope?: RunScope)
 
 export function runScopeDirective(scope: RunScope, bundle: ProjectBundle, flow: Flow): string {
   if (scope.kind === "no-scope") {
-    return "Treat this AI Implement run as a no-scope tactical edit. Use it only for trivial, localized source changes that do not alter architecture, flow responsibilities, node meaning, acceptance criteria, data contracts, notes, or graph truth. You may inspect project files and graph context for references, but do not produce graph/node/flow diffs or notes for this run. If the requested implementation would contradict or materially affect existing nodes or flows, stop and report that the graph must be updated or approved first instead of making the source change.";
+    return `Treat this AI Implement run as a no-scope tactical edit owned by ${gaiaAgent.name}. Use it only for trivial, localized source changes that do not alter architecture, flow responsibilities, node meaning, acceptance criteria, data contracts, notes, or graph truth. You may inspect project files and graph context for references, but do not produce graph/node/flow diffs or notes for this run. If the requested implementation would contradict or materially affect existing nodes or flows, stop and report that the graph must be updated or approved first instead of making the source change.`;
   }
   if (scope.kind === "project") {
-    return "Focus this AI Implement run on the whole project. The active flow is available as the context anchor, but source, graph diffs, node data, and notes may be updated wherever the project-level task requires it.";
+    return `Focus this AI Implement run on the whole project. ${gaiaAgent.name} owns the implementation. The active flow is available as the context anchor, but source, graph diffs, node data, and notes may be updated wherever the project-level task requires it.`;
   }
   if (scope.kind === "nodes") {
     const titles = scope.nodeIds
       .map((idValue) => flow.nodes.find((node) => node.id === idValue)?.title ?? idValue)
       .join(", ");
-    return `Focus this AI Implement run on the selected node scope: ${titles || "no selected nodes"}. You may inspect other project flows or nodes for references, connected graph context, and consistency, but implementation edits, graph/node diffs, data, and notes should stay centered on these selected nodes unless a directly related supporting change is required.`;
+    return `Focus this AI Implement run on the selected node scope: ${titles || "no selected nodes"}. ${gaiaAgent.name} owns the implementation. You may inspect other project flows or nodes for references, connected graph context, and consistency, but implementation edits, graph/node diffs, data, and notes should stay centered on these selected nodes unless a directly related supporting change is required.`;
   }
   const flowName = bundle.flows.find((item) => item.id === (scope.flowId ?? flow.id))?.name ?? flow.name;
-  return `Focus this AI Implement run on flow "${flowName}". You may inspect other project flows or nodes for references, connected graph context, and consistency, but implementation edits, graph/node diffs, data, and notes should stay centered on this flow unless a directly related supporting change is required.`;
+  return `Focus this AI Implement run on flow "${flowName}". ${gaiaAgent.name} owns the implementation. You may inspect other project flows or nodes for references, connected graph context, and consistency, but implementation edits, graph/node diffs, data, and notes should stay centered on this flow unless a directly related supporting change is required.`;
 }
 
 export async function currentGitContext(projectRoot: string): Promise<Record<string, unknown>> {

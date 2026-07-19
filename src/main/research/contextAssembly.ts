@@ -14,6 +14,7 @@ import { isSubflowIgnored, workingNodesForFlow } from "../../shared/graph";
 import { estimateTextTokens } from "../../shared/contextBudget";
 import { compactImplementationScope, implementationScopeAdvisory } from "../../shared/implementationScope";
 import { archicodeCapabilityDigest, archicodeCapabilityVersion, archicodeCurrentProjectOptions } from "../../shared/appCapabilities";
+import { gaiaAgent, pandoraAgent } from "../../shared/agentIdentities";
 import { readProjectConventions } from "../projectConventions";
 import type { ProviderMcpTool } from "../mcp";
 import { listRuntimeServices } from "../storage/runtimeServices";
@@ -877,7 +878,7 @@ export async function buildResearchContext(
     archicodeApp: {
       role: "ArchiCode is the local Electron app coordinating a target project through a graph, scoped research chats, implementation runs, runtime services, and debug workflows.",
       audience: "ArchiCode is used by builders, product-minded developers, and solo teams who want an LLM-assisted map of what an app should do, what exists, what is approved, and what should be built or debugged next.",
-      workflow: "Users describe or import a target project, organize it into flows/nodes/subflows, discuss scope in Research, approve graph changes, then use AI Implement/Build/Run App/AI Debug to make and verify source changes.",
+      workflow: `Users describe or import a target project, organize it into flows/nodes/subflows, discuss scope in Research, approve graph changes, then use AI Implement with ${gaiaAgent.name}, Build, Run App, or AI Debug with ${pandoraAgent.name} to make and verify source changes.`,
       agentName: "Archi",
       agentRole: "Archi is the Research chat agent. Archi answers questions from graph context and live project-file tools, helps plan new features or changes to existing ones, can help sync the ArchiCode graph to code when asked, and can propose graph/node/note updates for user approval. Archi does not edit source files directly.",
       capabilityVersion: archicodeCapabilityVersion,
@@ -1162,7 +1163,7 @@ export function archicodeModelReference(): Record<string, unknown> {
       kindValues: noteKindSchema.options,
       categoryValues: noteCategorySchema.options,
       priorityValues: issuePrioritySchema.options,
-      behavior: "Agent questions are notes with kind llm-question; user answers may reply via replyToNoteId. Pinned notes are durable reference notes included with node context until explicitly deleted. System notes are not user-resolvable. Bug-category notes are picked up by AI Debug. imageAttachments and textAttachments list cheap metadata for node-note-attachment files; do not treat them as current chat-message uploads."
+      behavior: `Agent questions are notes with kind llm-question; user answers may reply via replyToNoteId. Pinned notes are durable reference notes included with node context until explicitly deleted. System notes are not user-resolvable. Bug-category notes are picked up by ${pandoraAgent.name} through AI Debug. imageAttachments and textAttachments list cheap metadata for node-note-attachment files; do not treat them as current chat-message uploads.`
     },
     runs: {
       purpose: "Runs are AI/build/debug/verification attempts with logs, todos, permissions, artifacts, and review state.",

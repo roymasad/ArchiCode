@@ -1,5 +1,6 @@
 import { Archive, FileDiff, GitBranch, GitCommit, GitPullRequestArrow, Loader2, Plus, RefreshCw, SendHorizontal, Sparkles, Trash2, Undo2 } from "lucide-react";
 import { Fragment, useEffect, useMemo, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { isConflictedGitFileStatus, type GitFileStatus, type ProjectFileDiff } from "@shared/projectTools";
 import { useArchicodeStore } from "../store/useArchicodeStore";
 import { Badge, Button, DialogContent, DialogRoot, DialogTrigger, Field, IconButton, ScrollArea, Select, TextArea, TextInput, Tooltip } from "./ui";
@@ -55,7 +56,24 @@ export function GitPanel() {
     createGitBranch,
     initializeGitRepository,
     startScopedResearchChat
-  } = useArchicodeStore();
+  } = useArchicodeStore(useShallow((state) => ({
+    rootPath: state.rootPath,
+    bundle: state.bundle,
+    gitStatus: state.gitStatus,
+    gitBusy: state.gitBusy,
+    gitLogs: state.gitLogs,
+    refreshGitStatus: state.refreshGitStatus,
+    runGitOperation: state.runGitOperation,
+    discardGitChanges: state.discardGitChanges,
+    stashGitChanges: state.stashGitChanges,
+    popGitStash: state.popGitStash,
+    commitGitFiles: state.commitGitFiles,
+    generateCommitMessage: state.generateCommitMessage,
+    switchGitBranch: state.switchGitBranch,
+    createGitBranch: state.createGitBranch,
+    initializeGitRepository: state.initializeGitRepository,
+    startScopedResearchChat: state.startScopedResearchChat
+  })));
   const [open, setOpen] = useState(false);
   const [commitMessage, setCommitMessage] = useState("");
   const [isGeneratingCommitMessage, setIsGeneratingCommitMessage] = useState(false);

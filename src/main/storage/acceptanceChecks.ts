@@ -5,6 +5,7 @@ import type { Dirent } from "node:fs";
 import { acceptanceCheckSchema, flowSchema, isProductionApproved, nodeAcceptanceChecksSatisfied } from "../../shared/schema";
 import type { AcceptanceCheckStatus } from "../../shared/schema";
 import { classifyCommandRisk } from "../../shared/execution";
+import { gaiaAgent } from "../../shared/agentIdentities";
 import { isSubflowIgnored } from "../../shared/graph";
 import { runVerificationCommand, executeMicroRun } from "../microRuns";
 import { detectTechStack, type TechStack } from "../techStack";
@@ -585,8 +586,13 @@ export async function authorAcceptanceTestsScoped(
   flowId: string,
   nodeId?: string,
   providerId?: string,
-  onProgress?: (message: string) => void
+  options: {
+    onProgress?: (message: string) => void;
+    onClarification?: (question: string) => Promise<string>;
+    writeAuthorizedByUser?: boolean;
+  } = {}
 ): Promise<AuthorAcceptanceTestsResult> {
+  const { onProgress, onClarification, writeAuthorizedByUser = false } = options;
   const bundle = await loadProject(projectRoot);
   const flow = bundle.flows.find((item) => item.id === flowId);
   if (!flow) throw new Error(`Flow ${flowId} was not found.`);
@@ -635,17 +641,22 @@ export async function authorAcceptanceTestsScoped(
       moduleTestCommand: profile?.testCommand ?? null,
       moduleCwd: profile?.cwd ?? null,
       stackAssumptions: settings.stackAssumptions ?? [],
-      suggestedTestDir: acceptanceTestDirForNode(node.title)
+      suggestedTestDir: acceptanceTestDirForNode(node.title),
+      writeAuthorizedByUser
     };
 
     onProgress?.(`Authoring tests for "${node.title}"…`);
-    const runResult = await executeMicroRun(projectRoot, "test-authoring", input, provider, bundle, { onProgress });
+    const runResult = await executeMicroRun(projectRoot, "test-authoring", input, provider, bundle, { onProgress, onClarification });
     if (runResult.status === "failed") {
       throw new Error(runResult.error ?? `Test authoring failed for "${node.title}".`);
     }
     const output = (runResult.output ?? { checks: [], filesWritten: [], report: "" }) as TestAuthoringOutput;
+    const writtenFiles = new Set(output.filesWritten);
     const agentChecks = output.checks.filter((check) =>
-      check.criterion.trim() && check.testCommand.trim() && !isInlineScriptTestCommand(check.testCommand));
+      writtenFiles.has(check.testFilePath)
+      && check.criterion.trim()
+      && check.testCommand.trim()
+      && !isInlineScriptTestCommand(check.testCommand));
 
     // Sync the node's checks to its criteria: agent-produced checks create/update
     // (preserving the id of an existing check for the same criterion, resetting
@@ -664,7 +675,7 @@ export async function authorAcceptanceTestsScoped(
     const report = results[0]?.report?.trim();
     throw new Error(
       `The agent wrote no tests for these criteria.${report ? ` Agent report: ${report}` : ""} ` +
-      "If this is a brand-new project with no app scaffold yet, run AI Implement first to create the app, then generate tests."
+      `If this is a brand-new project with no app scaffold yet, run AI Implement with ${gaiaAgent.name} first to create the app, then generate tests.`
     );
   }
   if (syncedChecksByNodeId.size) {

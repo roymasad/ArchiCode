@@ -1,5 +1,6 @@
 import { Bot, ChevronRight, Eye, EyeOff, FileText } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 import { useArchicodeStore } from "../store/useArchicodeStore";
 import { rawRunLog, runTraceGroups } from "../utils/runProgress";
@@ -57,7 +58,11 @@ function clampTraceColumnWidths(
 }
 
 export function RunTrace() {
-  const { bundle, rootPath, selectedRunId } = useArchicodeStore();
+  const { bundle, rootPath, selectedRunId } = useArchicodeStore(useShallow((state) => ({
+    bundle: state.bundle,
+    rootPath: state.rootPath,
+    selectedRunId: state.selectedRunId
+  })));
   const [raw, setRaw] = useState(false);
   const [query, setQuery] = useState("");
   const [clearedBefore, setClearedBefore] = useState<string | null>(null);

@@ -1,9 +1,14 @@
 import { exec, execFile } from "child_process";
+import path from "node:path";
 import { promisify } from "util";
 import type { ProviderMcpTool } from "./mcp";
-import { availableProviderModelOverride, callResearchProvider, type ResearchProviderOptions } from "./providers";
+import { availableProviderModelOverride, callProvider, callResearchProvider, resolvePhaseModelPolicy, type ResearchProviderOptions } from "./providers";
 import { defaultSubagentModelPolicies, type LlmUsage, type MicroRunKind, type MicroRunStatus, type ProjectBundle, type ProjectSettings, type SubagentModelProfile } from "../shared/schema";
 import { redactSensitiveText } from "../shared/redaction";
+import { providerImageInputSupportStatus, type ProviderImageInputSupportStatus } from "../shared/providerCapabilities";
+import { mergeReasoningReplayStates } from "../shared/llmPricing";
+import { isTimeoutFailureMessage, type AgentFailureKind } from "../shared/failureSemantics";
+import type { DelphiObservationArtifact } from "./testing/evidenceArtifacts";
 
 const execAsync = promisify(exec);
 // execFile (not exec) so the commit message is passed as a real argument,
@@ -11,19 +16,11 @@ const execAsync = promisify(exec);
 // from an LLM-authored commit message.
 const execFileAsync = promisify(execFile);
 
-// Transport-level blips (not deterministic model/tool failures) that are worth
-// one retry: undici socket drops, header/body timeouts, and aborts.
-const TRANSIENT_MICRO_RUN_PATTERNS = [
-  "terminated", "fetch failed", "socket hang up", "headers timeout", "body timeout",
-  "econnreset", "etimedout", "eai_again", "enotfound", "econnrefused", "network timeout",
-  "aborted", "und_err"
-];
-
-function isTransientMicroRunFailure(message: string): boolean {
-  const text = message.toLowerCase();
-  // A micro-run timeout is our own deadline, not a transport blip: do not retry it.
-  if (text.includes("timed out after")) return false;
-  return TRANSIENT_MICRO_RUN_PATTERNS.some((pattern) => text.includes(pattern));
+export function visualAnalysisUnavailable(text: string): boolean {
+  const value = text.trim();
+  return /\bno (?:capture(?: image)?|image|screenshot) (?:is )?available\b/i.test(value)
+    || /\b(?:cannot|can't|could not|unable to) (?:access|view|inspect|analy[sz]e|load) (?:the )?(?:image|capture|screenshot|pixels?)\b/i.test(value)
+    || /\b(?:image|capture|screenshot|pixels?)\b.{0,80}\b(?:unavailable|not available|not provided|not attached|not accessible|failed to load)\b/i.test(value);
 }
 
 type Provider = ProjectSettings["providers"][number];
@@ -38,6 +35,7 @@ export type MicroRunResult = {
   status: MicroRunStatus;
   output?: unknown;
   error?: string;
+  failureKind?: AgentFailureKind;
   clarificationQuestion?: string;
   // Aggregated LLM usage/cost for this subagent's own multi-turn session.
   usage?: LlmUsage;
@@ -48,9 +46,18 @@ export type MicroRunResult = {
     repairAttempted?: boolean;
     validationErrors?: string[];
     toolCallNames?: string[];
+    toolRejections?: Array<{ providerToolName: string; argumentsJson: string; error?: string }>;
+    visuallyAnalyzedArtifactIds?: string[];
   };
   createdAt: string;
   completedAt?: string;
+};
+
+export type DelphiObservationAnalysisEvent = {
+  artifact: DelphiObservationArtifact;
+  status: "started" | "completed" | "failed";
+  analysis?: string;
+  error?: string;
 };
 
 export type MicroRunClarificationHandler = (question: string) => Promise<string>;
@@ -65,6 +72,12 @@ export type MicroRunToolInvocation = {
   /** False when the tool handler rejected this invocation. Rejected sink
    * payloads remain diagnostic evidence but must never be assembled as output. */
   succeeded?: boolean;
+  /** Serialized host result/error so evidence-first agents can assemble their
+   * final report from what actually ran instead of trusting model retyping. */
+  resultJson?: string;
+  error?: string;
+  /** True only after a guarded command/adapter crossed its execution boundary. */
+  executionStarted?: boolean;
 };
 
 export type MicroRunAgent = {
@@ -82,7 +95,7 @@ export type MicroRunAgent = {
     input: unknown,
     context?: MicroRunContext
   ) => string | undefined | Promise<string | undefined>;
-  /** One bounded semantic repair attempt after a syntactically successful but contract-invalid response. */
+  /** Build contract feedback that is returned inside the same live trajectory. */
   repairMessage?: (
     input: unknown,
     outputText: string,
@@ -90,6 +103,8 @@ export type MicroRunAgent = {
     context: MicroRunContext,
     toolCalls: MicroRunToolInvocation[]
   ) => string;
+  /** Preserve host-observed tool evidence if the provider dies before its final answer. */
+  preservePartialOutputOnFailure?: boolean;
 };
 
 export type MicroRunContext = {
@@ -98,6 +113,10 @@ export type MicroRunContext = {
   provider: Provider;
   onClarification?: MicroRunClarificationHandler;
   onProgress?: (message: string) => void;
+  onArtifact?: (artifact: DelphiObservationArtifact) => void;
+  runConsoleCommand?: (args: Record<string, unknown>) => Promise<unknown>;
+  imageInputSupport?: ProviderImageInputSupportStatus;
+  analyzeObservation?: (input: { artifact: DelphiObservationArtifact; question: string }) => Promise<{ status: "analyzed"; analysis: string }>;
   signal?: AbortSignal;
 };
 
@@ -106,7 +125,8 @@ const microRunRegistry = new Map<MicroRunKind, MicroRunAgent>();
 const microRunSubagentProfiles: Partial<Record<MicroRunKind, SubagentModelProfile>> = {
   "graph-reconciliation": "picasso",
   "sherlock-research": "sherlock",
-  "merge-resolution": "solomon"
+  "merge-resolution": "solomon",
+  "delphi-testing": "delphi"
 };
 
 export function resolveMicroRunProvider(provider: Provider, kind: MicroRunKind): Provider {
@@ -145,6 +165,7 @@ function mergeUsage(current: LlmUsage | undefined, next: LlmUsage): LlmUsage {
     thinkingTokens: (current.thinkingTokens ?? 0) + (next.thinkingTokens ?? 0) || undefined,
     cacheReadTokens: (current.cacheReadTokens ?? 0) + (next.cacheReadTokens ?? 0) || undefined,
     cacheCreationTokens: (current.cacheCreationTokens ?? 0) + (next.cacheCreationTokens ?? 0) || undefined,
+    reasoningReplayState: mergeReasoningReplayStates([current.reasoningReplayState, next.reasoningReplayState]),
     calls: current.calls + next.calls,
     costUsd: current.costUsd !== undefined || next.costUsd !== undefined
       ? (current.costUsd ?? 0) + (next.costUsd ?? 0)
@@ -162,13 +183,33 @@ function responseDiagnostics(
 ): NonNullable<MicroRunResult["diagnostics"]> {
   const redacted = redactSensitiveText(outputText);
   const maxChars = 4_000;
+  const visuallyAnalyzedArtifactIds = toolInvocations.flatMap((call) => {
+    if (call.providerToolName !== "delphi_analyze_observation" || call.succeeded === false) return [];
+    try {
+      const args = JSON.parse(call.argumentsJson || "{}") as { artifactId?: unknown };
+      return typeof args.artifactId === "string" && args.artifactId.trim() ? [args.artifactId.trim()] : [];
+    } catch {
+      return [];
+    }
+  });
+  const toolRejections = toolInvocations.filter((call) => call.succeeded === false).slice(-8).map((call) => {
+    const redactedArguments = redactSensitiveText(call.argumentsJson || "{}").text;
+    const redactedError = call.error ? redactSensitiveText(call.error).text : undefined;
+    return {
+      providerToolName: call.providerToolName,
+      argumentsJson: redactedArguments.slice(0, 4_000),
+      error: redactedError?.slice(0, 2_000)
+    };
+  });
   return {
     responsePreview: redacted.text.slice(0, maxChars),
     responseRedacted: redacted.redacted || undefined,
     responseTruncated: redacted.text.length > maxChars || undefined,
     repairAttempted: repairAttempted || undefined,
     validationErrors: validationErrors.length ? validationErrors : undefined,
-    toolCallNames: Array.from(new Set(toolInvocations.map((call) => call.providerToolName)))
+    toolCallNames: Array.from(new Set(toolInvocations.map((call) => call.providerToolName))),
+    toolRejections: toolRejections.length ? toolRejections : undefined,
+    visuallyAnalyzedArtifactIds: Array.from(new Set(visuallyAnalyzedArtifactIds))
   };
 }
 
@@ -181,6 +222,9 @@ export async function executeMicroRun(
   options?: {
     onClarification?: MicroRunClarificationHandler;
     onProgress?: (message: string) => void;
+    onArtifact?: (artifact: DelphiObservationArtifact) => void;
+    onObservationAnalysis?: (event: DelphiObservationAnalysisEvent) => void | Promise<void>;
+    runConsoleCommand?: (args: Record<string, unknown>) => Promise<unknown>;
     signal?: AbortSignal;
   }
 ): Promise<MicroRunResult> {
@@ -195,6 +239,16 @@ export async function executeMicroRun(
     };
   }
   const microRunProvider = resolveMicroRunProvider(provider, kind);
+  const microRunId = generateMicroRunId();
+  let capturedUsage: LlmUsage | undefined;
+  const modelPolicy = resolvePhaseModelPolicy(microRunProvider, "brainstorming");
+  const imageInputSupport = providerImageInputSupportStatus(microRunProvider, modelPolicy.modelOverride).status;
+  const runAbortController = new AbortController();
+  const parentSignal = options?.signal;
+  const abortFromParent = (): void => runAbortController.abort(parentSignal?.reason);
+  if (parentSignal?.aborted) abortFromParent();
+  else parentSignal?.addEventListener("abort", abortFromParent, { once: true });
+  const runSignal = runAbortController.signal;
 
   const unresolvedClarifications: string[] = [];
   const onClarification: MicroRunClarificationHandler = options?.onClarification
@@ -209,24 +263,83 @@ export async function executeMicroRun(
     provider: microRunProvider,
     onClarification,
     onProgress: options?.onProgress,
-    signal: options?.signal
+    onArtifact: options?.onArtifact,
+    runConsoleCommand: options?.runConsoleCommand,
+    imageInputSupport,
+    analyzeObservation: imageInputSupport === "supported" ? async ({ artifact, question }) => {
+      const absolutePath = path.resolve(projectRoot, artifact.path);
+      const relative = path.relative(path.resolve(projectRoot), absolutePath);
+      if (relative.startsWith("..") || path.isAbsolute(relative)) throw new Error("Delphi observation analysis is limited to evidence inside the current project.");
+      const publishAnalysisEvent = async (event: DelphiObservationAnalysisEvent): Promise<void> => {
+        try {
+          await options?.onObservationAnalysis?.(event);
+        } catch (error) {
+          // Observation persistence/telemetry must never turn a successful
+          // vision call into a false model-analysis failure.
+          console.warn(`[delphi-testing] Could not publish observation-analysis state: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      };
+      options?.onProgress?.(`Sending ${artifact.label} for model visual inspection`);
+      await publishAnalysisEvent({ artifact, status: "started" });
+      try {
+        const analysis = await callProvider(microRunProvider, [
+          "Analyze the attached Delphi runtime observation as visual QA evidence.",
+          `Artifact label: ${artifact.label}.`,
+          `Question: ${question}`,
+          "Report only what is visibly supported by the pixels. Separate visible facts from uncertainty. Note clipping, overlap, unreadable text, broken layout, incorrect screen state, or clear accessibility contrast issues when present. Do not infer behavior that is not visible. Return concise plain text."
+        ].join("\n"), "Analyze one bounded Delphi screenshot", {
+          phase: "brainstorming",
+          bareExtraction: true,
+          signal: runSignal,
+          cacheSessionId: `${microRunId}:vision`,
+          imageAttachments: [{
+            title: artifact.label,
+            path: absolutePath,
+            mediaType: artifact.mediaType,
+            source: "context",
+            sourceLabel: "Delphi runtime observation"
+          }],
+          onUsage: (usage) => {
+            capturedUsage = mergeUsage(capturedUsage, usage);
+          }
+        });
+        const visualEvidence = analysis.trim();
+        if (!visualEvidence) throw new Error("The selected model returned no visual analysis for this observation.");
+        if (visualAnalysisUnavailable(visualEvidence)) {
+          throw new Error(`The selected model did not receive usable screenshot pixels: ${visualEvidence.slice(0, 500)}`);
+        }
+        options?.onProgress?.(`Model inspected ${artifact.label}`);
+        await publishAnalysisEvent({ artifact, status: "completed", analysis: visualEvidence });
+        return { status: "analyzed", analysis: visualEvidence };
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        options?.onProgress?.(`Model visual inspection failed for ${artifact.label}: ${message}`);
+        await publishAnalysisEvent({ artifact, status: "failed", error: message });
+        throw error;
+      }
+    } : undefined,
+    signal: runSignal
   };
 
   const tools = agent.tools(context, input);
   const systemPrompt = [
     agent.systemPrompt(input, context),
-    "LONG-RUN EXECUTION POLICY: Work in bounded, verifiable units instead of holding a large task for one final response. Use the tools incrementally—normally one file, one graph region, one evidence slice, or one coherent batch at a time—and persist each completed unit through the tool intended for it. Keep the final response compact and assemble or summarize the completed units. Do not repeat an identical inspection merely to stay active. If a submit/checkpoint/batch tool is available, use it throughout the run rather than one-shotting the entire payload at the end."
+    "AUTONOMOUS SUBAGENT CONTRACT: Own the tactics and iteration for this objective. Use the available tools and collected evidence as you judge appropriate, continue until the output contract is satisfied or a concrete blocker remains, and never claim an action or observation that the host did not confirm. If the host rejects a final answer against the output contract, use that feedback in this same trajectory and choose the corrective action yourself."
   ].join("\n\n");
   const userMessage = agent.userMessage(input, context);
 
   const result: MicroRunResult = {
-    id: generateMicroRunId(),
+    id: microRunId,
     kind,
     status: "running",
     createdAt: new Date().toISOString()
   };
 
-  let capturedUsage: LlmUsage | undefined;
+  let outputText = "";
+  let repairAttempted = false;
+  const validationErrors: string[] = [];
+  const toolInvocations: MicroRunToolInvocation[] = [];
+  let parsedOutput: unknown;
 
   try {
     const scopeContext = JSON.stringify({
@@ -240,9 +353,9 @@ export async function executeMicroRun(
       }))
     }, null, 2);
 
-    // Every tool the model invokes, in order, so parseOutput can recover
-    // structured output from a tool call's args even if the final text is lost.
-    const toolInvocations: MicroRunToolInvocation[] = [];
+    // These tools are explicit output sinks, not prescribed tactics. A
+    // successful sink can finish immediately once the same output contract
+    // validator accepts the captured arguments.
     const isFinalProposalTool = (providerToolName: string): boolean =>
       providerToolName === "propose_graph_change_set" || providerToolName === "picasso_propose_graph_change_set";
     const successfulTerminalToolCalls = new Set<string>();
@@ -250,7 +363,7 @@ export async function executeMicroRun(
   const providerOptions: ResearchProviderOptions = {
     projectRoot,
     webSearchEnabled: agent.webSearchEnabled?.(input, context) ?? false,
-    signal: options?.signal,
+    signal: runSignal,
     scopeContext,
     systemInstructionsOverride: systemPrompt,
     messages: [],
@@ -261,6 +374,9 @@ export async function executeMicroRun(
     onUsage: (usage) => {
       capturedUsage = mergeUsage(capturedUsage, usage);
     },
+    onTransientRetry: () => {
+      options?.onProgress?.("Transient provider interruption; retrying the current turn without restarting the subagent.");
+    },
     callMcpTool: async (toolInput: { providerToolName: string; argumentsJson: string }) => {
         const tool = tools.find((t) => t.providerToolName === toolInput.providerToolName) as MicroRunTool | undefined;
         if (!tool) {
@@ -270,82 +386,104 @@ export async function executeMicroRun(
         try {
           const args = toolInput.argumentsJson ? JSON.parse(toolInput.argumentsJson) : {};
           const handlerResult = await tool.handler(args);
+          const serializedResult = JSON.stringify(handlerResult);
+          const executionStarted = [
+            "archicode_console_run_command",
+            "delphi_run_playwright_flow",
+            "delphi_run_appium_flow",
+            "delphi_run_mobile_target_flow"
+          ].includes(toolInput.providerToolName);
           // Handlers may normalize a permissive provider payload in-place.
           // Persist the accepted form so parsers assemble exactly what passed
           // the tool boundary, not the model's pre-validation arguments.
           toolInvocations.push({
             providerToolName: toolInput.providerToolName,
             argumentsJson: JSON.stringify(args),
-            succeeded: true
+            succeeded: true,
+            resultJson: serializedResult,
+            executionStarted
           });
-          if (isFinalProposalTool(toolInput.providerToolName)) {
-            successfulTerminalToolCalls.add(toolInput.providerToolName);
-          }
-          return JSON.stringify(handlerResult);
-        } catch (error) {
-          toolInvocations.push({ providerToolName: toolInput.providerToolName, argumentsJson: toolInput.argumentsJson, succeeded: false });
-          return `Tool error: ${error instanceof Error ? error.message : String(error)}`;
-        }
-      },
-      // A rejected sink call is not terminal. Provider loops evaluate this
-      // after the handler returns, so the model receives the concrete tool
-      // error and can correct the same final batch in its existing context.
-      isTerminalTool: (providerToolName) => isFinalProposalTool(providerToolName) && successfulTerminalToolCalls.has(providerToolName),
-      terminalToolCompletesTurn: (providerToolName) => isFinalProposalTool(providerToolName) && successfulTerminalToolCalls.has(providerToolName)
-    };
-
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error(`Micro-run timed out after ${agent.timeoutMs}ms`)), agent.timeoutMs);
-    });
-
-    // Long tool-assisted runs can hit a transient transport blip (undici
-    // "terminated" / socket hang up / headers timeout) partway through the
-    // stream. Retry once on those before giving up, mirroring the transient
-    // verification-retry used by build runs.
-    const runProvider = async (message: string): Promise<string> => {
-      for (let attempt = 0; attempt < 2; attempt += 1) {
-        try {
-          return await callResearchProvider(microRunProvider, message, providerOptions);
+          if (isFinalProposalTool(toolInput.providerToolName)) successfulTerminalToolCalls.add(toolInput.providerToolName);
+          return serializedResult;
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          if (attempt === 0 && isTransientMicroRunFailure(message)) {
-            options?.onProgress?.("Transient network interruption; retrying...");
-            await new Promise((resolve) => setTimeout(resolve, 2000));
-            continue;
+          const partialResult = error && typeof error === "object" && "partialResult" in error
+            ? (error as { partialResult?: unknown }).partialResult
+            : undefined;
+          let partialResultJson: string | undefined;
+          try {
+            if (partialResult !== undefined) partialResultJson = JSON.stringify(partialResult);
+          } catch {
+            // A tool error must still be reported even if its advisory partial
+            // result is not serializable.
           }
-          throw error;
+          toolInvocations.push({
+            providerToolName: toolInput.providerToolName,
+            argumentsJson: toolInput.argumentsJson,
+            succeeded: false,
+            resultJson: partialResultJson,
+            error: message,
+            executionStarted: Boolean(error && typeof error === "object" && "executionStarted" in error && (error as { executionStarted?: unknown }).executionStarted)
+          });
+          return `Tool error: ${message}${partialResultJson ? `\nPartial result: ${partialResultJson}` : ""}`;
         }
-      }
-      throw new Error("Micro-run provider retry exhausted.");
+      },
+      isTerminalTool: (providerToolName) => isFinalProposalTool(providerToolName) && successfulTerminalToolCalls.has(providerToolName),
+      terminalToolCompletesTurn: (providerToolName) => isFinalProposalTool(providerToolName) && successfulTerminalToolCalls.has(providerToolName),
+      validateFinalAnswer: async (candidateText) => {
+        outputText = candidateText;
+        let candidateOutput: unknown;
+        let validationError: string | undefined;
+        try {
+          candidateOutput = agent.parseOutput(candidateText, toolInvocations);
+        } catch (error) {
+          validationError = `The subagent response did not match its output schema: ${error instanceof Error ? error.message : String(error)}`;
+        }
+        if (!validationError) {
+          validationError = await agent.validateOutput?.(candidateOutput, toolInvocations, input, context);
+        }
+        if (!validationError) {
+          parsedOutput = candidateOutput;
+          return undefined;
+        }
+        repairAttempted = true;
+        validationErrors.push(validationError);
+        options?.onProgress?.("The subagent's final answer missed its contract; returning the exact validation result to the same trajectory.");
+        return agent.repairMessage?.(input, candidateText, validationError, context, toolInvocations) ?? [
+          "Your final answer did not satisfy the subagent output contract.",
+          `Validation error: ${validationError}`,
+          "Continue this same task from the evidence and completed tool actions already in context. Choose the corrective action yourself, then return a corrected final answer. Do not repeat accepted work."
+        ].join("\n\n");
+      },
+      // Transport retry belongs to the shared runtime and preserves this live
+      // provider transcript; it never restarts the subagent from its user prompt.
     };
 
-    let repairAttempted = false;
-    const validationErrors: string[] = [];
-    let outputText = await Promise.race([runProvider(userMessage), timeoutPromise]);
-    let parsedOutput = agent.parseOutput(outputText, toolInvocations);
-    let validationError = await agent.validateOutput?.(parsedOutput, toolInvocations, input, context);
-    if (validationError) validationErrors.push(validationError);
+    let timeoutHandle: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutHandle = setTimeout(() => {
+        runAbortController.abort(new Error(`Micro-run timed out after ${agent.timeoutMs}ms`));
+        reject(new Error(`Micro-run timed out after ${agent.timeoutMs}ms`));
+      }, agent.timeoutMs);
+    });
 
-    if (validationError && agent.repairMessage) {
-      repairAttempted = true;
-      options?.onProgress?.("The subagent response missed its completion contract; retrying once with focused repair guidance.");
-      const repairMessage = agent.repairMessage(input, outputText, validationError, context, toolInvocations);
-      outputText = await Promise.race([runProvider(repairMessage), timeoutPromise]);
+    try {
+      outputText = await Promise.race([callResearchProvider(microRunProvider, userMessage, providerOptions), timeoutPromise]);
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+    }
+    // validateFinalAnswer runs inside the provider-independent loop and stores
+    // the accepted parsed value. This fallback covers transports with no tools.
+    if (parsedOutput === undefined) {
       parsedOutput = agent.parseOutput(outputText, toolInvocations);
-      validationError = await agent.validateOutput?.(parsedOutput, toolInvocations, input, context);
-      if (validationError) validationErrors.push(validationError);
+      const validationError = await agent.validateOutput?.(parsedOutput, toolInvocations, input, context);
+      if (validationError) {
+        validationErrors.push(validationError);
+        throw new Error(validationError);
+      }
     }
 
     result.diagnostics = responseDiagnostics(outputText, toolInvocations, repairAttempted, validationErrors);
-    if (validationError) {
-      result.status = "failed";
-      result.output = parsedOutput;
-      result.error = validationError;
-      result.usage = capturedUsage;
-      result.completedAt = new Date().toISOString();
-      return result;
-    }
-
     result.status = unresolvedClarifications.length > 0 ? "needs-clarification" : "completed";
     result.output = parsedOutput;
     if (unresolvedClarifications.length > 0) {
@@ -356,8 +494,19 @@ export async function executeMicroRun(
 
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
+    const timedOut = isTimeoutFailureMessage(errorMessage);
 
-    if (errorMessage.includes("timed out")) {
+    if (agent.preservePartialOutputOnFailure && toolInvocations.some((call) => call.executionStarted)) {
+      try {
+        result.output = agent.parseOutput(outputText, toolInvocations);
+      } catch {
+        // The terminal provider error remains authoritative. Partial output is
+        // best-effort and must never hide or replace that failure.
+      }
+    }
+
+    result.failureKind = timedOut ? "timeout" : "error";
+    if (/Micro-run timed out after/i.test(errorMessage)) {
       result.status = "failed";
       result.error = `Micro-run timed out after ${agent.timeoutMs}ms. The agent was working on a complex task.`;
     } else {
@@ -365,10 +514,11 @@ export async function executeMicroRun(
       result.error = errorMessage;
     }
     result.usage = capturedUsage;
-    result.diagnostics ??= responseDiagnostics("", [], false, []);
+    result.diagnostics ??= responseDiagnostics(outputText, toolInvocations, repairAttempted, validationErrors);
     result.completedAt = new Date().toISOString();
   }
 
+  parentSignal?.removeEventListener("abort", abortFromParent);
   return result;
 }
 

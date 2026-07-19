@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { memo, useMemo } from "react";
 import type { MouseEvent } from "react";
 import Markdown, { type Components, type Options as MarkdownOptions, type UrlTransform } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
@@ -181,7 +181,7 @@ export const transformMarkdownUrl: UrlTransform = (url, key) => {
   return isSafeMarkdownHref(url) ? url : "";
 };
 
-export function ResearchMarkdown({ content, highlightText, onGraphLink, onProjectPathLink }: {
+export const ResearchMarkdown = memo(function ResearchMarkdown({ content, highlightText, onGraphLink, onProjectPathLink }: {
   content: string;
   highlightText?: string | null;
   onGraphLink?: (target: ArchicodeGraphLink) => void;
@@ -238,4 +238,4 @@ export function ResearchMarkdown({ content, highlightText, onGraphLink, onProjec
       </Markdown>
     </div>
   );
-}
+});

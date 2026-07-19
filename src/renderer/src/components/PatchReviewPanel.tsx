@@ -1,5 +1,6 @@
 import { CheckCircle2, FileJson, RefreshCw, ShieldAlert, XCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+import { useShallow } from "zustand/react/shallow";
 import { llmPatchProposalSchema, type LlmPatchProposal, type PatchOperationDecision, type ProjectBundle } from "@shared/schema";
 import { useArchicodeStore, type PatchProposalView } from "../store/useArchicodeStore";
 import { Badge, Button, DialogContent, DialogRoot, EmptyState, IconButton, ScrollArea } from "./ui";
@@ -228,7 +229,12 @@ function isGraphReviewOperation(operation: LlmPatchProposal["operations"][number
 }
 
 export function PatchReviewPanel() {
-  const { bundle, patchProposals, refreshPatchProposals, applyPatchProposal } = useArchicodeStore();
+  const { bundle, patchProposals, refreshPatchProposals, applyPatchProposal } = useArchicodeStore(useShallow((state) => ({
+    bundle: state.bundle,
+    patchProposals: state.patchProposals,
+    refreshPatchProposals: state.refreshPatchProposals,
+    applyPatchProposal: state.applyPatchProposal
+  })));
   const [open, setOpen] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [accepted, setAccepted] = useState<Record<string, boolean>>({});

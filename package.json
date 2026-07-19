@@ -22,6 +22,7 @@
     "dist:store": "npm run icons && npm run build && electron-builder --win appx --x64",
     "preview": "electron-vite preview",
     "test": "vitest run",
+    "test:live:deepseek": "vitest run --config vitest.live.config.ts",
     "benchmark:importer": "vite-node scripts/benchmark-importer.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "visual-qa": "npm run build && electron scripts/visual-qa-main.cjs",
