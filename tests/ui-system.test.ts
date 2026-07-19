@@ -513,9 +513,11 @@ describe("renderer UI system", () => {
     expect(manifest.dependencies["react-markdown"]).toBeTruthy();
     expect(manifest.dependencies["remark-gfm"]).toBeTruthy();
     expect(manifest.dependencies["rehype-highlight"]).toBeTruthy();
+    expect(manifest.dependencies["mermaid"]).toBeTruthy();
     expect(panel).toContain("<Markdown");
     expect(panel).toContain("remarkPlugins={[remarkGfm]}");
     expect(panel).toContain("rehypeHighlight");
+    expect(panel).toContain("MermaidDiagram");
     expect(css).toContain("--code-surface: #f6f8fa");
     expect(css).toContain(':root[data-theme="dark"]');
     expect(css).toContain("--code-surface: #171d21");

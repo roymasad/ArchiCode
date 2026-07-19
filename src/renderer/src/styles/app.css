@@ -12165,6 +12165,48 @@ button.activity-maintenance-indicator {
   white-space: pre;
 }
 
+.research-mermaid,
+.research-mermaid-loading,
+.research-mermaid-error {
+  max-width: 100%;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--code-border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-raised) 72%, var(--surface));
+}
+
+.research-mermaid {
+  display: grid;
+  place-items: center;
+}
+
+.research-mermaid svg {
+  display: block;
+  width: auto;
+  max-width: 100%;
+  height: auto;
+}
+
+.research-mermaid-loading {
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.research-mermaid-error {
+  display: grid;
+  gap: 6px;
+  color: var(--text-muted);
+}
+
+.research-mermaid-error > strong {
+  color: var(--danger);
+}
+
+.research-mermaid-error pre {
+  margin-top: 4px;
+}
+
 .research-markdown :where(.hljs-comment, .hljs-quote) {
   color: var(--code-comment);
   font-style: italic;

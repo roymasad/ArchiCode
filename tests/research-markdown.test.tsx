@@ -23,6 +23,16 @@ describe("ResearchMarkdown", () => {
     expect(html.replace(/<[^>]+>/g, "")).toContain("const partial =");
   });
 
+  it("routes Mermaid fences to the diagram renderer", () => {
+    const html = renderToStaticMarkup(
+      <ResearchMarkdown content={'```mermaid\nflowchart TD\n  A[Start] --> B[Done]\n```'} />
+    );
+
+    expect(html).toContain("research-mermaid-loading");
+    expect(html).toContain("Rendering diagram");
+    expect(html).not.toContain('class="hljs language-mermaid"');
+  });
+
   it("renders GitHub-flavored tables, task lists, and strikethrough", () => {
     const html = renderToStaticMarkup(
       <ResearchMarkdown content={'| Feature | Ready |\n| --- | --- |\n| Markdown | Yes |\n\n- [x] Tables\n- [ ] Follow-up\n\n~~old~~'} />

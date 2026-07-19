@@ -1,10 +1,11 @@
-import { memo, useMemo } from "react";
-import type { MouseEvent } from "react";
+import { isValidElement, memo, useMemo } from "react";
+import type { MouseEvent, ReactNode } from "react";
 import Markdown, { type Components, type Options as MarkdownOptions, type UrlTransform } from "react-markdown";
 import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
 import type { Element, ElementContent, Root, RootContent, Text } from "hast";
 import type { Plugin } from "unified";
+import { MermaidDiagram } from "./MermaidDiagram";
 
 export function isSafeMarkdownHref(href: string): boolean {
   return /^(https?:|mailto:|archicode:\/\/)/i.test(href);
@@ -188,6 +189,15 @@ export const ResearchMarkdown = memo(function ResearchMarkdown({ content, highli
   onProjectPathLink?: (target: ArchicodeProjectPathLink) => void;
 }) {
   const components = useMemo<Components>(() => ({
+    pre: ({ children, node: _node, ...props }) => {
+      const code = isValidElement<{ children?: ReactNode; className?: string }>(children) ? children : null;
+      const languageClasses = code?.props.className?.split(/\s+/) ?? [];
+      if (code && languageClasses.includes("language-mermaid")) {
+        const source = String(code.props.children ?? "").replace(/\n$/, "");
+        return <MermaidDiagram source={source} />;
+      }
+      return <pre {...props}>{children}</pre>;
+    },
     a: ({ href, children, node: _node, ...props }) => {
       const safeHref = href && isSafeMarkdownHref(href) ? href : undefined;
       const graphTarget = safeHref ? parseArchicodeGraphHref(safeHref) : null;
@@ -221,7 +231,7 @@ export const ResearchMarkdown = memo(function ResearchMarkdown({ content, highli
     )
   }), [onGraphLink, onProjectPathLink]);
   const rehypePlugins = useMemo<NonNullable<MarkdownOptions["rehypePlugins"]>>(() => [
-    [rehypeHighlight, { detect: true, plainText: ["text", "txt"] }],
+    [rehypeHighlight, { detect: true, plainText: ["text", "txt", "mermaid"] }],
     rehypeTtsHighlight(highlightText)
   ], [highlightText]);
 
