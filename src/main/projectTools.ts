@@ -79,7 +79,7 @@ function looksBinary(buffer: Buffer): boolean {
   return buffer.subarray(0, Math.min(buffer.length, 4096)).includes(0);
 }
 
-function runGit(projectRoot: string, args: string[]): Promise<GitOperationResult> {
+export function runGit(projectRoot: string, args: string[]): Promise<GitOperationResult> {
   return new Promise((resolve) => {
     const child = spawn("git", ["-C", projectRoot, ...args], { shell: false });
     const stdout: Buffer[] = [];

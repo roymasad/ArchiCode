@@ -480,17 +480,24 @@ export function TooltipProvider({ children }: { children: ReactNode }) {
 export function Tooltip({
   content,
   children,
+  disabled = false,
   open,
   onOpenChange
 }: {
   content: ReactNode;
   children: ReactNode;
+  disabled?: boolean;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
 }) {
   const trigger = isValidElement(children)
     ? cloneElement(children as ReactElement<{ title?: string }>, { title: undefined })
     : children;
+
+  if (disabled) {
+    return <>{trigger}</>;
+  }
+
   return (
     <TooltipPrimitive.Root open={open} onOpenChange={onOpenChange}>
       <TooltipPrimitive.Trigger asChild>{trigger}</TooltipPrimitive.Trigger>
@@ -535,6 +542,7 @@ export function Separator() {
 export const PopoverRoot = PopoverPrimitive.Root;
 export const PopoverTrigger = PopoverPrimitive.Trigger;
 export const PopoverContent = PopoverPrimitive.Content;
+export const PopoverPortal = PopoverPrimitive.Portal;
 
 export function CommandGroup({ title, children }: { title?: ReactNode; children: ReactNode }) {
   return (

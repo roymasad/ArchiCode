@@ -89,6 +89,7 @@ import {
   readProjectFile,
   readProjectFileDiff
 } from "./projectTools";
+import { getGraphNodeHistory, listGraphHistory, listHistoricalProjectFiles, loadHistoricalGraphBundle, readHistoricalProjectFile } from "./graphHistory";
 import {
   deleteSpeechModel,
   downloadSpeechModel,
@@ -2427,6 +2428,19 @@ function registerIpc(): void {
   ipcMain.handle("archicode:list-chat-artifacts", async (_event, projectRoot, chatId) => listChatArtifacts(projectRoot, chatId));
   ipcMain.handle("archicode:read-chat-artifact", async (_event, projectRoot, chatId, artifactId) => readChatArtifact(projectRoot, chatId, artifactId));
   ipcMain.handle("archicode:get-git-status", async (_event, projectRoot: string) => getGitStatus(projectRoot));
+  ipcMain.handle("archicode:list-graph-history", async (_event, projectRoot: string) => listGraphHistory(projectRoot));
+  ipcMain.handle("archicode:load-historical-graph", async (_event, projectRoot: string, commit: string) =>
+    loadHistoricalGraphBundle(projectRoot, commit)
+  );
+  ipcMain.handle("archicode:list-historical-project-files", async (_event, projectRoot: string, commit: string) =>
+    listHistoricalProjectFiles(projectRoot, commit)
+  );
+  ipcMain.handle("archicode:read-historical-project-file", async (_event, projectRoot: string, commit: string, relativePath: string) =>
+    readHistoricalProjectFile(projectRoot, commit, relativePath)
+  );
+  ipcMain.handle("archicode:get-graph-node-history", async (_event, projectRoot: string, commit: string, flowId: string, nodeId: string) =>
+    getGraphNodeHistory(projectRoot, commit, flowId, nodeId)
+  );
   ipcMain.handle("archicode:git-init", async (_event, projectRoot: string) => gitInit(projectRoot));
   ipcMain.handle("archicode:git-pull", async (_event, projectRoot: string) => gitPull(projectRoot));
   ipcMain.handle("archicode:git-push", async (_event, projectRoot: string) => gitPush(projectRoot));

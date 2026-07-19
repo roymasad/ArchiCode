@@ -1109,6 +1109,8 @@ export const projectSchema = z.object({
   description: z.string(),
   rootPath: z.string(),
   activeFlowId: z.string(),
+  /** Content identity of the semantic graph committed with this project state. */
+  graphVersion: z.string().regex(/^sha256:[0-9a-f]{64}$/).optional(),
   settings: projectSettingsSchema,
   createdAt: z.string(),
   updatedAt: z.string().default("")

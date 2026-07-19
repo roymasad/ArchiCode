@@ -220,7 +220,8 @@ export const createProjectSlice = (set: StoreSet, get: StoreGet): Pick<Archicode
   },
 
   reload: async () => {
-    const { rootPath } = get();
+    const { rootPath, historicalInspection } = get();
+    if (historicalInspection) return;
     if (!window.archicode) {
       set((state) => ({ bundle: state.bundle ?? createFallbackBundle(), error: null }));
       return;
@@ -501,7 +502,7 @@ export const createProjectSlice = (set: StoreSet, get: StoreGet): Pick<Archicode
 
   handleExternalProjectUpdated: (payload) => {
     const current = get();
-    if (!current.bundle || payload.projectRoot !== current.rootPath || !window.archicode) return;
+    if (current.historicalInspection || !current.bundle || payload.projectRoot !== current.rootPath || !window.archicode) return;
     void (async () => {
       const [bundle, patchProposals] = await Promise.all([
         window.archicode.loadProject(payload.projectRoot),

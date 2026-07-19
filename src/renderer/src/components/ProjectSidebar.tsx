@@ -10,6 +10,7 @@ import {
   Eye,
   EyeOff,
   GitBranch,
+  History,
   Layers3,
   MoreHorizontal,
   Network,
@@ -147,7 +148,8 @@ export function ProjectSidebar({
     revealProjectFolder,
     createProjectFromTemplate,
     recentProjects,
-    keybindings
+    keybindings,
+    historicalInspection
   } = useArchicodeStore(useShallow((state) => ({
     bundle: state.bundle,
     activeFlowId: state.activeFlowId,
@@ -176,7 +178,8 @@ export function ProjectSidebar({
     revealProjectFolder: state.revealProjectFolder,
     createProjectFromTemplate: state.createProjectFromTemplate,
     recentProjects: state.recentProjects,
-    keybindings: state.keybindings
+    keybindings: state.keybindings,
+    historicalInspection: state.historicalInspection
   })));
   const [flowsExpanded, setFlowsExpanded] = useState(false);
   const [pathCopied, setPathCopied] = useState(false);
@@ -192,7 +195,7 @@ export function ProjectSidebar({
   const flowVisualSaveQueuesRef = useRef<Record<string, Promise<unknown>>>({});
   const flow = getActiveFlow(bundle, activeFlowId);
   const activeSubflow = flow?.subflows.find((subflow) => subflow.id === activeSubflowId) ?? null;
-  const runChangeBlocked = Boolean(bundle?.runs.some(isRunBlockingNewChange));
+  const runChangeBlocked = Boolean(historicalInspection) || Boolean(bundle?.runs.some(isRunBlockingNewChange));
 
   const filteredNodes = flow ? visibleNodesForFlow(flow, activeSubflowId, searchQuery) : [];
   const selectedNodeIdSet = useMemo(() => new Set(selectedNodeIds.length ? selectedNodeIds : selectedNodeId ? [selectedNodeId] : []), [selectedNodeId, selectedNodeIds]);
@@ -202,6 +205,7 @@ export function ProjectSidebar({
     void saveFlow({ ...item, ignored: !item.ignored, updatedAt: new Date().toISOString() });
   };
   const commitFlowRename = (item: Flow) => {
+    if (historicalInspection) return;
     const nextName = renamingFlow?.id === item.id ? renamingFlow.name.trim() : "";
     setRenamingFlow(null);
     if (nextName && nextName !== editableFlowName(item)) {
@@ -209,6 +213,7 @@ export function ProjectSidebar({
     }
   };
   const commitSubflowRename = (subflow: FlowSubflow) => {
+    if (historicalInspection) return;
     const nextName = renamingSubflow?.id === subflow.id ? renamingSubflow.name.trim() : "";
     setRenamingSubflow(null);
     if (nextName && nextName !== subflow.name) void renameSubflow(subflow.id, nextName);
@@ -457,7 +462,7 @@ export function ProjectSidebar({
                       draggingSubflowId === subflow.id ? "is-dragging" : ""
                     ].filter(Boolean).join(" ")}
                     type="button"
-                    draggable
+                    draggable={!historicalInspection}
                     onDragStart={(event) => {
                       event.dataTransfer.setData("application/x-archicode-subflow", subflow.id);
                       event.dataTransfer.effectAllowed = "move";
@@ -474,7 +479,7 @@ export function ProjectSidebar({
                       if (draggingSubflowId !== subflow.id) dropSubflow(subflow.id);
                     }}
                     onClick={() => setActiveSubflow(subflow.id)}
-                    onDoubleClick={() => setRenamingSubflow({ id: subflow.id, name: subflow.name })}
+                    onDoubleClick={() => { if (!historicalInspection) setRenamingSubflow({ id: subflow.id, name: subflow.name }); }}
                     title={subflowLinkedTitle(item, subflow) ?? "Drag to nest, double-click to rename"}
                   >
                     <GitBranch size={15} />
@@ -567,7 +572,7 @@ export function ProjectSidebar({
                     event.preventDefault();
                     setActiveFlow(item.id);
                   }}
-                  onDoubleClick={() => setRenamingFlow({ id: item.id, name: editableFlowName(item) })}
+                  onDoubleClick={() => { if (!historicalInspection) setRenamingFlow({ id: item.id, name: editableFlowName(item) }); }}
                   title={item.perspective
                     ? `${item.perspective.question} Confidence: ${item.perspective.confidence}. Double-click to rename.`
                     : "Show this flow's top-level nodes. Drop a subflow here to move it to top level. Double-click to rename."}
@@ -631,6 +636,9 @@ export function ProjectSidebar({
         </div>
         {panelAction}
       </div>
+      {historicalInspection ? (
+        <div className="sidebar-historical-label"><History size={14} /> Flows at {historicalInspection.entry.shortCommit}</div>
+      ) : null}
 
       <div className="project-switcher">
         <MenuRoot>

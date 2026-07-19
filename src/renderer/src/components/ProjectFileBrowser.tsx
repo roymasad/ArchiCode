@@ -287,7 +287,8 @@ export function ProjectFileBrowser({ expanded = false, onToggleExpanded }: { exp
     selectedFilePath,
     refreshProjectFiles,
     selectProjectFile,
-    startScopedResearchChat
+    startScopedResearchChat,
+    historicalInspection
   } = useArchicodeStore(useShallow((state) => ({
     rootPath: state.rootPath,
     bundle: state.bundle,
@@ -299,7 +300,8 @@ export function ProjectFileBrowser({ expanded = false, onToggleExpanded }: { exp
     selectedFilePath: state.selectedFilePath,
     refreshProjectFiles: state.refreshProjectFiles,
     selectProjectFile: state.selectProjectFile,
-    startScopedResearchChat: state.startScopedResearchChat
+    startScopedResearchChat: state.startScopedResearchChat,
+    historicalInspection: state.historicalInspection
   })));
   const [previewTab, setPreviewTab] = useState("preview");
   const [searchQuery, setSearchQuery] = useState("");
@@ -334,7 +336,7 @@ export function ProjectFileBrowser({ expanded = false, onToggleExpanded }: { exp
   const lastHandledPreviewRequestRef = useRef<number>(0);
   const semanticContextCacheRef = useRef(new Map<number, SemanticCodeLineContext>());
   const semanticLensStorageKey = `archicode-semantic-file-lens:${rootPath || "default"}`;
-  const semanticLensAvailable = Boolean(bundle?.project.settings.semanticIndex.enabled);
+  const semanticLensAvailable = !historicalInspection && Boolean(bundle?.project.settings.semanticIndex.enabled);
 
   useEffect(() => {
     setSidebarWidth(readStoredSidebarWidth(rootPath));
@@ -372,17 +374,18 @@ export function ProjectFileBrowser({ expanded = false, onToggleExpanded }: { exp
   }, [rootPath, selectedFilePath, semanticLensAvailable, semanticLensEnabled]);
 
   useEffect(() => {
-    if (!rootPath || fileBusy || autoLoadedRootRef.current === rootPath) return;
-    autoLoadedRootRef.current = rootPath;
+    const sourceKey = historicalInspection ? `${rootPath}@${historicalInspection.entry.commit}` : rootPath;
+    if (!rootPath || fileBusy || autoLoadedRootRef.current === sourceKey) return;
+    autoLoadedRootRef.current = sourceKey;
     void refreshProjectFiles();
-  }, [fileBusy, refreshProjectFiles, rootPath]);
+  }, [fileBusy, historicalInspection, refreshProjectFiles, rootPath]);
 
   useEffect(() => {
-    if (!rootPath || !fileBrowser || selectedFilePath || restoredPreviewRootRef.current === rootPath) return;
+    if (historicalInspection || !rootPath || !fileBrowser || selectedFilePath || restoredPreviewRootRef.current === rootPath) return;
     restoredPreviewRootRef.current = rootPath;
     const lastPreviewedFile = localStorage.getItem(lastPreviewFileStorageKey(rootPath));
     if (lastPreviewedFile) void selectProjectFile(lastPreviewedFile);
-  }, [fileBrowser, rootPath, selectProjectFile, selectedFilePath]);
+  }, [fileBrowser, historicalInspection, rootPath, selectProjectFile, selectedFilePath]);
 
   useEffect(() => {
     if (!selectedFilePath || !fileTreeSearchQuery || fileTreeContainsPath(filteredFileTree, selectedFilePath)) return;
@@ -569,7 +572,7 @@ export function ProjectFileBrowser({ expanded = false, onToggleExpanded }: { exp
         <div className="file-browser-header">
           <div>
             <strong>Files</strong>
-            <small>{fileBrowser.gitStatus.isRepo ? `${fileBrowser.gitStatus.changes.length} changed` : "No Git repo"}</small>
+            <small>{historicalInspection ? `Historical · ${historicalInspection.entry.shortCommit}` : fileBrowser?.gitStatus.isRepo ? `${fileBrowser.gitStatus.changes.length} changed` : "No Git repo"}</small>
           </div>
           <div className="file-browser-header-actions">
             <IconButton type="button" title="Refresh" aria-label="Refresh files" onClick={() => void refreshProjectFiles()} disabled={fileBusy}>
@@ -633,7 +636,7 @@ export function ProjectFileBrowser({ expanded = false, onToggleExpanded }: { exp
               <div>
                 <strong>{selectedFilePath}</strong>
                 <small>
-                  {filePreviewRequest?.preferredTab === "diff" && filePreview?.size === 0
+                  {historicalInspection ? `Historical source · ${historicalInspection.entry.shortCommit}` : filePreviewRequest?.preferredTab === "diff" && filePreview?.size === 0
                     ? "Deleted file"
                     : filePreview ? `${filePreview.language} · ${filePreview.size.toLocaleString()} bytes` : "Loading..."}
                 </small>
@@ -671,12 +674,12 @@ export function ProjectFileBrowser({ expanded = false, onToggleExpanded }: { exp
                       { type: "project", projectId: bundle.project.id },
                       explainFilePrompt(selectedFilePath)
                     )}
-                    disabled={!bundle || !selectedFilePath}
+                    disabled={Boolean(historicalInspection) || !bundle || !selectedFilePath}
                   >
                     <CircleHelp size={14} />
                     <span>Explain this</span>
                   </Button>
-                  <Button type="button" size="sm" className="file-preview-open-with" onClick={() => void openSelectedFileExternally()} disabled={!rootPath || !selectedFilePath}>
+                  <Button type="button" size="sm" className="file-preview-open-with" onClick={() => void openSelectedFileExternally()} disabled={Boolean(historicalInspection) || !rootPath || !selectedFilePath}>
                     <ExternalLink size={14} />
                     <span>Open with…</span>
                   </Button>
@@ -712,7 +715,7 @@ export function ProjectFileBrowser({ expanded = false, onToggleExpanded }: { exp
                     <FileCode2 size={14} />
                     Preview
                   </TabsTrigger>
-                  <TabsTrigger value="diff">
+                  <TabsTrigger value="diff" disabled={Boolean(historicalInspection)}>
                     <FileDiff size={14} />
                     Diff
                   </TabsTrigger>

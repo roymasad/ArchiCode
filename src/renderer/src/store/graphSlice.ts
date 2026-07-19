@@ -131,7 +131,11 @@ export const createGraphSlice = (set: StoreSet, get: StoreGet): Pick<ArchicodeSt
   },
   setSearchQuery: (searchQuery) => set({ searchQuery }),
   saveFlow: async (flow) => {
-    const { rootPath, bundle: currentBundle } = get();
+    const { rootPath, bundle: currentBundle, historicalInspection } = get();
+    if (historicalInspection) {
+      set({ error: "Historical graph inspection is read-only. Return to the current graph to make changes." });
+      return null;
+    }
     if (hasActiveRun(currentBundle)) {
       set({ error: editingLockedMessage() });
       return null;
@@ -694,6 +698,10 @@ export const createGraphSlice = (set: StoreSet, get: StoreGet): Pick<ArchicodeSt
   },
 
   updateNode: async (patch, actor = "user") => {
+    if (get().historicalInspection) {
+      set({ error: "Historical graph inspection is read-only. Return to the current graph to make changes." });
+      return;
+    }
     const { rootPath, activeFlowId, bundle } = get();
     if (!activeFlowId) return;
     if (actor === "user" && hasActiveRun(bundle)) {

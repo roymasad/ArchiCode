@@ -13,6 +13,7 @@ import {
   FileCode2,
   FileText,
   GitBranch,
+  GitCommitHorizontal,
   HelpCircle,
   Lock,
   Maximize2,
@@ -45,6 +46,7 @@ import type {
   Flow,
   FlowEdge
 } from "@shared/schema";
+import type { GraphNodeHistory } from "@shared/graphHistory";
 import { gaiaAgent } from "@shared/agentIdentities";
 import { subflowDepth } from "@shared/graph";
 import { getActiveFlow, getSelectedEdge, getSelectedNode, useArchicodeStore } from "../store/useArchicodeStore";
@@ -399,7 +401,10 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
     setWorkbenchView,
     selectProjectFile,
     theme,
-    error
+    error,
+    rootPath,
+    gitStatus,
+    historicalInspection
   } = useArchicodeStore(useShallow((state) => ({
     bundle: state.bundle,
     activeFlowId: state.activeFlowId,
@@ -434,7 +439,10 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
     setWorkbenchView: state.setWorkbenchView,
     selectProjectFile: state.selectProjectFile,
     theme: state.theme,
-    error: state.error
+    error: state.error,
+    rootPath: state.rootPath,
+    gitStatus: state.gitStatus,
+    historicalInspection: state.historicalInspection
   })));
   const [isGeneratingChecks, setIsGeneratingChecks] = useState(false);
   const [isRunningChecks, setIsRunningChecks] = useState(false);
@@ -488,6 +496,9 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
   const [subjectPerspectivesExpanded, setSubjectPerspectivesExpanded] = useState(false);
   const [semanticContext, setSemanticContext] = useState<Awaited<ReturnType<typeof window.archicode.getNodeSemanticContext>> | null>(null);
   const [semanticContextBusy, setSemanticContextBusy] = useState(false);
+  const [nodeHistory, setNodeHistory] = useState<GraphNodeHistory | null>(null);
+  const [nodeHistoryBusy, setNodeHistoryBusy] = useState(false);
+  const [nodeHistoryExpanded, setNodeHistoryExpanded] = useState(false);
   const [semanticContextError, setSemanticContextError] = useState<string | null>(null);
   const [groupNameDraft, setGroupNameDraft] = useState("");
   const [groupColorDraft, setGroupColorDraft] = useState(nodeColorSwatches[0]);
@@ -538,6 +549,37 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
       ? moduleProfileNoneValue
       : node.moduleProfileId || moduleProfileAutoValue
     : moduleProfileAutoValue;
+
+  useEffect(() => {
+    setNodeHistoryExpanded(false);
+    if (!rootPath || !flow || !node || !window.archicode?.getGraphNodeHistory) {
+      setNodeHistory(null);
+      setNodeHistoryBusy(false);
+      return;
+    }
+    if (gitStatus && !gitStatus.isRepo) {
+      setNodeHistory({ available: false, flowId: flow.id, nodeId: node.id, changes: [], message: "Git attribution is unavailable until this graph is committed." });
+      setNodeHistoryBusy(false);
+      return;
+    }
+    let cancelled = false;
+    const revision = historicalInspection?.entry.commit ?? gitStatus?.recentCommits[0]?.hash ?? "HEAD";
+    setNodeHistory(null);
+    setNodeHistoryBusy(true);
+    void window.archicode.getGraphNodeHistory(rootPath, revision, flow.id, node.id)
+      .then((history) => { if (!cancelled) setNodeHistory(history); })
+      .catch((historyError: unknown) => {
+        if (!cancelled) setNodeHistory({
+          available: false,
+          flowId: flow.id,
+          nodeId: node.id,
+          changes: [],
+          message: historyError instanceof Error ? historyError.message : String(historyError)
+        });
+      })
+      .finally(() => { if (!cancelled) setNodeHistoryBusy(false); });
+    return () => { cancelled = true; };
+  }, [flow?.id, gitStatus?.isRepo, gitStatus?.recentCommits[0]?.hash, historicalInspection?.entry.commit, node?.id, rootPath]);
 
   const loadSemanticContext = useCallback(async (refresh = false) => {
     const requestId = ++semanticContextRequestRef.current;
@@ -1900,6 +1942,57 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
           <span>{error}</span>
         </div>
       ) : null}
+
+      <section className="node-git-attribution" aria-label="Git graph attribution">
+        <div className="node-git-attribution-heading">
+          <span><GitCommitHorizontal size={14} /> Committed graph history</span>
+          {nodeHistoryBusy ? <Loader2 size={14} className="is-spinning" /> : null}
+        </div>
+        {!nodeHistoryBusy && nodeHistory?.available ? (
+          <>
+            <div className="node-git-attribution-summary">
+              {nodeHistory.introduced ? (
+                <div title={nodeHistory.introduced.author.email}>
+                  <small>Introduced in graph by</small>
+                  <strong>{nodeHistory.introduced.author.name}</strong>
+                  <span>{nodeHistory.introduced.shortCommit} · {new Date(nodeHistory.introduced.committedAt).toLocaleDateString()}</span>
+                </div>
+              ) : null}
+              {nodeHistory.lastSemanticChange ? (
+                <div title={nodeHistory.lastSemanticChange.author.email}>
+                  <small>Last graph change by</small>
+                  <strong>{nodeHistory.lastSemanticChange.author.name}</strong>
+                  <span>{nodeHistory.lastSemanticChange.shortCommit} · {new Date(nodeHistory.lastSemanticChange.committedAt).toLocaleDateString()}</span>
+                </div>
+              ) : null}
+            </div>
+            <button
+              type="button"
+              className="node-git-history-toggle"
+              onClick={() => setNodeHistoryExpanded((current) => !current)}
+              aria-expanded={nodeHistoryExpanded}
+            >
+              <ChevronRight size={13} className={nodeHistoryExpanded ? "is-expanded" : ""} />
+              {nodeHistory.changes.length} committed graph change{nodeHistory.changes.length === 1 ? "" : "s"}
+            </button>
+            {nodeHistoryExpanded ? (
+              <div className="node-git-history-list">
+                {[...nodeHistory.changes].reverse().map((change) => (
+                  <div key={`${change.commit}:${change.kind}`} className="node-git-history-change">
+                    <span className={`node-git-change-kind is-${change.kind}`}>{change.kind}</span>
+                    <div>
+                      <strong title={change.author.email}>{change.author.name}</strong>
+                      <span>{change.subject}</span>
+                      <small>{change.shortCommit} · {new Date(change.committedAt).toLocaleString()}</small>
+                      {change.changedFields.length ? <small>Changed: {change.changedFields.join(", ")}</small> : null}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </>
+        ) : !nodeHistoryBusy ? <small className="node-git-attribution-empty">{nodeHistory?.message ?? "No committed graph attribution is available."}</small> : null}
+      </section>
 
       {readinessItems.length ? (
         <div className="readiness-strip" aria-label="Node needs attention">

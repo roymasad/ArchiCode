@@ -11,6 +11,7 @@ import { NodeInspector } from "./components/NodeInspector";
 import { PermissionModal } from "./components/PermissionModal";
 import { ProjectFileBrowser } from "./components/ProjectFileBrowser";
 import { ProjectToolbar } from "./components/ProjectToolbar";
+import { GraphHistoryBar } from "./components/GraphHistoryBar";
 import { ProjectSidebar } from "./components/ProjectSidebar";
 import { ResearchPanel } from "./components/ResearchPanel";
 import { SettingsAndRuns } from "./components/SettingsAndRuns";
@@ -479,7 +480,8 @@ export function App() {
     keybindings,
     openProjectSettings,
     loadGlobalSpeechSettings,
-    loadGlobalTtsSettings
+    loadGlobalTtsSettings,
+    historicalInspection
   } = useArchicodeStore(useShallow((state) => ({
     load: state.load,
     loading: state.loading,
@@ -507,7 +509,8 @@ export function App() {
     keybindings: state.keybindings,
     openProjectSettings: state.openProjectSettings,
     loadGlobalSpeechSettings: state.loadGlobalSpeechSettings,
-    loadGlobalTtsSettings: state.loadGlobalTtsSettings
+    loadGlobalTtsSettings: state.loadGlobalTtsSettings,
+    historicalInspection: state.historicalInspection
   })));
   const [activityOpen, setActivityOpen] = useState(true);
   const [leftPanelWidth, setLeftPanelWidth] = useState(defaultSidePanelWidth);
@@ -1091,7 +1094,7 @@ export function App() {
     <TooltipProvider>
       <main
         ref={appShellRef}
-        className={chatFocusActive ? "app-shell chat-focus-mode" : "app-shell"}
+        className={["app-shell", chatFocusActive ? "chat-focus-mode" : "", historicalInspection ? "is-historical" : ""].filter(Boolean).join(" ")}
         style={{
           "--left-panel-width": `${leftPanelWidth}px`,
           "--right-panel-width": `${rightPanelWidth}px`,
@@ -1156,6 +1159,7 @@ export function App() {
           ) : null}
           {bundle && !projectLauncherOpen ? (
             <>
+              {historicalInspection ? <GraphHistoryBar /> : null}
               <ProjectToolbar
                 onResetLayout={resetLayout}
                 onRestoreRightSidebar={restoreRightSidebar}

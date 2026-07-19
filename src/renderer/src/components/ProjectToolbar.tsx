@@ -76,6 +76,7 @@ import { PROVIDER_DEFAULT_MODEL_VALUE } from "../utils/researchModels";
 import { PatchReviewPanel } from "./PatchReviewPanel";
 import { HelpPage } from "./HelpPage";
 import { GitPanel } from "./GitPanel";
+import { GraphHistoryBar } from "./GraphHistoryBar";
 import { ModelCombobox } from "./ModelCombobox";
 import { ShortcutsSettingsTab } from "./ShortcutsSettingsTab";
 import { ResyncCodebaseDialog } from "./ResyncCodebaseDialog";
@@ -1726,6 +1727,7 @@ export function ProjectToolbar({
       <header className={rightSidebarCollapsed ? "project-toolbar has-right-sidebar-restore" : "project-toolbar"} aria-label="Project toolbar">
         <Toolbar ref={toolbarActionsRef} className="toolbar-actions" onWheel={scrollToolbarHorizontally}>
           <div className="toolbar-status-group">
+            <GraphHistoryBar inline />
             <IconButton
               className={`toolbar-provider-status ${providerStatusClass}`}
               title={providerStatusTitle}

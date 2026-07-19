@@ -677,7 +677,8 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
     navigateToGraphTarget,
     showDirectUndoNotice,
     keybindings,
-    reload
+    reload,
+    historicalInspection
   } = useArchicodeStore(useShallow((state) => ({
     bundle: state.bundle,
     activeFlowId: state.activeFlowId,
@@ -720,7 +721,8 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
     navigateToGraphTarget: state.navigateToGraphTarget,
     showDirectUndoNotice: state.showDirectUndoNotice,
     keybindings: state.keybindings,
-    reload: state.reload
+    reload: state.reload,
+    historicalInspection: state.historicalInspection
   })));
   const flow = getActiveFlow(bundle, activeFlowId);
   const canvasRef = useRef<HTMLElement | null>(null);
@@ -1883,7 +1885,7 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
   return (
     <section
       ref={canvasRef}
-      className="canvas-shell"
+      className={historicalInspection ? "canvas-shell is-historical" : "canvas-shell"}
       style={canvasStyle}
       aria-label="Architecture flow canvas"
       onPointerEnter={(event) => {
@@ -1911,6 +1913,7 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
         }
       }}
     >
+      {historicalInspection ? <div className="canvas-historical-watermark" aria-hidden="true">HISTORICAL · {historicalInspection.entry.shortCommit}</div> : null}
       {dragSelectionStyle ? <div className="canvas-drag-selection" style={dragSelectionStyle} aria-hidden="true" /> : null}
       {!knowledgeMapVisible && scopeBreadcrumb.length ? (
         <nav
@@ -2058,8 +2061,8 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
           panActivationKeyCode={null}
           nodeClickDistance={8}
           nodeDragThreshold={4}
-          nodesDraggable
-          nodesConnectable
+          nodesDraggable={!historicalInspection}
+          nodesConnectable={!historicalInspection}
           elementsSelectable
           panOnDrag
         >

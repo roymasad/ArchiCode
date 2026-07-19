@@ -58,6 +58,7 @@ import { proposedSourceContent } from "./patches";
 import { hydrateGraphEvidenceLocalState } from "./graphEvidenceLocalState";
 import { recoverPendingResyncTransactions } from "../importer/resyncPersistence";
 import { readArchitecturePolicyEvaluation, refreshGraphArchitecturePolicyEvaluation } from "../policies/architecturePolicies";
+import { computeGraphVersion } from "./graphVersion";
 
 export const LOCAL_PROJECT_STATE_FILE = "local.json";
 // Every shared append-only ledger gets merge=union so concurrent branch
@@ -1012,6 +1013,12 @@ export async function loadProject(projectRoot: string): Promise<ProjectBundle> {
     for (const flow of reconciledFlows) {
       await writeJson(projectStatePath(projectRoot, "flows", `${flow.id}.json`), flowSchema.parse(flow));
     }
+  }
+
+  const graphVersion = computeGraphVersion(reconciledFlows);
+  if (project.graphVersion !== graphVersion) {
+    project = projectSchema.parse({ ...project, graphVersion });
+    await writeProjectFiles(projectRoot, project);
   }
 
   return projectBundleSchema.parse({

@@ -71,12 +71,15 @@ import { createCapabilitiesSlice } from "./capabilitiesSlice";
 import { createResearchSlice } from "./researchSlice";
 import { createNotesSlice } from "./notesSlice";
 import { createUiSlice } from "./uiSlice";
+import { createHistorySlice } from "./historySlice";
+import { guardHistoricalMutations } from "./historicalGuard";
 
 export * from "./types";
 export { getActiveFlow, getSelectedNode, getSelectedEdge, defaultResearchScope, normalizeComposerSegments } from "./helpers";
 import { getInitialTheme, getInitialUiScale, readStoredWorkbenchView, readStoredViewport, createFallbackBundle, isVisualQaPreview } from "./helpers";
 
-export const useArchicodeStore = create<ArchicodeState>((set, get) => ({
+export const useArchicodeStore = create<ArchicodeState>((set, get) => {
+  const state: ArchicodeState = {
   rootPath: "",
   bundle: null,
   activeFlowId: null,
@@ -136,6 +139,10 @@ export const useArchicodeStore = create<ArchicodeState>((set, get) => ({
   gitStatus: null,
   gitLogs: [],
   gitBusy: false,
+  graphHistory: [],
+  graphHistoryOpen: false,
+  graphHistoryLoading: false,
+  historicalInspection: null,
   fileBrowser: null,
   selectedFilePath: null,
   filePreviewRequest: null,
@@ -151,4 +158,7 @@ export const useArchicodeStore = create<ArchicodeState>((set, get) => ({
   ...createResearchSlice(set, get),
   ...createNotesSlice(set, get),
   ...createUiSlice(set, get),
-}));
+    ...createHistorySlice(set, get),
+  };
+  return guardHistoricalMutations(state, set, get);
+});

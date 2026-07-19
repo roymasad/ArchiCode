@@ -138,7 +138,7 @@ function primaryNodeSignal(flags: Set<ArchicodeNode["flags"][number]>, signals?:
   return null;
 }
 
-export function ArchicodeNodeCard({ data, selected }: NodeProps) {
+export function ArchicodeNodeCard({ data, selected, dragging }: NodeProps) {
   const node = data.node as ArchicodeNode;
   const signals = data.signals as NodeSignalCounts | undefined;
   const { zoom } = useViewport();
@@ -299,5 +299,9 @@ export function ArchicodeNodeCard({ data, selected }: NodeProps) {
       )}
     </div>
   );
-  return <Tooltip content={<NodeContextTooltip node={node} signals={signals} />}>{card}</Tooltip>;
+  return (
+    <Tooltip disabled={dragging} content={<NodeContextTooltip node={node} signals={signals} />}>
+      {card}
+    </Tooltip>
+  );
 }

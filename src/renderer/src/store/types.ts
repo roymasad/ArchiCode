@@ -34,6 +34,7 @@ import type {
   ProjectFileDiff,
   ProjectFileText
 } from "@shared/projectTools";
+import type { GraphHistoryEntry, GraphHistoryVersion } from "@shared/graphHistory";
 import type { CodebaseMappingSummary } from "../../../preload";
 import type {
   CreateProjectSkillInput,
@@ -337,6 +338,10 @@ export type ArchicodeState = {
   gitStatus: GitStatus | null;
   gitLogs: GitOperationResult[];
   gitBusy: boolean;
+  graphHistory: GraphHistoryVersion[];
+  graphHistoryOpen: boolean;
+  graphHistoryLoading: boolean;
+  historicalInspection: { entry: GraphHistoryEntry; currentBundle: ProjectBundle } | null;
   fileBrowser: ProjectFileBrowserData | null;
   selectedFilePath: string | null;
   filePreviewRequest: FilePreviewRequest | null;
@@ -383,6 +388,10 @@ export type ArchicodeState = {
   clearGraphNavigationRequest: (requestId: number) => void;
   setWorkbenchView: (view: WorkbenchView) => void;
   refreshGitStatus: () => Promise<void>;
+  toggleGraphHistory: () => void;
+  refreshGraphHistory: () => Promise<void>;
+  inspectHistoricalGraph: (commit: string) => Promise<void>;
+  exitHistoricalInspection: () => Promise<void>;
   initializeGitRepository: () => Promise<void>;
   runGitOperation: (operation: "pull" | "push") => Promise<void>;
   discardGitChanges: () => Promise<void>;

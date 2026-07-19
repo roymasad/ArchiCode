@@ -298,7 +298,7 @@ export const createGitFilesSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
   },
 
   refreshProjectFiles: async () => {
-    const { rootPath } = get();
+    const { rootPath, historicalInspection } = get();
     if (!rootPath) return;
     if (!window.archicode) {
       set({ error: "File browsing is available in the Electron app." });
@@ -306,8 +306,10 @@ export const createGitFilesSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
     }
     set({ fileBusy: true });
     try {
-      const fileBrowser = await window.archicode.listProjectFiles(rootPath);
-      set({ fileBrowser, gitStatus: fileBrowser.gitStatus, error: null });
+      const fileBrowser = historicalInspection && window.archicode.listHistoricalProjectFiles
+        ? await window.archicode.listHistoricalProjectFiles(rootPath, historicalInspection.entry.commit)
+        : await window.archicode.listProjectFiles(rootPath);
+      set({ fileBrowser, gitStatus: historicalInspection ? get().gitStatus : fileBrowser.gitStatus, error: null });
       const selected = get().selectedFilePath;
       if (selected) await get().selectProjectFile(selected);
     } catch (error) {
@@ -318,8 +320,8 @@ export const createGitFilesSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
   },
 
   selectProjectFile: async (selectedFilePath, options) => {
-    const { rootPath } = get();
-    if (rootPath) {
+    const { rootPath, historicalInspection } = get();
+    if (rootPath && !historicalInspection) {
       const storageKey = projectUiKey(rootPath, "last-file-preview");
       if (selectedFilePath) localStorage.setItem(storageKey, selectedFilePath);
       else localStorage.removeItem(storageKey);
@@ -332,7 +334,7 @@ export const createGitFilesSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
       matchText: options?.matchText?.trim() || null,
       searchQuery: options?.searchQuery?.trim() || null
     } : null;
-    set({ selectedFilePath, filePreviewRequest, filePreview: null, fileDiff: null });
+    set({ selectedFilePath, filePreviewRequest, filePreview: null, fileDiff: null, ...(historicalInspection ? { workbenchView: "files" as const } : {}) });
     if (!selectedFilePath || !rootPath) return;
     if (!window.archicode) {
       set({ error: "File preview is available in the Electron app." });
@@ -340,6 +342,12 @@ export const createGitFilesSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
     }
     set({ fileBusy: true });
     try {
+      if (historicalInspection) {
+        if (!window.archicode.readHistoricalProjectFile) throw new Error("Restart ArchiCode to inspect historical source files.");
+        const filePreview = await window.archicode.readHistoricalProjectFile(rootPath, historicalInspection.entry.commit, selectedFilePath);
+        set({ filePreview, fileDiff: { path: selectedFilePath, diff: "" }, error: null });
+        return;
+      }
       const fileDiff = await window.archicode.readProjectFileDiff(rootPath, selectedFilePath)
         .catch((): ProjectFileDiff => ({ path: selectedFilePath, diff: "" }));
       const filePreview = await window.archicode.readProjectFile(rootPath, selectedFilePath)

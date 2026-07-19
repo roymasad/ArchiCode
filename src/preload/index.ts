@@ -14,6 +14,7 @@ import type {
   ProjectSkill
 } from "../shared/capabilities";
 import type { GitOperationResult, GitStatus, ProjectFileBrowserData, ProjectFileDiff, ProjectFileText } from "../shared/projectTools";
+import type { GraphHistoryVersion, GraphNodeHistory, HistoricalGraphBundle } from "../shared/graphHistory";
 import type { GlobalResearchPersonality, GlobalResearchVerbosity } from "../shared/researchPersonality";
 import type { AppUpdateStatus } from "../main/updater";
 import type { ExternalMcpHostStatus } from "../main/mcpHost";
@@ -483,6 +484,16 @@ const api = {
     ipcRenderer.invoke("archicode:read-chat-artifact", projectRoot, chatId, artifactId),
   getGitStatus: (projectRoot: string): Promise<GitStatus> =>
     ipcRenderer.invoke("archicode:get-git-status", projectRoot),
+  listGraphHistory: (projectRoot: string): Promise<GraphHistoryVersion[]> =>
+    ipcRenderer.invoke("archicode:list-graph-history", projectRoot),
+  loadHistoricalGraph: (projectRoot: string, commit: string): Promise<HistoricalGraphBundle> =>
+    ipcRenderer.invoke("archicode:load-historical-graph", projectRoot, commit),
+  listHistoricalProjectFiles: (projectRoot: string, commit: string): Promise<ProjectFileBrowserData> =>
+    ipcRenderer.invoke("archicode:list-historical-project-files", projectRoot, commit),
+  readHistoricalProjectFile: (projectRoot: string, commit: string, relativePath: string): Promise<ProjectFileText> =>
+    ipcRenderer.invoke("archicode:read-historical-project-file", projectRoot, commit, relativePath),
+  getGraphNodeHistory: (projectRoot: string, commit: string, flowId: string, nodeId: string): Promise<GraphNodeHistory> =>
+    ipcRenderer.invoke("archicode:get-graph-node-history", projectRoot, commit, flowId, nodeId),
   gitInit: (projectRoot: string): Promise<GitOperationResult> =>
     ipcRenderer.invoke("archicode:git-init", projectRoot),
   gitPull: (projectRoot: string): Promise<GitOperationResult> =>
