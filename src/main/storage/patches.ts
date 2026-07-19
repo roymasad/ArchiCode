@@ -170,7 +170,12 @@ export async function readArtifactDataUrl(projectRoot: string, artifactRelativeP
   if (!absolutePath.startsWith(`${root}${path.sep}`)) {
     throw new Error("Artifact preview is limited to files inside the project folder.");
   }
-  const mediaType = mediaTypeForFile(absolutePath);
+  const previewMediaTypes: Record<string, string> = {
+    ".avif": "image/avif",
+    ".bmp": "image/bmp",
+    ".svg": "image/svg+xml"
+  };
+  const mediaType = previewMediaTypes[path.extname(absolutePath).toLowerCase()] ?? mediaTypeForFile(absolutePath);
   if (!mediaType.startsWith("image/")) {
     throw new Error("Inline artifact previews are only available for image attachments.");
   }

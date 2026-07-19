@@ -5,7 +5,11 @@ import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
 import type { Element, ElementContent, Root, RootContent, Text } from "hast";
 import type { Plugin } from "unified";
+import { MarkdownImageLink } from "./MarkdownImageLink";
 import { MermaidDiagram } from "./MermaidDiagram";
+
+const IMAGE_FILE_EXTENSION = /\.(?:avif|bmp|gif|jpe?g|png|svg|webp)$/i;
+const IMAGE_FORMAT_VALUES = new Set(["avif", "bmp", "gif", "jpeg", "jpg", "png", "svg", "webp"]);
 
 export function isSafeMarkdownHref(href: string): boolean {
   return /^(https?:|mailto:|archicode:\/\/)/i.test(href);
@@ -43,6 +47,19 @@ export function parseArchicodeProjectPathHref(href: string): ArchicodeProjectPat
     return { relativePath };
   } catch {
     return null;
+  }
+}
+
+export function isImageMarkdownHref(href: string): boolean {
+  const projectTarget = parseArchicodeProjectPathHref(href);
+  if (projectTarget) return IMAGE_FILE_EXTENSION.test(projectTarget.relativePath);
+  try {
+    const url = new URL(href);
+    if (url.protocol !== "https:") return false;
+    const queryFormat = url.searchParams.get("format")?.trim().toLowerCase();
+    return IMAGE_FILE_EXTENSION.test(url.pathname) || Boolean(queryFormat && IMAGE_FORMAT_VALUES.has(queryFormat));
+  } catch {
+    return false;
   }
 }
 
@@ -178,13 +195,14 @@ function rehypeTtsHighlight(highlightText?: string | null): Plugin<[], Root> {
 }
 
 export const transformMarkdownUrl: UrlTransform = (url, key) => {
-  if (key === "src") return /^https?:\/\//i.test(url) ? url : "";
+  if (key === "src") return /^https:\/\//i.test(url) || parseArchicodeProjectPathHref(url) ? url : "";
   return isSafeMarkdownHref(url) ? url : "";
 };
 
-export const ResearchMarkdown = memo(function ResearchMarkdown({ content, highlightText, onGraphLink, onProjectPathLink }: {
+export const ResearchMarkdown = memo(function ResearchMarkdown({ content, highlightText, loadProjectImage, onGraphLink, onProjectPathLink }: {
   content: string;
   highlightText?: string | null;
+  loadProjectImage?: (target: ArchicodeProjectPathLink) => Promise<string>;
   onGraphLink?: (target: ArchicodeGraphLink) => void;
   onProjectPathLink?: (target: ArchicodeProjectPathLink) => void;
 }) {
@@ -214,6 +232,18 @@ export const ResearchMarkdown = memo(function ResearchMarkdown({ content, highli
         }
         if (safeHref) openExternalMarkdownHref(safeHref);
       };
+      if (safeHref && !graphTarget && isImageMarkdownHref(safeHref)) {
+        return (
+          <MarkdownImageLink
+            href={safeHref}
+            label={children}
+            projectTarget={projectPathTarget}
+            loadProjectImage={loadProjectImage}
+            onProjectPathLink={onProjectPathLink}
+            onOpenExternal={openExternalMarkdownHref}
+          />
+        );
+      }
       return (
         <a
           {...props}
@@ -226,10 +256,21 @@ export const ResearchMarkdown = memo(function ResearchMarkdown({ content, highli
         </a>
       );
     },
-    img: ({ src, alt, node: _node, ...props }) => (
-      <img {...props} src={src} alt={alt ?? ""} loading="lazy" referrerPolicy="no-referrer" />
-    )
-  }), [onGraphLink, onProjectPathLink]);
+    img: ({ src, alt, node: _node, ..._props }) => {
+      if (!src) return null;
+      const projectTarget = parseArchicodeProjectPathHref(src);
+      return (
+        <MarkdownImageLink
+          href={src}
+          label={alt || projectTarget?.relativePath || "Image"}
+          projectTarget={projectTarget}
+          loadProjectImage={loadProjectImage}
+          onProjectPathLink={onProjectPathLink}
+          onOpenExternal={openExternalMarkdownHref}
+        />
+      );
+    }
+  }), [loadProjectImage, onGraphLink, onProjectPathLink]);
   const rehypePlugins = useMemo<NonNullable<MarkdownOptions["rehypePlugins"]>>(() => [
     [rehypeHighlight, { detect: true, plainText: ["text", "txt", "mermaid"] }],
     rehypeTtsHighlight(highlightText)

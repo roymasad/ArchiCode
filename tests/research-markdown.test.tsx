@@ -53,6 +53,37 @@ describe("ResearchMarkdown", () => {
     expect(html).not.toContain("javascript:");
   });
 
+  it("renders HTTPS image links as clickable thumbnail cards", () => {
+    const html = renderToStaticMarkup(
+      <ResearchMarkdown content={'[Architecture preview](https://example.com/architecture.png)'} />
+    );
+
+    expect(html).toContain("research-image-link-preview");
+    expect(html).toContain('src="https://example.com/architecture.png"');
+    expect(html.match(/href="https:\/\/example.com\/architecture.png"/g)).toHaveLength(2);
+    expect(html).toContain("Architecture preview");
+  });
+
+  it("recognizes image CDN links whose format is declared in the query string", () => {
+    const href = "https://pbs.twimg.com/media/HNnPlyHb0AA5_Us?format=jpg&name=medium";
+    const html = renderToStaticMarkup(<ResearchMarkdown content={href} />);
+
+    expect(html).toContain("research-image-link-preview");
+    expect(html).toContain(`src="${href.replaceAll("&", "&amp;")}"`);
+    expect(html.match(/class="research-image-(?:thumbnail|source)-link"/g)).toHaveLength(2);
+  });
+
+  it("routes project image links through the local preview loader", () => {
+    const href = "archicode://project-file/docs/architecture.png";
+    const html = renderToStaticMarkup(
+      <ResearchMarkdown content={`![Architecture](${href})`} loadProjectImage={async () => "data:image/png;base64,preview"} />
+    );
+
+    expect(html).toContain("research-image-link-preview");
+    expect(html).toContain("Loading image preview");
+    expect(html.match(/href="archicode:\/\/project-file\/docs\/architecture.png"/g)).toHaveLength(2);
+  });
+
   it("keeps TTS highlighting across inline formatting", () => {
     const html = renderToStaticMarkup(
       <ResearchMarkdown content={'Hello **streaming** world'} highlightText="Hello streaming world" />

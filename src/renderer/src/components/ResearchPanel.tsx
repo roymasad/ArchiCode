@@ -2499,6 +2499,13 @@ export const ResearchPanel = memo(function ResearchPanel({
       });
   }, [rootPath, setTransientExportStatus]);
 
+  const loadProjectImage = useCallback((target: ArchicodeProjectPathLink): Promise<string> => {
+    if (!rootPath || !window.archicode?.readArtifactDataUrl) {
+      return Promise.reject(new Error("Project image previews are unavailable."));
+    }
+    return window.archicode.readArtifactDataUrl(rootPath, target.relativePath);
+  }, [rootPath]);
+
   const exportChat = (format: "markdown" | "json") => {
     if (!selected || !bundle) return;
     const currentBundle = bundle;
@@ -3016,6 +3023,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                             <div className="research-change-set-result-details">
                               <ResearchMarkdown
                                 content={changeSetResultReport.details}
+                                loadProjectImage={loadProjectImage}
                                 onGraphLink={navigateGraphLink}
                                 onProjectPathLink={openProjectPathLink}
                               />
@@ -3026,6 +3034,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                         <ResearchMarkdown
                           content={displayResearchContent(message.content, isStreamingMessage)}
                           highlightText={ttsHighlight?.messageId === message.id ? ttsHighlight.text : null}
+                          loadProjectImage={loadProjectImage}
                           onGraphLink={navigateGraphLink}
                           onProjectPathLink={openProjectPathLink}
                         />

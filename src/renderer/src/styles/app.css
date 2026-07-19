@@ -12284,6 +12284,53 @@ button.activity-maintenance-indicator {
   object-fit: contain;
 }
 
+.research-image-link-preview {
+  display: inline-grid;
+  width: min(100%, 320px);
+  gap: 6px;
+  vertical-align: top;
+}
+
+.research-image-thumbnail-link {
+  display: grid;
+  width: 100%;
+  min-height: 112px;
+  overflow: hidden;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--surface-raised) 74%, var(--surface));
+  text-decoration: none;
+}
+
+.research-image-thumbnail-link:hover,
+.research-image-thumbnail-link:focus-visible {
+  border-color: color-mix(in srgb, var(--accent) 60%, var(--border));
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.research-markdown .research-image-thumbnail-link img {
+  width: 100%;
+  height: 180px;
+  max-height: 180px;
+  border-radius: 0;
+  object-fit: cover;
+}
+
+.research-image-thumbnail-placeholder {
+  padding: 16px;
+  color: var(--text-muted);
+  font-size: 0.86em;
+  text-align: center;
+}
+
+.research-image-source-link {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .research-markdown del {
   color: var(--text-muted);
 }

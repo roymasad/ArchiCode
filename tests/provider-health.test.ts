@@ -37,6 +37,12 @@ describe("provider health checks", () => {
     expect(researchSystemInstructions(options)).toContain("fenced ```mermaid block");
   });
 
+  it("advertises clickable image previews to the research agent", () => {
+    const options = {} as Parameters<typeof researchSystemInstructions>[0];
+    expect(researchSystemInstructions(options)).toContain("clickable thumbnails");
+    expect(researchSystemInstructions(options)).toContain("archicode://project-file/{projectRelativePath}");
+  });
+
   it("reports offline/manual provider as ready", async () => {
     const provider = {
       id: "offline-manual",
