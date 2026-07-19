@@ -232,7 +232,10 @@ export async function attachNodeReferences(
   const artifacts = await createAttachmentArtifacts(projectRoot, input.filePaths, {
     nodeId: input.nodeId,
     noteId: input.noteId,
-    summary: "Reference file attached to node notes."
+    summary: "Reference file attached to node notes.",
+    // Deliberate node-note references are shareable design intent: persist them
+    // to the committed .archicode/references/ directory, not the ignored bucket.
+    destination: "references"
   });
 
   if (input.noteId && artifacts.length) {

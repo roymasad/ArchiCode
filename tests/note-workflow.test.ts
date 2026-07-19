@@ -74,7 +74,20 @@ describe("node note workflow", () => {
 
     expect(node?.flags).toContain("has-attachments");
     expect(node?.flags).toContain("changed");
-    expect(withAttachment.artifacts.some((artifact) => artifact.type === "attachment" && artifact.noteId === note?.id)).toBe(true);
+    const referenceArtifact = withAttachment.artifacts.find((artifact) => artifact.type === "attachment" && artifact.noteId === note?.id);
+    expect(referenceArtifact).toBeDefined();
+
+    // Deliberate node-note references must be persisted to the committed
+    // .archicode/references/ directory (not the ignored artifacts bucket) so
+    // they travel with the repo, and the copied file + metadata JSON must exist.
+    expect(referenceArtifact!.path.startsWith(".archicode/references/")).toBe(true);
+    await expect(readFile(path.join(root, referenceArtifact!.path), "utf8")).resolves.toBe("reference material");
+    await expect(readFile(path.join(root, ".archicode", "references", `${referenceArtifact!.id}.json`), "utf8")).resolves.toContain(referenceArtifact!.id);
+
+    // A fresh load (as a teammate cloning the repo would do) must still surface
+    // the reference in bundle.artifacts, resolved from references/.
+    const reloadedWithReference = await loadProject(root);
+    expect(reloadedWithReference.artifacts.some((artifact) => artifact.id === referenceArtifact!.id)).toBe(true);
 
     const resolved = await updateNoteResolved(root, note?.id ?? "", true);
     expect(resolved.notes.find((item) => item.id === note?.id)?.resolved).toBe(true);

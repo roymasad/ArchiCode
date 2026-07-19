@@ -469,6 +469,7 @@ export async function ensureProjectDirectories(projectRoot: string): Promise<voi
   await mkdir(projectStatePath(projectRoot, "runs"), { recursive: true });
   await mkdir(projectStatePath(projectRoot, "incidents"), { recursive: true });
   await mkdir(projectStatePath(projectRoot, "artifacts"), { recursive: true });
+  await mkdir(projectStatePath(projectRoot, "references"), { recursive: true });
   await mkdir(projectStatePath(projectRoot, "summaries"), { recursive: true });
   await mkdir(projectStatePath(projectRoot, "memory"), { recursive: true });
   await mkdir(projectStatePath(projectRoot, "memory-notes"), { recursive: true });
@@ -952,6 +953,10 @@ export async function loadProject(projectRoot: string): Promise<ProjectBundle> {
   const incidentsRaw = await readJsonDirectory<DebugIncident>(projectStatePath(projectRoot, "incidents"));
   const runsRaw = await readJsonDirectory<Run>(projectStatePath(projectRoot, "runs"));
   const artifactsRaw = await readJsonDirectory<Artifact>(projectStatePath(projectRoot, "artifacts"));
+  // Committed, shareable node-note reference attachments live outside the
+  // ignored artifacts bucket; merge them into bundle.artifacts so readers
+  // resolve them the same way (see createAttachmentArtifacts destination).
+  const referencesRaw = await readJsonDirectory<Artifact>(projectStatePath(projectRoot, "references"));
   const summariesRaw = await readJsonDirectory<Artifact>(projectStatePath(projectRoot, "summaries"));
   const graphChangesRaw = await readGraphChanges(projectRoot);
   const policyEvaluation = await readArchitecturePolicyEvaluation(projectRoot);
@@ -1016,7 +1021,7 @@ export async function loadProject(projectRoot: string): Promise<ProjectBundle> {
     notes,
     incidents,
     runs: reconciledRuns,
-    artifacts: artifactsRaw,
+    artifacts: [...artifactsRaw, ...referencesRaw],
     summaries: summariesRaw,
     graphChanges: reconciledGraphChanges,
     policyEvaluation,

@@ -40,21 +40,42 @@ export function isSupportedAttachmentMediaType(mediaType: string): boolean {
   return mediaType.startsWith("image/") || isSupportedTextAttachmentMediaType(mediaType);
 }
 
+// Where an attachment's copied file and metadata JSON are persisted.
+// "artifacts" is the git-ignored local runtime bucket (AI/run/chat outputs);
+// "references" is a committed directory for deliberate, shareable node-note
+// reference documents so they travel with the repo (see ensureArchicodeGitignore).
+export type AttachmentDestination = "artifacts" | "references";
+
 export async function createAttachmentArtifacts(
   projectRoot: string,
   filePaths: string[],
-  options: { nodeId?: string; noteId?: string; runId?: string; summary?: string } = {}
+  options: { nodeId?: string; noteId?: string; runId?: string; summary?: string; destination?: AttachmentDestination } = {}
 ): Promise<Artifact[]> {
   const artifacts: Artifact[] = [];
   if (!filePaths.length) return artifacts;
-  await mkdir(projectStatePath(projectRoot, "artifacts", "attachments"), { recursive: true });
+  const destination = options.destination ?? "artifacts";
+  // Committed references live flat under .archicode/references/; the legacy
+  // artifacts bucket keeps its nested attachments/ subfolder for the copied file.
+  const fileDir = destination === "references"
+    ? projectStatePath(projectRoot, "references")
+    : projectStatePath(projectRoot, "artifacts", "attachments");
+  const relativeDir = destination === "references"
+    ? ".archicode/references"
+    : ".archicode/artifacts/attachments";
+  await mkdir(fileDir, { recursive: true });
   for (const filePath of filePaths) {
     const mediaType = mediaTypeForFile(filePath);
     if (!isSupportedAttachmentMediaType(mediaType)) continue;
     const fileStats = await stat(filePath);
     const artifactId = id("attachment");
-    const fileName = safeFileName(path.basename(filePath));
-    const relativePath = `.archicode/artifacts/attachments/${artifactId}-${fileName}`;
+    // Keep the human-recognizable original name (extension intact) so the file
+    // is identifiable when browsed on disk; append a timestamp + the artifact's
+    // random tail so concurrent attachments of same-named files never clash.
+    const ext = path.extname(filePath);
+    const baseName = path.basename(filePath, ext);
+    const uniqueSuffix = `${Date.now().toString(36)}-${artifactId.slice(artifactId.lastIndexOf("-") + 1)}`;
+    const fileName = safeFileName(`${baseName}-${uniqueSuffix}${ext}`);
+    const relativePath = `${relativeDir}/${fileName}`;
     await copyFile(filePath, path.join(projectRoot, relativePath));
     const artifact = artifactSchema.parse({
       id: artifactId,
@@ -69,7 +90,7 @@ export async function createAttachmentArtifacts(
       sizeBytes: fileStats.size,
       createdAt: iso()
     });
-    await writeJson(projectStatePath(projectRoot, "artifacts", `${artifactId}.json`), artifact);
+    await writeJson(projectStatePath(projectRoot, destination, `${artifactId}.json`), artifact);
     artifacts.push(artifact);
   }
   return artifacts;
@@ -78,7 +99,7 @@ export async function createAttachmentArtifacts(
 export async function createImageArtifacts(
   projectRoot: string,
   filePaths: string[],
-  options: { nodeId?: string; noteId?: string; runId?: string; summary?: string } = {}
+  options: { nodeId?: string; noteId?: string; runId?: string; summary?: string; destination?: AttachmentDestination } = {}
 ): Promise<Artifact[]> {
   return (await createAttachmentArtifacts(projectRoot, filePaths, options)).filter((artifact) => artifact.mediaType?.startsWith("image/"));
 }
