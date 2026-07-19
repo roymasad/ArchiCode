@@ -32,6 +32,11 @@ import {
   RESEARCH_CHAT_HISTORY_MAX_CHARS,
   RESEARCH_CHAT_HISTORY_MAX_MESSAGES,
   RESEARCH_CHAT_HISTORY_TOOL,
+  RESEARCH_PREVIOUS_CHATS_DEFAULT_CHARS,
+  RESEARCH_PREVIOUS_CHATS_DEFAULT_RESULTS,
+  RESEARCH_PREVIOUS_CHATS_MAX_CHARS,
+  RESEARCH_PREVIOUS_CHATS_MAX_RESULTS,
+  RESEARCH_PREVIOUS_CHATS_TOOL,
   RESEARCH_CONTEXT_EXPANSION_TOOL,
   RESEARCH_GRAPH_LAYOUT_TOOL,
   researchProjectFileAccessContext
@@ -522,6 +527,92 @@ export function buildResearchChatHistoryToolResult(
   }, null, 2);
 }
 
+function previousChatExcerpt(content: string, query: string, maxChars: number): string {
+  const normalized = content.replace(/\s+/g, " ").trim();
+  if (normalized.length <= maxChars) return normalized;
+  const matchIndex = query ? normalized.toLowerCase().indexOf(query) : -1;
+  const start = matchIndex >= 0
+    ? Math.max(0, Math.min(matchIndex - Math.floor(maxChars / 3), normalized.length - maxChars))
+    : 0;
+  return `${start > 0 ? "…" : ""}${normalized.slice(start, start + maxChars)}${start + maxChars < normalized.length ? "…" : ""}`;
+}
+
+export function buildResearchPreviousChatsToolResult(
+  sessions: ResearchChatSession[],
+  currentSessionId: string,
+  argumentsJson: string
+): string {
+  let parsed: { query?: string; sort?: string; maxResults?: number; maxChars?: number } = {};
+  try {
+    parsed = JSON.parse(argumentsJson || "{}") as typeof parsed;
+  } catch {
+    parsed = {};
+  }
+
+  const query = typeof parsed.query === "string" ? parsed.query.trim().toLowerCase() : "";
+  const sort = parsed.sort === "oldest" ? "oldest" : "recent";
+  const maxResults = boundedResearchInteger(parsed.maxResults, RESEARCH_PREVIOUS_CHATS_DEFAULT_RESULTS, 1, RESEARCH_PREVIOUS_CHATS_MAX_RESULTS);
+  const maxChars = boundedResearchInteger(parsed.maxChars, RESEARCH_PREVIOUS_CHATS_DEFAULT_CHARS, 500, RESEARCH_PREVIOUS_CHATS_MAX_CHARS);
+  const candidates = sessions
+    .filter((session) => session.id !== currentSessionId)
+    .map((session) => {
+      const titleMatches = Boolean(query && session.title.toLowerCase().includes(query));
+      const summaryMatches = Boolean(query && session.summary.toLowerCase().includes(query));
+      const matchingMessages = session.messages
+        .filter((message) => !query || message.content.toLowerCase().includes(query))
+        .sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+      return { session, titleMatches, summaryMatches, matchingMessages };
+    })
+    .filter(({ titleMatches, summaryMatches, matchingMessages }) => !query || titleMatches || summaryMatches || matchingMessages.length > 0)
+    .sort((left, right) => sort === "oldest"
+      ? left.session.updatedAt.localeCompare(right.session.updatedAt)
+      : right.session.updatedAt.localeCompare(left.session.updatedAt));
+
+  const chats: Array<Record<string, unknown>> = [];
+  let usedChars = 0;
+  let truncated = candidates.length > maxResults;
+  for (const candidate of candidates.slice(0, maxResults)) {
+    const remaining = maxChars - usedChars;
+    if (remaining <= 0) {
+      truncated = true;
+      break;
+    }
+    const summary = previousChatExcerpt(candidate.session.summary, query, Math.min(1200, remaining));
+    usedChars += summary.length;
+    const messageMatches: Array<{ id: string; role: ResearchChatMessage["role"]; createdAt: string; excerpt: string }> = [];
+    for (const message of candidate.matchingMessages.slice(0, 3)) {
+      const messageRemaining = maxChars - usedChars;
+      if (messageRemaining <= 0) {
+        truncated = true;
+        break;
+      }
+      const excerpt = previousChatExcerpt(message.content, query, Math.min(1200, messageRemaining));
+      usedChars += excerpt.length;
+      messageMatches.push({ id: message.id, role: message.role, createdAt: message.createdAt, excerpt });
+    }
+    chats.push({
+      id: candidate.session.id,
+      title: candidate.session.title,
+      summary,
+      createdAt: candidate.session.createdAt,
+      updatedAt: candidate.session.updatedAt,
+      matchedIn: [candidate.titleMatches ? "title" : undefined, candidate.summaryMatches ? "summary" : undefined, candidate.matchingMessages.length ? "body" : undefined].filter(Boolean),
+      matchingMessages: messageMatches,
+      totalMatchingMessages: candidate.matchingMessages.length
+    });
+  }
+
+  return JSON.stringify({
+    query: query || null,
+    sort,
+    searchedChats: sessions.filter((session) => session.id !== currentSessionId).length,
+    totalMatches: candidates.length,
+    returnedChats: chats.length,
+    truncated,
+    chats
+  }, null, 2);
+}
+
 export type ResearchPromptBudgetInput = {
   modelContextTokens: number;
   contextMode: ResearchContextMode;
@@ -603,6 +694,7 @@ export function buildMinimalResumableResearchContext(
         RESEARCH_CONTEXT_EXPANSION_TOOL,
         RESEARCH_GRAPH_LAYOUT_TOOL,
         RESEARCH_CHAT_HISTORY_TOOL,
+        RESEARCH_PREVIOUS_CHATS_TOOL,
         "archicode_project_list_files",
         "archicode_project_search_files",
         "archicode_project_read_file"

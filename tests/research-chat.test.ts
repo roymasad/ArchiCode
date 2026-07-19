@@ -6338,6 +6338,111 @@ describe("research chat workflow", () => {
     expect(answered.messages.at(-1)?.mcpToolCalls.some((call) => call.toolName === "read_chat_history" && call.status === "succeeded")).toBe(true);
   });
 
+  it("searches previous chat titles, summaries, and bodies in requested time order", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-previous-chats-tool-"));
+    setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
+    const bundle = await ensureProject(projectRoot);
+    process.env.OPENAI_RESEARCH_TEST_KEY = "test";
+    await updateProjectSettings(projectRoot, {
+      ...bundle.project.settings,
+      providers: bundle.project.settings.providers.map((provider) => provider.kind === "openai-compatible"
+        ? { ...provider, enabled: true, apiKeyEnv: "OPENAI_RESEARCH_TEST_KEY", openAiEndpointMode: "chat-completions" as const }
+        : { ...provider, enabled: false })
+    });
+
+    const older = await createResearchChat({ projectRoot, scope: { type: "project", projectId: bundle.project.id }, title: "Release foundations" });
+    await persistResearchSession(projectRoot, researchChatSessionSchema.parse({
+      ...older,
+      summary: "Release planning started with the desktop package.",
+      messages: [{ id: "older-body", role: "user", content: "The release must preserve offline startup.", createdAt: "2026-01-01T09:00:00.000Z" }],
+      createdAt: "2026-01-01T09:00:00.000Z",
+      updatedAt: "2026-01-01T10:00:00.000Z"
+    }));
+    const newer = await createResearchChat({ projectRoot, scope: { type: "project", projectId: bundle.project.id }, title: "Packaging follow-up" });
+    await persistResearchSession(projectRoot, researchChatSessionSchema.parse({
+      ...newer,
+      summary: "Followed up on release signing.",
+      messages: [{ id: "newer-body", role: "assistant", content: "The release notarization checklist is ready.", createdAt: "2026-02-01T09:00:00.000Z" }],
+      createdAt: "2026-02-01T09:00:00.000Z",
+      updatedAt: "2026-02-01T10:00:00.000Z"
+    }));
+
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([{
+        id: "call-previous-chats",
+        name: "archicode_search_previous_chats",
+        arguments: "{\"query\":\"release\",\"sort\":\"oldest\",\"maxResults\":5}"
+      }]))
+      .mockResolvedValueOnce(streamingChatCompletionResponse("I found the earlier release chats."));
+    vi.stubGlobal("fetch", fetchMock);
+    const current = await createResearchChat({ projectRoot, scope: { type: "project", projectId: bundle.project.id }, title: "Current release question" });
+    const answered = await sendResearchChatMessage({
+      projectRoot,
+      sessionId: current.id,
+      content: "Check our old chats for release decisions."
+    });
+
+    const firstBody = JSON.parse(fetchMock.mock.calls[0]![1]!.body as string);
+    expect(firstBody.tools.map((tool: { function?: { name?: string } }) => tool.function?.name)).toContain("archicode_search_previous_chats");
+    const continuationBody = JSON.parse(fetchMock.mock.calls[1]![1]!.body as string);
+    const toolText = JSON.stringify(continuationBody.messages.filter((message: { role?: string }) => message.role === "tool"));
+    expect(toolText).toContain("Release foundations");
+    expect(toolText).toContain("offline startup");
+    expect(toolText).toContain("Followed up on release signing");
+    expect(toolText.indexOf("Release foundations")).toBeLessThan(toolText.indexOf("Packaging follow-up"));
+    expect(toolText).not.toContain("Current release question");
+    expect(answered.messages.at(-1)?.mcpToolCalls).toContainEqual(expect.objectContaining({
+      toolName: "search_previous_chats",
+      status: "succeeded"
+    }));
+  });
+
+  it("falls back to recent previous chats when a provider reads history from a fresh chat", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-fresh-chat-history-fallback-"));
+    setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
+    const bundle = await ensureProject(projectRoot);
+    process.env.OPENAI_RESEARCH_TEST_KEY = "test";
+    await updateProjectSettings(projectRoot, {
+      ...bundle.project.settings,
+      providers: bundle.project.settings.providers.map((provider) => provider.kind === "openai-compatible"
+        ? { ...provider, enabled: true, apiKeyEnv: "OPENAI_RESEARCH_TEST_KEY", openAiEndpointMode: "chat-completions" as const }
+        : { ...provider, enabled: false })
+    });
+
+    const prior = await createResearchChat({ projectRoot, scope: { type: "project", projectId: bundle.project.id }, title: "Snow White story" });
+    await persistResearchSession(projectRoot, researchChatSessionSchema.parse({
+      ...prior,
+      summary: "The user requested a one-paragraph story about Snow White.",
+      messages: [
+        { id: "snow-white-request", role: "user", content: "Tell me a short story about Snow White, one paragraph.", createdAt: "2026-07-19T21:00:00.000Z" },
+        { id: "snow-white-answer", role: "assistant", content: "Once upon a time, Snow White escaped into the forest.", createdAt: "2026-07-19T21:01:00.000Z" }
+      ],
+      updatedAt: "2026-07-19T21:01:00.000Z"
+    }));
+
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([{
+        id: "call-wrong-history-tool",
+        name: "archicode_read_chat_history",
+        arguments: "{\"mode\":\"slice\",\"maxMessages\":8}"
+      }]))
+      .mockResolvedValueOnce(streamingChatCompletionResponse("The last subject was a short Snow White story."));
+    vi.stubGlobal("fetch", fetchMock);
+    const current = await createResearchChat({ projectRoot, scope: { type: "project", projectId: bundle.project.id }, title: "What did we discuss?" });
+    const answered = await sendResearchChatMessage({
+      projectRoot,
+      sessionId: current.id,
+      content: "What was the last thing we discussed in chat together?"
+    });
+
+    const continuationBody = JSON.parse(fetchMock.mock.calls[1]![1]!.body as string);
+    const toolText = JSON.stringify(continuationBody.messages.filter((message: { role?: string }) => message.role === "tool"));
+    expect(toolText).toContain("crossChatFallback");
+    expect(toolText).toContain("Snow White story");
+    expect(toolText).toContain("one-paragraph story about Snow White");
+    expect(answered.messages.at(-1)?.content).toContain("Snow White");
+  });
+
   it("normalizes inside-project absolute paths for built-in research file tools", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-absolute-paths-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));

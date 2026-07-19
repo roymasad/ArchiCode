@@ -139,6 +139,7 @@ import {
   RESEARCH_CHAT_HISTORY_MAX_MESSAGES,
   RESEARCH_CHAT_HISTORY_SERVER_ID,
   RESEARCH_CHAT_HISTORY_TOOL,
+  RESEARCH_PREVIOUS_CHATS_SERVER_ID,
   RESEARCH_CONTEXT_EXPANSION_TOOL,
   RESEARCH_CONTEXT_SERVER_ID,
   buildResearchGraphLayoutToolResult,
@@ -146,6 +147,7 @@ import {
   isResearchChangeSetTool,
   isResearchCanvasControlTool,
   isResearchChatHistoryTool,
+  isResearchPreviousChatsTool,
   isResearchContextExpansionTool,
   isResearchGraphLayoutTool,
   isResearchMemoryTool,
@@ -158,6 +160,7 @@ import {
   microRunHumanSummary,
   microRunResultText,
   researchChatHistoryTool,
+  researchPreviousChatsTool,
   researchContextExpansionTool,
   researchGraphLayoutTool,
   researchProjectFileAccessContext,
@@ -172,6 +175,7 @@ import {
   buildCompactResearchContext,
   buildExpandedResearchContextToolResult,
   buildResearchChatHistoryToolResult,
+  buildResearchPreviousChatsToolResult,
   buildResearchContext,
   buildResearchContextLedger,
   chooseResearchContextMode,
@@ -190,7 +194,7 @@ import {
   trackResearchChangeSetTodo
 } from "./research/memoryFold";
 import { fetchResearchWebPages } from "./research/webFetch";
-import { markSubagentRunSettled, persistResearchSession, readChatsForMutation, transitionSubagentRun, withResearchSessionLock } from "./research/chatStore";
+import { listResearchChats, markSubagentRunSettled, persistResearchSession, readChatsForMutation, transitionSubagentRun, withResearchSessionLock } from "./research/chatStore";
 import { deriveResearchTurnKind, researchTurnPolicy } from "./research/turnPolicy";
 import { compatibleDelphiRuntimeProfiles, inspectDelphiTestEnvironment, pinDelphiRuntimeTarget } from "./testing/toolchains";
 import { createChatArtifact } from "./storage/researchKnowledge";
@@ -1038,6 +1042,7 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
     researchContextExpansionTool(),
     researchGraphLayoutTool(),
     researchChatHistoryTool(),
+    researchPreviousChatsTool(),
     ...subagentTools,
     ...internalResearchRuleTools,
     ...internalResearchWebTools,
@@ -1539,15 +1544,58 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
         }
         if (isResearchChatHistoryTool(toolInput.providerToolName)) {
           input.onActivity?.("Reviewing older chat history for continuity.", "running");
-          const resultText = buildResearchChatHistoryToolResult(
+          let resultText = buildResearchChatHistoryToolResult(
             nextSession.messages,
             researchContextPlan.recentMessageLimit,
             toolInput.argumentsJson
           );
+          const currentHistory = JSON.parse(resultText) as { searchableMessages?: number };
+          if (currentHistory.searchableMessages === 0) {
+            let requested: { maxMessages?: number; maxChars?: number } = {};
+            try {
+              requested = JSON.parse(toolInput.argumentsJson || "{}") as typeof requested;
+            } catch {
+              requested = {};
+            }
+            const previousChats = JSON.parse(buildResearchPreviousChatsToolResult(
+              await listResearchChats(input.projectRoot),
+              nextSession.id,
+              JSON.stringify({
+                sort: "recent",
+                maxResults: Math.min(requested.maxMessages ?? RESEARCH_CHAT_HISTORY_DEFAULT_MESSAGES, 8),
+                maxChars: requested.maxChars ?? RESEARCH_CHAT_HISTORY_DEFAULT_CHARS
+              })
+            ));
+            resultText = JSON.stringify({
+              ...currentHistory,
+              crossChatFallback: {
+                reason: "The currently open chat has no earlier messages, so recent previous chats from this project are included.",
+                ...previousChats
+              }
+            }, null, 2);
+          }
           mcpToolCalls.push({
             serverId: RESEARCH_CHAT_HISTORY_SERVER_ID,
             serverLabel: "Chat History",
             toolName: "read_chat_history",
+            argumentsJson: toolInput.argumentsJson,
+            status: "succeeded",
+            resultSummary: resultText.slice(0, 1000),
+            createdAt: iso()
+          });
+          return resultText;
+        }
+        if (isResearchPreviousChatsTool(toolInput.providerToolName)) {
+          input.onActivity?.("Searching previous chats in this project.", "running");
+          const resultText = buildResearchPreviousChatsToolResult(
+            await listResearchChats(input.projectRoot),
+            nextSession.id,
+            toolInput.argumentsJson
+          );
+          mcpToolCalls.push({
+            serverId: RESEARCH_PREVIOUS_CHATS_SERVER_ID,
+            serverLabel: "Previous Chats",
+            toolName: "search_previous_chats",
             argumentsJson: toolInput.argumentsJson,
             status: "succeeded",
             resultSummary: resultText.slice(0, 1000),

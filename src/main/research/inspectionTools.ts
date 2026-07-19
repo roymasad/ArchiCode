@@ -91,6 +91,12 @@ export const RESEARCH_CHAT_HISTORY_MAX_MESSAGES = 24;
 export const RESEARCH_CHAT_HISTORY_DEFAULT_MESSAGES = 12;
 export const RESEARCH_CHAT_HISTORY_MAX_CHARS = 16_000;
 export const RESEARCH_CHAT_HISTORY_DEFAULT_CHARS = 8_000;
+export const RESEARCH_PREVIOUS_CHATS_SERVER_ID = "archicode-research-previous-chats";
+export const RESEARCH_PREVIOUS_CHATS_TOOL = "archicode_search_previous_chats";
+export const RESEARCH_PREVIOUS_CHATS_MAX_RESULTS = 20;
+export const RESEARCH_PREVIOUS_CHATS_DEFAULT_RESULTS = 8;
+export const RESEARCH_PREVIOUS_CHATS_MAX_CHARS = 20_000;
+export const RESEARCH_PREVIOUS_CHATS_DEFAULT_CHARS = 10_000;
 
 export function researchSinkTools(): ProviderMcpTool[] {
   const memoryArray = (description: string) => ({ type: "array", items: { type: "object", additionalProperties: true }, description });
@@ -406,7 +412,7 @@ export function researchChatHistoryTool(): ProviderMcpTool {
     serverId: RESEARCH_CHAT_HISTORY_SERVER_ID,
     serverLabel: "Chat History",
     toolName: "read_chat_history",
-    description: "Search or read older messages from this Research chat when the recent window, summary, and memory are insufficient. Use this for continuity questions about earlier user instructions, decisions, answers, or details that may have fallen out of the prompt.",
+    description: "Search or read older messages only from the currently open Research chat when its recent window, summary, and memory are insufficient. Do not use this in a fresh chat for questions such as 'what was the last thing we discussed?' or requests about previous/recent/older chats; use archicode_search_previous_chats for those cross-chat questions.",
     inputSchema: {
       type: "object",
       additionalProperties: false,
@@ -454,6 +460,43 @@ export function researchChatHistoryTool(): ProviderMcpTool {
   };
 }
 
+export function researchPreviousChatsTool(): ProviderMcpTool {
+  return {
+    providerToolName: RESEARCH_PREVIOUS_CHATS_TOOL,
+    serverId: RESEARCH_PREVIOUS_CHATS_SERVER_ID,
+    serverLabel: "Previous Chats",
+    toolName: "search_previous_chats",
+    description: "Search other Research chats in this project by chat title, saved summary, and message bodies, with results ordered by most-recent or oldest update time. Use this for explicit cross-chat questions such as 'what was the last thing we discussed?', 'what were our recent chats about?', or requests about previous/older/past chats. Do not call it by default for ordinary project questions or same-chat continuity.",
+    inputSchema: {
+      type: "object",
+      additionalProperties: false,
+      properties: {
+        query: {
+          type: "string",
+          description: "Optional case-insensitive text to find in chat titles, summaries, or message bodies. Omit to list chats by time."
+        },
+        sort: {
+          type: "string",
+          enum: ["recent", "oldest"],
+          description: "Order by chat updated time. Defaults to recent."
+        },
+        maxResults: {
+          type: "integer",
+          minimum: 1,
+          maximum: RESEARCH_PREVIOUS_CHATS_MAX_RESULTS,
+          description: "Maximum number of chats to return."
+        },
+        maxChars: {
+          type: "integer",
+          minimum: 500,
+          maximum: RESEARCH_PREVIOUS_CHATS_MAX_CHARS,
+          description: "Maximum total characters across returned summaries and matching message excerpts."
+        }
+      }
+    }
+  };
+}
+
 export function isResearchChangeSetTool(providerToolName: string): boolean {
   return providerToolName === RESEARCH_CHANGE_SET_TOOL;
 }
@@ -480,6 +523,10 @@ export function isResearchGraphLayoutTool(providerToolName: string): boolean {
 
 export function isResearchChatHistoryTool(providerToolName: string): boolean {
   return providerToolName === RESEARCH_CHAT_HISTORY_TOOL;
+}
+
+export function isResearchPreviousChatsTool(providerToolName: string): boolean {
+  return providerToolName === RESEARCH_PREVIOUS_CHATS_TOOL;
 }
 
 export function microRunResultText(result: MicroRunResult): string {
