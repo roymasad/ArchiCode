@@ -6,7 +6,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyOpenRouterSessionId, callProvider, callResearchProvider, checkProviderHealth, createConsecutiveToolCallLoopDetector, createUsageAccumulator, isExplicitDelphiAuditRequest, localResearchToolLoopInstructions, localResearchTurnValidationFeedback, researchHistoryThread, extractModelCapabilitiesFromModels, extractContextWindowFromModels, extractModelIdsFromModels, inferModelCapabilityProfile, researchResponseStyleDirective, researchSystemInstructions, type ResearchProviderContinuation, resolveProviderApiKey, resolvePhaseModelPolicy } from "../src/main/providers";
 import { buildAnthropicCompatibleBody, buildAnthropicResearchBody } from "../src/main/providers/anthropic";
-import { activeLocalProviderProcesses, buildClaudeLocalArgs, buildClaudeLocalResearchArgs, buildCodexLocalArgs, buildCodexLocalResearchArgs, runLocalProcess, windowsBatchCommandLine, windowsExecutableCandidates } from "../src/main/providers/localCli";
+import { activeLocalProviderProcesses, buildClaudeLocalArgs, buildClaudeLocalResearchArgs, buildCodexLocalArgs, buildCodexLocalResearchArgs, buildOpenCodeLocalArgs, openCodeJsonEvent, openCodeProcessEnv, parseOpenCodeModels, runLocalProcess, windowsBatchCommandLine, windowsExecutableCandidates } from "../src/main/providers/localCli";
 import { buildOpenAICompatibleBody, buildOpenAIResearchChatCompletionsBody, buildOpenAIResponsesBody, buildOpenAIResearchResponsesBody } from "../src/main/providers/openai";
 import { createSeedProject } from "../src/shared/fixtures";
 import { defaultPhaseModelPolicies, defaultSubagentModelPolicies } from "../src/shared/schema";
@@ -283,6 +283,111 @@ describe("provider health checks", () => {
 
     expect(result.ok).toBe(false);
     expect(result.status).toBe("failed");
+  });
+
+  it("reports unavailable OpenCode local command", async () => {
+    const provider = {
+      ...createSeedProject("/tmp/archicode").project.settings.providers.find((item) => item.kind === "opencode-local")!,
+      localCommand: "archicode-missing-opencode-command"
+    };
+    const result = await checkProviderHealth(provider);
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("failed");
+  });
+
+  it("keeps OpenCode provider/model IDs intact and parses JSON text events", () => {
+    expect(parseOpenCodeModels("opencode-go/kimi-k2.5\nanthropic/claude-sonnet-4-5\nnoise\n")).toEqual([
+      "anthropic/claude-sonnet-4-5",
+      "opencode-go/kimi-k2.5"
+    ]);
+    expect(openCodeJsonEvent(JSON.stringify({
+      type: "text",
+      sessionID: "ses_test",
+      part: { text: "hello" }
+    }))).toEqual({
+      sessionId: "ses_test",
+      text: { tokenKind: "answer", value: "hello" }
+    });
+  });
+
+  it("builds one-shot OpenCode args with a composite phase model", () => {
+    const provider = {
+      ...createSeedProject("/tmp/archicode").project.settings.providers.find((item) => item.kind === "opencode-local")!,
+      model: "opencode-go/kimi-k2.5",
+      localProfile: "build",
+      localSandbox: "workspace-write" as const
+    };
+    expect(buildOpenCodeLocalArgs(provider, { phase: "coding", projectRoot: "/tmp/archicode" })).toEqual([
+      "run", "--format", "json", "--dir", "/tmp/archicode", "--model", "opencode-go/kimi-k2.5", "--agent", "build", "--auto"
+    ]);
+    const workspaceConfig = JSON.parse(openCodeProcessEnv(provider, "coding")!.OPENCODE_CONFIG_CONTENT!);
+    expect(workspaceConfig.permission).toEqual({ external_directory: "deny" });
+    expect(openCodeProcessEnv({ ...provider, localSandbox: "danger-full-access" }, "coding")).toBeUndefined();
+    const readOnlyConfig = JSON.parse(openCodeProcessEnv({ ...provider, localSandbox: "read-only" }, "coding")!.OPENCODE_CONFIG_CONTENT!);
+    expect(readOnlyConfig.permission).toMatchObject({ edit: "deny", bash: "deny", external_directory: "deny" });
+    expect(readOnlyConfig.agent.build.permission.edit).toBe("deny");
+  });
+
+  it("discovers OpenCode models through a bare PATH command", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "archicode-opencode-path-"));
+    const binDir = path.join(root, "bin");
+    await mkdir(binDir, { recursive: true });
+    const commandPath = path.join(binDir, "mock-opencode");
+    await writeFile(commandPath, `#!/usr/bin/env node
+const args = process.argv.slice(2).join(" ");
+if (args === "--version") process.stdout.write("opencode 1.2.3\\n");
+else if (args === "models") process.stdout.write("opencode-go/kimi-k2.5\\nanthropic/claude-sonnet-4-5\\n");
+else process.exitCode = 1;
+`, "utf8");
+    await chmod(commandPath, 0o755);
+    const previousPath = process.env.PATH;
+    process.env.PATH = [binDir, previousPath].filter(Boolean).join(path.delimiter);
+    const provider = {
+      ...createSeedProject(root).project.settings.providers.find((item) => item.kind === "opencode-local")!,
+      localCommand: "mock-opencode"
+    };
+    try {
+      const result = await checkProviderHealth(provider);
+      expect(result.ok).toBe(true);
+      expect(result.availableModels).toEqual(["anthropic/claude-sonnet-4-5", "opencode-go/kimi-k2.5"]);
+      expect(result.modelListSource).toBe("opencode models");
+    } finally {
+      process.env.PATH = previousPath;
+    }
+  });
+
+  it("runs OpenCode as a one-shot provider and deletes its ephemeral session", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "archicode-opencode-run-"));
+    const commandPath = path.join(root, "mock-opencode.cjs");
+    await writeFile(commandPath, `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+const args = process.argv.slice(2);
+if (args[0] === "session" && args[1] === "delete") {
+  fs.writeFileSync(path.join(process.cwd(), "deleted-session.txt"), args[2]);
+  process.exit(0);
+}
+let prompt = "";
+process.stdin.on("data", (chunk) => { prompt += chunk; });
+process.stdin.on("end", () => {
+  if (!args.includes("run") || !args.includes("--format") || !prompt.includes("Plan it")) process.exit(2);
+  process.stdout.write(JSON.stringify({ type: "step_start", sessionID: "ses_ephemeral", part: {} }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "text", sessionID: "ses_ephemeral", part: { text: "OpenCode answer" } }) + "\\n");
+});
+`, "utf8");
+    await chmod(commandPath, 0o755);
+    const provider = {
+      ...createSeedProject(root).project.settings.providers.find((item) => item.kind === "opencode-local")!,
+      localCommand: commandPath,
+      model: "opencode-go/kimi-k2.5",
+      ephemeral: true
+    };
+
+    const answer = await callProvider(provider, "{}", "Plan it", { projectRoot: root, phase: "planning" });
+
+    expect(answer).toBe("OpenCode answer");
+    expect(await readFile(path.join(root, "deleted-session.txt"), "utf8")).toBe("ses_ephemeral");
   });
 
   it("finds Codex local command by bare name through PATH", async () => {
@@ -1780,6 +1885,75 @@ process.stdin.on("end", () => {
     expect(await readFile(countPath, "utf8")).toBe("3");
   });
 
+  it("feeds local CLI tool validation failures back for a schema-corrected retry", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "archicode-codex-research-tool-schema-repair-"));
+    const commandPath = path.join(root, "fake-codex-tool-schema-repair.cjs");
+    const countPath = path.join(root, "count.txt");
+    await writeFile(commandPath, `#!/usr/bin/env node
+const fs = require("fs");
+const outIndex = process.argv.indexOf("--output-last-message");
+let count = 0;
+try { count = Number(fs.readFileSync(${JSON.stringify(countPath)}, "utf8")); } catch {}
+count += 1;
+fs.writeFileSync(${JSON.stringify(countPath)}, String(count), "utf8");
+let stdin = "";
+process.stdin.on("data", (chunk) => { stdin += chunk.toString(); });
+process.stdin.on("end", () => {
+  const message = count === 1 && stdin.includes('"required":["title","body"]')
+    ? JSON.stringify({ archicodeResearchTurn: { toolCalls: [{ id: "remember-1", providerToolName: "archicode_project_remember_note", arguments: { key: "user-name", body: "The user's name is Roy." } }] } })
+    : count === 2 && stdin.includes("title is required")
+      ? JSON.stringify({ archicodeResearchTurn: { toolCalls: [{ id: "remember-2", providerToolName: "archicode_project_remember_note", arguments: { title: "User name", body: "The user's name is Roy.", pinned: true } }] } })
+      : count === 3 && stdin.includes("Stored Roy")
+        ? "I’ll remember that your name is Roy."
+        : "Schema repair context was missing.";
+  if (outIndex >= 0) fs.writeFileSync(process.argv[outIndex + 1], message, "utf8");
+  process.exit(0);
+});
+`, "utf8");
+    await chmod(commandPath, 0o755);
+    const provider = {
+      ...createSeedProject(root).project.settings.providers.find((item) => item.kind === "codex-local")!,
+      localCommand: commandPath
+    };
+    const calls: string[] = [];
+
+    await expect(callResearchProvider(provider, "Remember that my name is Roy", {
+      projectRoot: root,
+      webSearchEnabled: false,
+      scopeContext: "{}",
+      messages: [],
+      mcpTools: [{
+        providerToolName: "archicode_project_remember_note",
+        serverId: "archicode-project-files",
+        serverLabel: "Project Memory & Chat Artifacts",
+        toolName: "remember_note",
+        description: "Create a durable project memory note.",
+        inputSchema: {
+          type: "object",
+          additionalProperties: false,
+          required: ["title", "body"],
+          properties: {
+            title: { type: "string" },
+            body: { type: "string" },
+            pinned: { type: "boolean" }
+          }
+        }
+      }],
+      callMcpTool: async (input) => {
+        calls.push(input.argumentsJson);
+        const args = JSON.parse(input.argumentsJson) as { title?: string };
+        if (!args.title) throw new Error("title is required.");
+        return "Stored Roy";
+      },
+      isTerminalTool: () => false
+    })).resolves.toBe("I’ll remember that your name is Roy.");
+
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toContain('"key":"user-name"');
+    expect(calls[1]).toContain('"title":"User name"');
+    expect(await readFile(countPath, "utf8")).toBe("3");
+  });
+
   it("keeps Codex Local on the same trajectory after non-terminal bookkeeping tools until it returns a visible answer", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-codex-research-finalized-outcome-"));
     const commandPath = path.join(root, "fake-codex-finalized-outcome.cjs");
@@ -1851,7 +2025,18 @@ process.stdin.on("end", () => {
       messages: [],
       systemInstructionsOverride: "You are Delphi.",
       mcpTools: [
-        { providerToolName: "delphi_inspect_test_environment", serverId: "delphi", serverLabel: "Delphi", toolName: "inspect" },
+        {
+          providerToolName: "delphi_inspect_test_environment",
+          serverId: "delphi",
+          serverLabel: "Delphi",
+          toolName: "inspect",
+          inputSchema: {
+            type: "object",
+            additionalProperties: false,
+            required: ["target"],
+            properties: { target: { type: "string" } }
+          }
+        },
         { providerToolName: "delphi_run_playwright_flow", serverId: "delphi", serverLabel: "Delphi", toolName: "playwright" }
       ]
     });
@@ -1859,6 +2044,8 @@ process.stdin.on("end", () => {
     expect(instructions).toContain("isolated subagent tool loop");
     expect(instructions).toContain("Continue through the required execution tools");
     expect(instructions).toContain("never claim a listed execution tool or its result is unavailable merely because it was not called yet");
+    expect(instructions).toContain('argumentsSchema: {"type":"object","additionalProperties":false,"required":["target"]');
+    expect(instructions).toContain("MUST satisfy that tool's argumentsSchema exactly");
     expect(instructions).not.toContain("MEMORY OWNERSHIP");
     expect(instructions).not.toContain("GRAPH WORK DELEGATION");
     expect(instructions).not.toContain("archicode_update_memory");

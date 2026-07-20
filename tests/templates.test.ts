@@ -17,7 +17,8 @@ describe("project templates", () => {
   it("creates readable project and flow JSON from each template", () => {
     for (const template of projectTemplates) {
       const result = createProjectFromTemplate(`/tmp/${template.id}`, template.id);
-      expect(result.project.settings.providers.some((provider) => provider.id === "codex-local")).toBe(true);
+      expect(result.project.settings.providers).toHaveLength(1);
+      expect(result.project.settings.providers[0]).toMatchObject({ label: "LLM Provider", enabled: true });
       expect(result.project.settings.filesystem.policy).toBe("project-write");
       expect(result.project.settings.autoFocusSelectedNode).toBe(false);
       expect(result.project.settings.webSearch.enabled).toBe(true);

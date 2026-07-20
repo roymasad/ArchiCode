@@ -264,7 +264,7 @@ export function applyRuntimeProviderDefaults(project: Project): Project {
 }
 
 export function createEmptyCodebaseProject(projectRoot: string): { project: Project; flow: Flow } {
-  const seed = createSeedProject(projectRoot);
+  const seed = createSeedProject(projectRoot, { includeProviderTemplates: false });
   const createdAt = iso();
   const folderName = path.basename(projectRoot) || "Codebase";
   return {
@@ -631,7 +631,7 @@ export async function ensureProject(projectRoot: string): Promise<ProjectBundle>
 
   const projectFile = projectStatePath(projectRoot, "project.json");
   if (!(await exists(projectFile))) {
-    const seed = createSeedProject(projectRoot);
+    const seed = createSeedProject(projectRoot, { includeProviderTemplates: false });
     const project = applyCommandSettings(applyRuntimeProviderDefaults(seed.project), await inferCommandSettings(projectRoot));
     await writeProjectFiles(projectRoot, project);
     await writeJson(projectStatePath(projectRoot, "flows", `${seed.flow.id}.json`), seed.flow);
@@ -978,7 +978,7 @@ export async function loadProject(projectRoot: string): Promise<ProjectBundle> {
   const graphChangesRaw = await readGraphChanges(projectRoot);
   const policyEvaluation = await readArchitecturePolicyEvaluation(projectRoot);
 
-  const fallback = createSeedProject(projectRoot);
+  const fallback = createSeedProject(projectRoot, { includeProviderTemplates: false });
   const diskProject = safeParseOne("project.json", projectSchema, projectRaw, validationErrors) ?? fallback.project;
   const localProjectState = await readLocalProjectState(projectRoot);
   let project = applyLocalProjectState(projectRoot, diskProject, localProjectState);

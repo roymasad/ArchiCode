@@ -1993,7 +1993,7 @@ function registerIpc(): void {
   ipcMain.handle("archicode:list-recent-projects", () => listRecentProjects());
   ipcMain.handle("archicode:check-for-updates", () => checkForAppUpdate(app.getVersion()));
   ipcMain.handle("archicode:get-global-providers", async () =>
-    (await globalProviders({ includeSecrets: true })) ?? applyPlatformCodexLocalDefaults(createSeedProject("").project.settings.providers)
+    (await globalProviders({ includeSecrets: true })) ?? applyPlatformCodexLocalDefaults(createSeedProject("", { includeProviderTemplates: false }).project.settings.providers)
   );
   ipcMain.handle("archicode:get-global-research-personality", () => globalResearchPersonality());
   ipcMain.handle("archicode:get-global-research-verbosity", () => globalResearchVerbosity());

@@ -11,11 +11,11 @@ import {
   codexLocalSandboxOptions,
   createProviderProfile,
   duplicateProviderProfile,
-  isSeedProvider,
   outputVerbosityOptions,
   providerApiKeyValue,
   providersNeedingAutoCheckOnSave,
   providerKindOptions,
+  removeProviderProfile,
   type ProviderKind
 } from "../utils/providerProfiles";
 
@@ -68,7 +68,7 @@ function isOfficialOpenAiCompatibleProvider(provider: ProjectSettings["providers
 }
 
 function providerCheckHint(kind: ProjectSettings["providers"][number]["kind"]): string {
-  if (kind === "codex-local" || kind === "claude-local") {
+  if (kind === "codex-local" || kind === "claude-local" || kind === "opencode-local") {
     return "Checks the CLI connection and refreshes available models. Make sure the latest CLI version is installed.";
   }
   return "Checks the provider connection and refreshes available models when the provider exposes a model catalog.";
@@ -88,6 +88,11 @@ function modelHint(provider: ProjectSettings["providers"][number]): string {
   }
   if (provider.kind === "claude-local") {
     return "Leave blank to use the Claude Code configured default. Use Check to verify the local CLI/auth setup. ArchiCode shows curated fallback model suggestions here because the Claude CLI does not expose a machine-readable local model catalog or context window endpoint.";
+  }
+  if (provider.kind === "opencode-local") {
+    return provider.detectedAvailableModels.length
+      ? `Loaded ${provider.detectedAvailableModels.length} configured OpenCode models. Model IDs retain their provider prefix.`
+      : "Click Check to load the configured OpenCode provider/model catalog. Authentication is managed with opencode auth login.";
   }
   if (provider.detectedAvailableModels.length) {
     if (isOfficialOpenAiCompatibleProvider(provider)) {
@@ -141,6 +146,7 @@ function providerDescription(kind: ProjectSettings["providers"][number]["kind"])
   if (kind === "anthropic-compatible") return "Anthropic Messages API endpoint.";
   if (kind === "codex-local") return "Runs the local Codex CLI/app bridge when installed and signed in.";
   if (kind === "claude-local") return "Runs the local Claude Code CLI when installed and signed in.";
+  if (kind === "opencode-local") return "Runs one-shot OpenCode CLI processes using OpenCode's configured providers and models.";
   return "";
 }
 
@@ -249,12 +255,7 @@ export function GlobalProviderSetup() {
   };
 
   const removeProvider = (providerId: string) => {
-    setProviders((current) => {
-      if (current.length <= 1) return current;
-      const nextProviders = current.filter((provider) => provider.id !== providerId);
-      if (nextProviders.some((provider) => provider.enabled)) return nextProviders;
-      return nextProviders.map((provider, index) => ({ ...provider, enabled: index === 0 }));
-    });
+    setProviders((current) => removeProviderProfile(current, providerId));
     setProviderHealth((current) => {
       if (!current[providerId]) return current;
       const next = { ...current };
@@ -522,8 +523,7 @@ export function GlobalProviderSetup() {
                     </IconButton>
                     <IconButton
                       type="button"
-                      title={isSeedProvider(provider) ? "Built-in provider profiles cannot be deleted" : "Delete provider profile"}
-                      disabled={isSeedProvider(provider) || providers.length <= 1}
+                      title="Delete provider profile"
                       onClick={() => removeProvider(provider.id)}
                     >
                       <Trash2 size={16} />
@@ -550,26 +550,26 @@ export function GlobalProviderSetup() {
                     {providerHealth[provider.id].status}: {providerHealth[provider.id].message}
                   </small>
                 ) : null}
-                {provider.kind === "codex-local" || provider.kind === "claude-local" ? (
+                {provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local" ? (
                   <>
-                    {renderProviderModelField(provider, provider.kind === "codex-local" ? "configured Codex default" : "configured Claude default")}
+                    {renderProviderModelField(provider, provider.kind === "codex-local" ? "configured Codex default" : provider.kind === "claude-local" ? "configured Claude default" : "provider/model")}
                     {provider.kind === "codex-local" ? renderOutputVerbosityField(provider) : null}
                     {renderContextWindowField(provider)}
                     <Field label="Local command">
                       <TextInput
-                        value={provider.localCommand ?? (provider.kind === "codex-local" ? "codex" : "claude")}
-                        placeholder={provider.kind === "codex-local" ? "codex" : "claude"}
+                        value={provider.localCommand ?? (provider.kind === "codex-local" ? "codex" : provider.kind === "claude-local" ? "claude" : "opencode")}
+                        placeholder={provider.kind === "codex-local" ? "codex" : provider.kind === "claude-local" ? "claude" : "opencode"}
                         onChange={(event) => updateProvider(provider.id, { localCommand: event.target.value || undefined })}
                       />
                     </Field>
-                    <Field label={provider.kind === "codex-local" ? "Profile" : "Settings override"}>
+                    <Field label={provider.kind === "opencode-local" ? "Agent" : provider.kind === "codex-local" ? "Profile" : "Settings override"}>
                       <TextInput
                         value={provider.localProfile ?? ""}
-                        placeholder={provider.kind === "codex-local" ? "optional Codex profile" : "optional Claude settings profile"}
+                        placeholder={provider.kind === "codex-local" ? "optional Codex profile" : provider.kind === "claude-local" ? "optional Claude settings profile" : "optional OpenCode agent"}
                         onChange={(event) => updateProvider(provider.id, { localProfile: event.target.value || undefined })}
                       />
                     </Field>
-                    <Field label={provider.kind === "codex-local" ? "Codex command access" : "Claude command access"}>
+                    <Field label={`${provider.kind === "codex-local" ? "Codex" : provider.kind === "claude-local" ? "Claude" : "OpenCode"} command access`}>
                       <Select
                         value={provider.localSandbox ?? "read-only"}
                         onValueChange={(value) => updateProvider(provider.id, {
@@ -580,16 +580,20 @@ export function GlobalProviderSetup() {
                     </Field>
                     <small>{provider.kind === "codex-local"
                       ? codexLocalCommandAccessHint
-                      : "Claude Code uses permission modes instead of a true filesystem sandbox. ArchiCode maps these access levels to read-only planning, auto-accepted workspace edits, or full bypass mode."}</small>
+                      : provider.kind === "claude-local"
+                        ? "Claude Code uses permission modes instead of a true filesystem sandbox. ArchiCode maps these access levels to read-only planning, auto-accepted workspace edits, or full bypass mode."
+                        : "OpenCode runs once per request. Read-only phases receive explicit edit, shell, and external-directory denies; write-capable build phases use --auto."}</small>
                     <Switch
                       checked={Boolean(provider.ephemeral)}
                       onCheckedChange={(checked) => updateProvider(provider.id, { ephemeral: checked })}
-                      label={provider.kind === "codex-local" ? "Use throwaway Codex sessions" : "Disable Claude session persistence"}
+                      label={provider.kind === "codex-local" ? "Use throwaway Codex sessions" : provider.kind === "claude-local" ? "Disable Claude session persistence" : "Delete OpenCode sessions after each call"}
                     />
                     <small>
                       {provider.kind === "codex-local"
                         ? <>Adds <code>--ephemeral</code> for local Codex runs. ArchiCode still saves runs and artifacts, but Codex should not reuse or save its own CLI session state.</>
-                        : <>Adds <code>--no-session-persistence</code> for local Claude runs. ArchiCode still saves runs and artifacts, but Claude should not reuse or save its own CLI session state.</>}
+                        : provider.kind === "claude-local"
+                          ? <>Adds <code>--no-session-persistence</code> for local Claude runs. ArchiCode still saves runs and artifacts, but Claude should not reuse or save its own CLI session state.</>
+                          : <>Runs <code>opencode session delete</code> after the one-shot response. ArchiCode still saves its own runs and artifacts.</>}
                     </small>
                   </>
                 ) : provider.kind === "offline-manual" ? (

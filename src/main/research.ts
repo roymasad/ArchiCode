@@ -1012,7 +1012,8 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
   const directProvider = provider.kind === "openai-compatible" ||
     provider.kind === "anthropic-compatible" ||
     provider.kind === "codex-local" ||
-    provider.kind === "claude-local";
+    provider.kind === "claude-local" ||
+    provider.kind === "opencode-local";
   const toolVisibleMcpSettings = {
     ...researchMcpSettings,
     mcp: {
@@ -2096,6 +2097,8 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
         ? "Codex Local failed. Check that the Codex CLI/app bridge is installed, signed in, and reachable from the Local command setting, then try again."
         : provider.kind === "claude-local"
           ? "Claude Code Local failed. Check that the Claude Code CLI is installed, signed in, and reachable from the Local command setting, then try again."
+          : provider.kind === "opencode-local"
+            ? "OpenCode Local failed. Check that the OpenCode CLI is installed, authenticated, has configured models, and is reachable from the Local command setting, then try again."
           : "Research provider failed. Check provider settings, API keys, web capability, or rate limits, then try again.",
       createdAt: iso(),
       attachmentIds: [],

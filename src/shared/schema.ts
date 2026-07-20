@@ -53,7 +53,7 @@ export const customNodePropertySchema = z.object({
   type: customNodePropertyTypeSchema.default("text")
 });
 
-export const providerKindSchema = z.enum(["openai-compatible", "anthropic-compatible", "offline-manual", "codex-local", "claude-local"]);
+export const providerKindSchema = z.enum(["openai-compatible", "anthropic-compatible", "offline-manual", "codex-local", "claude-local", "opencode-local"]);
 export const noteKindSchema = z.enum(["user-note", "llm-question", "user-answer", "system-note"]);
 export const issuePrioritySchema = z.enum(["low", "normal", "high", "urgent"]);
 export const noteCategorySchema = z.enum(["note", "decision", "bug", "task"]);
@@ -1205,7 +1205,7 @@ export const runSchema = z.object({
     continuation: z.object({
       // "api" marks a paused API-provider phase: the phase replays after the
       // approval decision with the resume result injected into its prompt.
-      providerKind: z.enum(["codex-local", "claude-local", "api"]),
+      providerKind: z.enum(["codex-local", "claude-local", "opencode-local", "api"]),
       originalOutput: z.string(),
       resume: z.object({
         decision: z.enum(["approved", "denied"]),
@@ -2461,7 +2461,7 @@ export const researchChatMessageSchema = z.object({
     // without re-generating the assistant work that preceded the approval. When
     // absent (or stale/oversized), the turn falls back to replay.
     providerContinuation: z.object({
-      transport: z.enum(["anthropic", "openai-chat", "openai-responses", "codex-local", "claude-local"]),
+      transport: z.enum(["anthropic", "openai-chat", "openai-responses", "codex-local", "claude-local", "opencode-local"]),
       messages: z.array(z.unknown()).optional(),
       previousResponseId: z.string().optional(),
       pendingToolCall: z.object({

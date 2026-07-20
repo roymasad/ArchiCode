@@ -24,8 +24,12 @@ export function isClaudeLocalProvider(provider: Provider): provider is Provider 
   return provider.kind === "claude-local";
 }
 
+export function isOpenCodeLocalProvider(provider: Provider): provider is Provider & { kind: "opencode-local" } {
+  return provider.kind === "opencode-local";
+}
+
 export function localCliCommand(provider: Pick<Provider, "kind" | "localCommand">): string {
-  return provider.localCommand?.trim() || (provider.kind === "claude-local" ? "claude" : "codex");
+  return provider.localCommand?.trim() || (provider.kind === "claude-local" ? "claude" : provider.kind === "opencode-local" ? "opencode" : "codex");
 }
 
 export async function callCodexLocal(provider: Provider, contextText: string, promptSummary: string, options: ProviderCallOptions, policy: PhaseModelPolicy): Promise<string> {
@@ -124,7 +128,7 @@ export async function callCodexLocal(provider: Provider, contextText: string, pr
 }
 
 export async function callLocalResearchProvider(
-  transport: "codex-local" | "claude-local",
+  transport: "codex-local" | "claude-local" | "opencode-local",
   provider: Provider,
   userMessage: string,
   options: ResearchProviderOptions,
@@ -135,7 +139,7 @@ export async function callLocalResearchProvider(
   const transcript = options.resumeContinuation
     ? localResearchTranscriptFromContinuation(options.resumeContinuation, transport)
     : [];
-  const providerLabel = transport === "codex-local" ? "Codex" : "Claude";
+  const providerLabel = transport === "codex-local" ? "Codex" : transport === "claude-local" ? "Claude" : "OpenCode";
   const askModeNote = (options.mcpTools ?? []).some((tool) => !options.isTerminalTool?.(tool.providerToolName))
     ? "Enabled Ask-mode MCP servers remain visible through the structured tool list. If an Ask-mode tool is requested, ArchiCode will pause for approval and then resume this same turn with the tool result."
     : "";
@@ -145,6 +149,7 @@ export async function callLocalResearchProvider(
   const isolatedSubagent = Boolean(options.systemInstructionsOverride?.trim());
 
   let finalAnswerRequested = false;
+  const toolValidationFailures = new Map<string, number>();
   const transcriptResults = (results: AgentToolResult[]) => results.map(({ toolCall, result }) => ({
     role: "tool" as const,
     toolCallId: toolCall.id,
@@ -180,7 +185,9 @@ export async function callLocalResearchProvider(
           options.webSearchEnabled
             ? transport === "claude-local"
               ? "Web search is enabled for this chat. Use Claude's built-in web tools only when current external information is needed, and cite sources when web results inform the answer."
-              : "Web search is enabled for this chat. Use Codex web search only when current external information is needed, and cite sources when web results inform the answer."
+              : transport === "opencode-local"
+                ? "Web search is enabled for this chat. Use OpenCode's configured web tools only when current external information is needed, and cite sources when web results inform the answer."
+                : "Web search is enabled for this chat. Use Codex web search only when current external information is needed, and cite sources when web results inform the answer."
             : "Web search is disabled by project settings. Use only provided context and local model knowledge.",
           askModeNote,
           localResearchToolLoopInstructions(options),
@@ -245,10 +252,29 @@ export async function callLocalResearchProvider(
       onLaterRound: () => options.onTokenReset?.()
     },
     executeTool: options.callMcpTool
-      ? (toolCall) => options.callMcpTool!({
-          providerToolName: toolCall.providerToolName,
-          argumentsJson: toolCall.argumentsJson
-        })
+      ? async (toolCall) => {
+          try {
+            const result = await options.callMcpTool!({
+              providerToolName: toolCall.providerToolName,
+              argumentsJson: toolCall.argumentsJson
+            });
+            toolValidationFailures.delete(toolCall.providerToolName);
+            return result;
+          } catch (error) {
+            if (options.isApprovalError?.(error)) throw error;
+            const failures = (toolValidationFailures.get(toolCall.providerToolName) ?? 0) + 1;
+            toolValidationFailures.set(toolCall.providerToolName, failures);
+            if (failures > 2) throw error;
+            const message = error instanceof Error ? error.message : String(error);
+            return JSON.stringify({
+              ok: false,
+              error: "tool_call_failed",
+              message,
+              repair: "Use the error message and the tool's argumentsSchema to correct the call. Include required fields, valid enum values, correct nested shapes, and no undeclared fields when additionalProperties is false. If the failure is not repairable, explain the concrete blocker instead of repeating the call.",
+              attemptsRemaining: 2 - failures
+            });
+          }
+        }
       : undefined,
     isApprovalError: options.isApprovalError,
     onTransientRetry: options.onTransientRetry,
@@ -433,6 +459,136 @@ export async function callClaudeLocalResearch(provider: Provider, userMessage: s
         throw new Error(`Claude Code local research provider failed with exit code ${exitCode}.\n${stderr || stdout}`);
       }
       return streamClaudeToken.finalText() || stdout.trim() || "Claude Code local research provider returned no content.";
+    }
+  );
+  emitUnavailableUsage(provider, policy, options.onUsage);
+  return result;
+}
+
+export function buildOpenCodeLocalArgs(
+  provider: Provider,
+  options: Pick<ProviderCallOptions, "phase" | "projectRoot" | "imageAttachments">
+): string[] {
+  const phase = options.phase ?? "planning";
+  const args = ["run", "--format", "json"];
+  if (options.projectRoot) args.push("--dir", options.projectRoot);
+  const model = resolvePhaseModelPolicy(provider, phase).modelOverride?.trim() || provider.model?.trim();
+  if (model) args.push("--model", model);
+  if (provider.localProfile?.trim()) args.push("--agent", provider.localProfile.trim());
+  for (const imagePath of [...new Set((options.imageAttachments ?? []).map((image) => image.path.trim()).filter(Boolean))]) {
+    args.push("--file", imagePath);
+  }
+  if (provider.localSandbox !== "read-only" && (phase === "coding" || phase === "debugging" || phase === "verifying")) {
+    args.push("--auto");
+  }
+  return args;
+}
+
+export function openCodeProcessEnv(provider: Provider, phase: LlmPhase): NodeJS.ProcessEnv | undefined {
+  const writeAllowed = provider.localSandbox !== "read-only" && (phase === "coding" || phase === "debugging" || phase === "verifying");
+  if (writeAllowed && provider.localSandbox === "danger-full-access") return undefined;
+  const permission = writeAllowed
+    ? { external_directory: "deny" }
+    : { edit: "deny", bash: "deny", external_directory: "deny" };
+  const agentName = provider.localProfile?.trim() || "build";
+  return {
+    OPENCODE_CONFIG_CONTENT: JSON.stringify({
+      permission,
+      agent: {
+        build: { permission },
+        plan: { permission },
+        [agentName]: { permission }
+      }
+    })
+  };
+}
+
+function openCodePhaseInstructions(provider: Provider, phase: LlmPhase): string[] {
+  const writeCapable = provider.localSandbox !== "read-only";
+  if (phase === "coding") return [
+    `You are ${gaiaAgent.title}, ArchiCode's implementation agent.`,
+    writeCapable
+      ? "Implement the requested change directly in the project. Keep edits bounded to the project and do not start a server, watcher, simulator, or other long-running process."
+      : "OpenCode is configured read-only. Do not edit files; return complete source changes using ArchiCode's propose-source-file operations.",
+    writeCapable ? "Return a concise summary of changed files and finite checks run." : codingSourceHandoffInstructions,
+    writeCapable ? "" : sourceProposalBatchingInstructions
+  ];
+  if (phase === "debugging") return [
+    `You are ${pandoraAgent.title}, ArchiCode's debugging agent.`,
+    "Use the supplied failures and project evidence to make the smallest correct repair.",
+    writeCapable
+      ? "Edit the project directly and run only finite checks needed to validate the repair."
+      : "Do not edit files; return complete repairs using ArchiCode's propose-source-file operations."
+  ];
+  return [
+    `You are ${gaiaAgent.title}, ArchiCode's implementation agent.`,
+    "This is a planning or review phase. Do not edit project files.",
+    planningQuestionGateInstructions,
+    planningPatchJsonContract
+  ];
+}
+
+export async function callOpenCodeLocal(provider: Provider, contextText: string, promptSummary: string, options: ProviderCallOptions, policy: PhaseModelPolicy): Promise<string> {
+  const command = localCliCommand(provider);
+  const phase = options.phase ?? "planning";
+  const profile = inferModelCapabilityProfile(provider, policy.modelOverride);
+  const args = buildOpenCodeLocalArgs(provider, options);
+  const prompt = options.bareExtraction
+    ? [extractionSystemPrompt, "", contextText].join("\n")
+    : [
+        orchestratorSystemPrompt,
+        "",
+        "You are being called as ArchiCode's local OpenCode provider through a one-shot OpenCode CLI process.",
+        ...openCodePhaseInstructions(provider, phase),
+        phasePolicyText(phase, policy, profile),
+        options.selectedSkillsPrompt?.trim() ?? "",
+        imageAttachmentText(options.imageAttachments),
+        await textAttachmentText(options.textAttachments),
+        options.webSearchEnabled
+          ? "Use OpenCode's configured web tools only when current external information is needed, and cite sources."
+          : "Web search is disabled. Use the supplied project context and local knowledge.",
+        "",
+        `Prompt summary: ${promptSummary}`,
+        "",
+        "Project JSON context:",
+        contextText
+      ].filter(Boolean).join("\n");
+  const stream = createOpenCodeLocalTokenStreamer(options.onProgress
+    ? (text, kind) => options.onProgress?.({ stream: kind === "thinking" ? "system" : "stdout", text })
+    : undefined);
+  const result = await runLocalProcess(command, args, prompt, options.projectRoot, (event) => {
+    if (event.stream === "stdout") stream(event.text);
+    else options.onProgress?.(event);
+  }, options.signal, { env: openCodeProcessEnv(provider, phase) });
+  const finalText = stream.finalText();
+  await cleanupOpenCodeSession(command, stream.sessionId(), options.projectRoot, provider.ephemeral !== false);
+  if (result.exitCode !== 0) {
+    throw new Error(`OpenCode local provider failed with exit code ${result.exitCode}.\n${result.stderr || result.stdout}`);
+  }
+  emitUnavailableUsage(provider, policy, options.onUsage);
+  return finalText || result.stdout.trim() || "OpenCode local provider returned no content.";
+}
+
+export async function callOpenCodeLocalResearch(provider: Provider, userMessage: string, options: ResearchProviderOptions, policy: PhaseModelPolicy): Promise<string> {
+  const result = await callLocalResearchProvider(
+    "opencode-local",
+    provider,
+    userMessage,
+    options,
+    policy,
+    async (prompt, onToken) => {
+      const command = localCliCommand(provider);
+      const args = buildOpenCodeLocalArgs(provider, { ...options, phase: "brainstorming" });
+      const stream = createOpenCodeLocalTokenStreamer(onToken);
+      const processResult = await runLocalProcess(command, args, prompt, options.projectRoot, (event) => {
+        if (event.stream === "stdout") stream(event.text);
+      }, options.signal, { env: openCodeProcessEnv(provider, "brainstorming") });
+      const finalText = stream.finalText();
+      await cleanupOpenCodeSession(command, stream.sessionId(), options.projectRoot, provider.ephemeral !== false);
+      if (processResult.exitCode !== 0) {
+        throw new Error(`OpenCode local research provider failed with exit code ${processResult.exitCode}.\n${processResult.stderr || processResult.stdout}`);
+      }
+      return finalText || processResult.stdout.trim() || "OpenCode local research provider returned no content.";
     }
   );
   emitUnavailableUsage(provider, policy, options.onUsage);
@@ -1063,6 +1219,76 @@ export function createClaudeLocalTokenStreamer(onToken?: (text: string, kind?: P
   return push;
 }
 
+export function openCodeJsonEvent(line: string): { text?: { tokenKind: ProviderTokenKind; value: string }; sessionId?: string } | null {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+  try {
+    const event = JSON.parse(trimmed) as Record<string, unknown>;
+    const sessionId = typeof event.sessionID === "string" ? event.sessionID : undefined;
+    const type = typeof event.type === "string" ? event.type : "";
+    if (type !== "text" && type !== "reasoning") return sessionId ? { sessionId } : null;
+    const part = event.part && typeof event.part === "object" ? event.part as Record<string, unknown> : undefined;
+    const value = typeof part?.text === "string" ? part.text : typeof event.text === "string" ? event.text : "";
+    return {
+      sessionId,
+      ...(value ? { text: { tokenKind: type === "reasoning" ? "thinking" : "answer", value } } : {})
+    };
+  } catch {
+    return null;
+  }
+}
+
+export function createOpenCodeLocalTokenStreamer(onToken?: (text: string, kind?: ProviderTokenKind) => void): {
+  (chunk: string): void;
+  finalText(): string;
+  sessionId(): string | undefined;
+} {
+  let buffer = "";
+  let answer = "";
+  let thinking = "";
+  let currentSessionId: string | undefined;
+  const processLines = (lines: string[]): void => {
+    for (const line of lines) {
+      const event = openCodeJsonEvent(line);
+      if (!event) continue;
+      if (event.sessionId) currentSessionId = event.sessionId;
+      if (!event.text) continue;
+      if (event.text.tokenKind === "thinking") thinking += event.text.value;
+      else answer += event.text.value;
+      onToken?.(event.text.value, event.text.tokenKind);
+    }
+  };
+  const push = (chunk: string): void => {
+    buffer += chunk;
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() ?? "";
+    processLines(lines);
+  };
+  const flush = (): void => {
+    if (!buffer.trim()) return;
+    processLines([buffer]);
+    buffer = "";
+  };
+  push.finalText = () => {
+    flush();
+    return (answer || thinking).trim();
+  };
+  push.sessionId = () => {
+    flush();
+    return currentSessionId;
+  };
+  return push;
+}
+
+export async function cleanupOpenCodeSession(command: string, sessionId: string | undefined, cwd: string | undefined, enabled: boolean): Promise<void> {
+  if (!enabled || !sessionId) return;
+  try {
+    await runLocalProcess(command, ["session", "delete", sessionId], "", cwd, undefined, undefined, { inactivityTimeoutMs: 30_000 });
+  } catch {
+    // Session cleanup is best-effort and must not hide a completed provider response.
+  }
+}
+
 export function emitLocalCliJsonText(
   text: { kind: "delta" | "full"; tokenKind: ProviderTokenKind; value: string },
   current: string,
@@ -1557,6 +1783,53 @@ export async function checkClaudeLocal(provider: Provider, checkedAt: string): P
   }
 }
 
+export function parseOpenCodeModels(output: string): string[] {
+  const ansi = /\u001b\[[0-?]*[ -/]*[@-~]/g;
+  return [...new Set(output
+    .replace(ansi, "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => /^[A-Za-z0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._:/-]*$/.test(line)))]
+    .sort((a, b) => a.localeCompare(b));
+}
+
+export async function checkOpenCodeLocal(provider: Provider, checkedAt: string): Promise<ProviderHealthResult> {
+  const command = localCliCommand(provider);
+  try {
+    const version = await runLocalProcess(command, ["--version"], "", undefined, undefined, undefined, { inactivityTimeoutMs: 30_000 });
+    if (version.exitCode !== 0) {
+      return {
+        providerId: provider.id,
+        ok: false,
+        status: "failed",
+        checkedAt,
+        message: `OpenCode CLI check failed: ${version.stderr || version.stdout}`
+      };
+    }
+    const catalog = await runLocalProcess(command, ["models"], "", undefined, undefined, undefined, { inactivityTimeoutMs: 60_000 });
+    const availableModels = catalog.exitCode === 0 ? parseOpenCodeModels(catalog.stdout) : [];
+    return {
+      providerId: provider.id,
+      ok: catalog.exitCode === 0,
+      status: catalog.exitCode === 0 ? "ready" : "failed",
+      checkedAt,
+      message: catalog.exitCode === 0
+        ? `OpenCode CLI is available (${(version.stdout || version.stderr).trim()}) with ${availableModels.length} configured model${availableModels.length === 1 ? "" : "s"}. Authentication is managed by OpenCode.`
+        : `OpenCode CLI is installed (${(version.stdout || version.stderr).trim()}) but its model catalog failed: ${catalog.stderr || catalog.stdout}`,
+      availableModels: availableModels.length ? availableModels : undefined,
+      modelListSource: availableModels.length ? "opencode models" : undefined
+    };
+  } catch (error) {
+    return {
+      providerId: provider.id,
+      ok: false,
+      status: "failed",
+      checkedAt,
+      message: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
 export async function readCodexLocalModels(command: string, modelId?: string): Promise<{ detectedContextWindowTokens?: number; availableModels: string[] }> {
   const result = await runLocalProcess(command, ["debug", "models"], "", undefined);
   if (result.exitCode !== 0) return { availableModels: [] };
@@ -1762,7 +2035,7 @@ export async function runLocalProcess(
   cwd?: string,
   onProgress?: (event: ProviderProgressEvent) => void,
   signal?: AbortSignal,
-  options?: { inactivityTimeoutMs?: number }
+  options?: { inactivityTimeoutMs?: number; env?: NodeJS.ProcessEnv }
 ): Promise<{ stdout: string; stderr: string; exitCode: number | null }> {
   const resolved = await resolveLocalCommand(command);
   const spawnPlan = await windowsSpawnPlan(resolved.command, args);
@@ -1775,7 +2048,7 @@ export async function runLocalProcess(
       cwd,
       shell: spawnPlan.shell,
       windowsVerbatimArguments: spawnPlan.windowsVerbatimArguments,
-      env: resolved.env,
+      env: { ...resolved.env, ...options?.env },
       detached: process.platform !== "win32"
     });
     if (child.pid) activeLocalProviderProcesses.set(child.pid, child);

@@ -387,7 +387,7 @@ export function createVisualQaResearchSessions(rootPath: string): ResearchChatSe
 export function createFallbackBundle(rootPath = "/browser-preview"): ProjectBundle {
   const showcaseScenario = readmeShowcaseScenario();
   if (showcaseScenario) return createReadmeShowcaseBundle(rootPath, showcaseScenario);
-  const seed = createSeedProject(rootPath);
+  const seed = createSeedProject(rootPath, { includeProviderTemplates: false });
   const createdAt = now();
   const denseMode = new URLSearchParams(window.location.search).get("visualQa") === "dense";
   const denseNodes = denseMode

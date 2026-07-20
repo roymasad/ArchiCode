@@ -20,10 +20,14 @@ import {
   callClaudeLocalResearch,
   callCodexLocal,
   callCodexLocalResearch,
+  callOpenCodeLocal,
+  callOpenCodeLocalResearch,
   checkClaudeLocal,
   checkCodexLocal,
+  checkOpenCodeLocal,
   isClaudeLocalProvider,
-  isCodexLocalProvider
+  isCodexLocalProvider,
+  isOpenCodeLocalProvider
 } from "./providers/localCli";
 
 import {
@@ -263,7 +267,7 @@ export type ResearchProviderOptions = {
 };
 
 export type ResearchProviderContinuation = {
-  transport: "anthropic" | "openai-chat" | "openai-responses" | "codex-local" | "claude-local";
+  transport: "anthropic" | "openai-chat" | "openai-responses" | "codex-local" | "claude-local" | "opencode-local";
   messages?: unknown[];
   previousResponseId?: string;
   pendingToolCall: { id: string; providerToolName: string; argumentsJson: string };
@@ -342,6 +346,9 @@ export async function callProvider(provider: Provider, contextText: string, prom
   if (isClaudeLocalProvider(provider)) {
     return callClaudeLocal(provider, contextText, promptSummary, { ...options, phase }, policy);
   }
+  if (isOpenCodeLocalProvider(provider)) {
+    return callOpenCodeLocal(provider, contextText, promptSummary, { ...options, phase }, policy);
+  }
 
   const apiKey = resolveProviderApiKey(provider);
   if (!apiKey) {
@@ -374,6 +381,9 @@ export async function callResearchProvider(provider: Provider, userMessage: stri
   }
   if (isClaudeLocalProvider(provider)) {
     return callClaudeLocalResearch(provider, userMessage, options, policy);
+  }
+  if (isOpenCodeLocalProvider(provider)) {
+    return callOpenCodeLocalResearch(provider, userMessage, options, policy);
   }
 
   const apiKey = resolveProviderApiKey(provider);
@@ -634,6 +644,9 @@ export async function checkProviderHealth(provider: Provider): Promise<ProviderH
   }
   if (isClaudeLocalProvider(provider)) {
     return checkClaudeLocal(provider, checkedAt);
+  }
+  if (isOpenCodeLocalProvider(provider)) {
+    return checkOpenCodeLocal(provider, checkedAt);
   }
 
   const apiKey = resolveProviderApiKey(provider);
@@ -1102,14 +1115,25 @@ export function localResearchTurnValidationFeedback(output: string): string | un
 export function localResearchToolLoopInstructions(options: ResearchProviderOptions): string {
   if (!options.mcpTools?.length) return "";
   const isolatedSubagent = Boolean(options.systemInstructionsOverride?.trim());
-  const toolLines = options.mcpTools.map((tool) =>
-    `- ${tool.providerToolName}: ${tool.description || `${tool.serverLabel}: ${tool.toolName}`}`
-  );
+  const toolLines = options.mcpTools.map((tool) => {
+    let schema = "{}";
+    try {
+      schema = JSON.stringify(tool.inputSchema ?? {});
+    } catch {
+      // MCP schemas are expected to be JSON-compatible. Keep the tool visible
+      // if a third-party server nevertheless returns an unserializable value.
+    }
+    return [
+      `- ${tool.providerToolName}: ${tool.description || `${tool.serverLabel}: ${tool.toolName}`}`,
+      `  argumentsSchema: ${schema}`
+    ].join("\n");
+  });
   return [
     "Structured research tool loop for this local CLI session:",
     "Native tool calling is not available in this local provider transport, so use the JSON tool-turn contract below instead of pretending tools are unavailable.",
     "When you need tools, return exactly one machine-readable JSON object, preferably in a fenced ```json block, with this top-level shape: { \"archicodeResearchTurn\": { \"answer\": string, \"toolCalls\": [{ \"id\": string, \"providerToolName\": string, \"arguments\": object }] } }.",
     "Use providerToolName exactly as listed. If toolCalls is present, do not include prose outside that JSON object.",
+    "Every tool call's arguments object MUST satisfy that tool's argumentsSchema exactly. Include every field listed in required, respect enum values and nested shapes, and do not invent fields when additionalProperties is false.",
     isolatedSubagent
       ? "This is an isolated subagent tool loop. Parent Research memory, goal, graph-delegation, and confirmation obligations do not apply. Call only tools listed below. Continue through the required execution tools until the assigned subagent objective is actually complete or a concrete tool result blocks it; inspection alone is not completion when execution was requested."
       : researchDurableMemoryPolicy,
@@ -1141,7 +1165,7 @@ export function formatLocalResearchTranscript(messages: LocalResearchContinuatio
 
 export function localResearchTranscriptFromContinuation(
   continuation: ResearchProviderContinuation & { approvedResult: string },
-  transport: "codex-local" | "claude-local"
+  transport: "codex-local" | "claude-local" | "opencode-local"
 ): LocalResearchContinuationMessage[] {
   if (continuation.transport !== transport || !continuation.messages) return [];
   const transcript = (continuation.messages as LocalResearchContinuationMessage[]).map((message) => ({ ...message }));
@@ -1355,7 +1379,7 @@ export function inferModelCapabilityProfile(provider: Provider, modelOverride?: 
       reasoningField: "none"
     };
   }
-  if (provider.kind === "codex-local" || provider.kind === "claude-local") {
+  if (provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local") {
     return {
       providerKind: provider.kind,
       model: provider.model,

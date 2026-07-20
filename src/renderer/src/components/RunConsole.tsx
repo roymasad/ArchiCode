@@ -230,7 +230,7 @@ function runCommand(run: Run): string {
 
 function providerSandbox(bundle: ProjectBundle | null, run: Run): string {
   const provider = bundle?.project.settings.providers.find((item) => item.id === run.providerId);
-  return provider?.kind === "codex-local" || provider?.kind === "claude-local"
+  return provider?.kind === "codex-local" || provider?.kind === "claude-local" || provider?.kind === "opencode-local"
     ? codexLocalSandboxLabel(provider.localSandbox)
     : "reviewed proposal";
 }

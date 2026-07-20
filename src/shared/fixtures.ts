@@ -2,7 +2,7 @@ import { defaultPhaseModelPolicies, defaultSubagentModelPolicies, type Flow, typ
 
 const now = new Date().toISOString();
 
-export function createSeedProject(rootPath: string): { project: Project; flow: Flow } {
+export function createSeedProject(rootPath: string, options: { includeProviderTemplates?: boolean } = {}): { project: Project; flow: Flow } {
   const project: Project = {
     schemaVersion: 1,
     id: "project-archicode",
@@ -143,6 +143,20 @@ export function createSeedProject(rootPath: string): { project: Project; flow: F
           phaseModelPolicies: defaultPhaseModelPolicies,
           subagentModelPolicies: defaultSubagentModelPolicies,
           enabled: false
+        },
+        {
+          id: "opencode-local",
+          kind: "opencode-local",
+          label: "OpenCode Local CLI",
+          localCommand: "opencode",
+          detectedAvailableModels: [],
+          detectedModelCapabilities: {},
+          localSandbox: "workspace-write",
+          ephemeral: true,
+          model: "",
+          phaseModelPolicies: defaultPhaseModelPolicies,
+          subagentModelPolicies: defaultSubagentModelPolicies,
+          enabled: false
         }
       ],
       tools: []
@@ -266,6 +280,13 @@ export function createSeedProject(rootPath: string): { project: Project; flow: F
     ],
     updatedAt: now
   };
+
+  if (options.includeProviderTemplates === false) {
+    project.settings.providers = project.settings.providers.slice(0, 1).map((provider) => ({
+      ...provider,
+      label: "LLM Provider"
+    }));
+  }
 
   return { project, flow };
 }

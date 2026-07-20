@@ -4,12 +4,12 @@ import {
   changeProviderCompatibility,
   createProviderProfile,
   duplicateProviderProfile,
-  isSeedProvider,
   localProviderUsageUnavailableDetail,
   mergeProviderCapabilityMetadata,
   normalizeProviderModelSelections,
   providerKindOptions,
-  providersNeedingAutoCheckOnSave
+  providersNeedingAutoCheckOnSave,
+  removeProviderProfile
 } from "../src/renderer/src/utils/providerProfiles";
 
 describe("provider profile helpers", () => {
@@ -33,8 +33,26 @@ describe("provider profile helpers", () => {
       "openai-compatible",
       "codex-local",
       "anthropic-compatible",
-      "claude-local"
+      "claude-local",
+      "opencode-local"
     ]);
+  });
+
+  it("uses one configurable provider card for production defaults", () => {
+    const providers = createSeedProject("/tmp/archicode", { includeProviderTemplates: false }).project.settings.providers;
+
+    expect(providers).toHaveLength(1);
+    expect(providers[0]).toMatchObject({
+      id: "openai-compatible",
+      label: "LLM Provider",
+      enabled: true
+    });
+  });
+
+  it("allows every provider card, including the last default card, to be deleted", () => {
+    const providers = createSeedProject("/tmp/archicode", { includeProviderTemplates: false }).project.settings.providers;
+
+    expect(removeProviderProfile(providers, "openai-compatible")).toEqual([]);
   });
 
   it("creates custom named profiles on existing compatibility adapters", () => {
@@ -45,7 +63,6 @@ describe("provider profile helpers", () => {
     expect(openRouter.kind).toBe("openai-compatible");
     expect(openRouter.baseUrl).toBe("https://api.openai.com/v1");
     expect(openRouter.enabled).toBe(false);
-    expect(isSeedProvider(openRouter)).toBe(false);
   });
 
   it("duplicates provider profiles without copying local secrets or health cache", () => {

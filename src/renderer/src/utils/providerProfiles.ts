@@ -8,13 +8,12 @@ import {
 export type ProviderSettings = ProjectSettings["providers"][number];
 export type ProviderKind = ProviderSettings["kind"];
 
-export const seedProviderIds = new Set(["openai-compatible", "anthropic-compatible", "codex-local", "claude-local"]);
-
 export const providerKindOptions: Array<{ value: ProviderKind; label: string }> = [
   { value: "openai-compatible", label: "OpenAI Compatible" },
   { value: "codex-local", label: "Codex Local CLI" },
   { value: "anthropic-compatible", label: "Anthropic Compatible" },
-  { value: "claude-local", label: "Claude Code CLI" }
+  { value: "claude-local", label: "Claude Code CLI" },
+  { value: "opencode-local", label: "OpenCode Local CLI" }
 ];
 
 export const codexLocalCommandAccessHint =
@@ -45,6 +44,8 @@ export function localProviderUsageUnavailableDetail(provider?: ProviderSettings)
     ? "Codex CLI provider"
     : provider?.kind === "claude-local"
       ? "Claude Code CLI provider"
+      : provider?.kind === "opencode-local"
+        ? "OpenCode CLI provider"
       : "Local CLI provider";
   const profile = provider?.label?.trim();
   return `${cliName}${profile ? ` (${profile})` : ""} — token usage is not reported.`;
@@ -137,15 +138,12 @@ export function normalizeProviderModelSelections(provider: ProviderSettings): Pr
   return changed ? { ...provider, model, phaseModelPolicies, subagentModelPolicies } : provider;
 }
 
-export function isSeedProvider(provider: ProviderSettings): boolean {
-  return seedProviderIds.has(provider.id);
-}
-
 export function defaultProviderLabel(kind: ProviderKind): string {
   if (kind === "openai-compatible") return "OpenAI-Compatible Profile";
   if (kind === "anthropic-compatible") return "Anthropic-Compatible Profile";
   if (kind === "codex-local") return "Codex Local CLI";
   if (kind === "claude-local") return "Claude Code CLI";
+  if (kind === "opencode-local") return "OpenCode Local CLI";
   return "Manual / Offline";
 }
 
@@ -191,6 +189,12 @@ export function duplicateProviderProfile(providers: ProviderSettings[], source: 
     detectedOpenAiEndpointMode: undefined,
     enabled: false
   };
+}
+
+export function removeProviderProfile(providers: ProviderSettings[], providerId: string): ProviderSettings[] {
+  const nextProviders = providers.filter((provider) => provider.id !== providerId);
+  if (!nextProviders.length || nextProviders.some((provider) => provider.enabled)) return nextProviders;
+  return nextProviders.map((provider, index) => ({ ...provider, enabled: index === 0 }));
 }
 
 export function changeProviderCompatibility(provider: ProviderSettings, kind: ProviderKind): ProviderSettings {
@@ -266,6 +270,16 @@ function providerDefaultsForKind(kind: ProviderKind): Omit<ProviderSettings, "id
       localSandbox: defaultCodexLocalSandbox()
     };
   }
+  if (kind === "opencode-local") {
+    return {
+      ...common,
+      baseUrl: undefined,
+      model: "",
+      openAiEndpointMode: undefined,
+      localCommand: "opencode",
+      localSandbox: defaultCodexLocalSandbox()
+    };
+  }
   return {
     ...common,
     baseUrl: undefined,
@@ -327,7 +341,7 @@ function providerAutoCheckFingerprint(provider: ProviderSettings): string {
       ephemeral: Boolean(provider.ephemeral)
     });
   }
-  if (provider.kind === "claude-local") {
+  if (provider.kind === "claude-local" || provider.kind === "opencode-local") {
     return JSON.stringify({
       kind: provider.kind,
       model: provider.model ?? "",

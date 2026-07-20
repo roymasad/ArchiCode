@@ -381,7 +381,7 @@ export function createReadmeShowcaseBundle(
   rootPath = "/readme-showcase",
   scenario: ReadmeShowcaseScenario = "overview"
 ): ProjectBundle {
-  const seed = createSeedProject(rootPath);
+  const seed = createSeedProject(rootPath, { includeProviderTemplates: false });
   const architecture = architectureFlow();
   const knowledge = knowledgeFlow();
   const activeFlowId = scenario === "knowledge" ? knowledge.id : architecture.id;

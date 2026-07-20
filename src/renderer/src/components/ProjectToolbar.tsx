@@ -63,13 +63,13 @@ import {
   codexLocalSandboxOptions,
   createProviderProfile,
   duplicateProviderProfile,
-  isSeedProvider,
   mergeProviderCapabilityMetadata,
   normalizeProviderModelSelections,
   outputVerbosityOptions,
   providerApiKeyValue,
   providersNeedingAutoCheckOnSave,
   providerKindOptions,
+  removeProviderProfile,
   type ProviderKind
 } from "../utils/providerProfiles";
 import { PROVIDER_DEFAULT_MODEL_VALUE } from "../utils/researchModels";
@@ -1206,15 +1206,8 @@ export function ProjectToolbar({
   };
 
   const removeProvider = (providerId: string) => {
-    if (!draft || draft.providers.length <= 1) return;
-    const nextProviders = draft.providers.filter((provider) => provider.id !== providerId);
-    if (!nextProviders.length) return;
-    const activeProviderExists = nextProviders.some((provider) => provider.enabled);
-    updateDraft({
-      providers: activeProviderExists
-        ? nextProviders
-        : nextProviders.map((provider, index) => ({ ...provider, enabled: index === 0 }))
-    });
+    if (!draft) return;
+    updateDraft({ providers: removeProviderProfile(draft.providers, providerId) });
   };
 
   const changeProviderKind = (providerId: string, kind: ProviderKind) => {
@@ -1435,7 +1428,7 @@ export function ProjectToolbar({
     policy: PhaseModelPolicy
   ): string => {
     const phaseCeiling = policy.maxOutputTokens;
-    if (provider.kind === "codex-local" || provider.kind === "claude-local") {
+    if (provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local") {
       return phaseCeiling
         ? `Advisory ceiling: ${formatTokenCount(phaseCeiling)}. The local CLI controls its effective output limit.`
         : "The local CLI controls its effective output limit.";
@@ -2768,8 +2761,7 @@ export function ProjectToolbar({
                           </IconButton>
                           <IconButton
                             type="button"
-                            title={isSeedProvider(provider) ? "Built-in provider profiles cannot be deleted" : "Delete provider profile"}
-                            disabled={isSeedProvider(provider) || draft.providers.length <= 1}
+                            title="Delete provider profile"
                             onClick={() => removeProvider(provider.id)}
                           >
                             <Trash2 size={16} />
@@ -2798,26 +2790,26 @@ export function ProjectToolbar({
                       ) : null}
                       {provider.kind === "offline-manual" ? (
                         <small>This is a non-AI offline mode for using ArchiCode as a living diagram, run ledger, artifact browser, and permissioned command shell. It cannot plan or code with an LLM until another provider is selected.</small>
-                      ) : provider.kind === "codex-local" || provider.kind === "claude-local" ? (
+                      ) : provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local" ? (
                         <>
-                          {renderProviderModelField(provider, provider.kind === "codex-local" ? "configured Codex default" : "configured Claude default")}
+                          {renderProviderModelField(provider, provider.kind === "codex-local" ? "configured Codex default" : provider.kind === "claude-local" ? "configured Claude default" : "provider/model")}
                           {provider.kind === "codex-local" ? renderOutputVerbosityField(provider) : null}
                           {renderContextWindowField(provider)}
                           <Field label="Local command">
                             <TextInput
-                              value={provider.localCommand ?? (provider.kind === "codex-local" ? "codex" : "claude")}
-                              placeholder={provider.kind === "codex-local" ? "codex" : "claude"}
+                              value={provider.localCommand ?? (provider.kind === "codex-local" ? "codex" : provider.kind === "claude-local" ? "claude" : "opencode")}
+                              placeholder={provider.kind === "codex-local" ? "codex" : provider.kind === "claude-local" ? "claude" : "opencode"}
                               onChange={(event) => updateProvider(provider.id, { localCommand: event.target.value || undefined })}
                             />
                           </Field>
-                          <Field label={provider.kind === "codex-local" ? "Profile" : "Settings override"}>
+                          <Field label={provider.kind === "opencode-local" ? "Agent" : provider.kind === "codex-local" ? "Profile" : "Settings override"}>
                             <TextInput
                               value={provider.localProfile ?? ""}
-                              placeholder={provider.kind === "codex-local" ? "optional Codex profile" : "optional Claude settings profile"}
+                              placeholder={provider.kind === "codex-local" ? "optional Codex profile" : provider.kind === "claude-local" ? "optional Claude settings profile" : "optional OpenCode agent"}
                               onChange={(event) => updateProvider(provider.id, { localProfile: event.target.value || undefined })}
                             />
                           </Field>
-                          <Field label={provider.kind === "codex-local" ? "Codex command access" : "Claude command access"}>
+                          <Field label={`${provider.kind === "codex-local" ? "Codex" : provider.kind === "claude-local" ? "Claude" : "OpenCode"} command access`}>
                             <Select
                               value={provider.localSandbox ?? "read-only"}
                               onValueChange={(value) => updateProvider(provider.id, {
@@ -2828,16 +2820,20 @@ export function ProjectToolbar({
                           </Field>
                           <small>{provider.kind === "codex-local"
                             ? codexLocalCommandAccessHint
-                            : "Claude Code uses permission modes instead of a true filesystem sandbox. ArchiCode maps these access levels to read-only planning, auto-accepted workspace edits, or full bypass mode."}</small>
+                            : provider.kind === "claude-local"
+                              ? "Claude Code uses permission modes instead of a true filesystem sandbox. ArchiCode maps these access levels to read-only planning, auto-accepted workspace edits, or full bypass mode."
+                              : "OpenCode runs once per request. Write-capable build phases add --auto; use OpenCode permissions/config for finer-grained tool restrictions."}</small>
                           <Switch
                             checked={Boolean(provider.ephemeral)}
                             onCheckedChange={(checked) => updateProvider(provider.id, { ephemeral: checked })}
-                            label={provider.kind === "codex-local" ? "Use throwaway Codex sessions" : "Disable Claude session persistence"}
+                            label={provider.kind === "codex-local" ? "Use throwaway Codex sessions" : provider.kind === "claude-local" ? "Disable Claude session persistence" : "Delete OpenCode sessions after each call"}
                           />
                           <small>
                             {provider.kind === "codex-local"
                               ? <>Adds <code>--ephemeral</code> for local Codex runs. ArchiCode still saves runs and artifacts, but Codex should not reuse or save its own CLI session state.</>
-                              : <>Adds <code>--no-session-persistence</code> for local Claude runs. ArchiCode still saves runs and artifacts, but Claude should not reuse or save its own CLI session state.</>}
+                              : provider.kind === "claude-local"
+                                ? <>Adds <code>--no-session-persistence</code> for local Claude runs. ArchiCode still saves runs and artifacts, but Claude should not reuse or save its own CLI session state.</>
+                                : <>Runs <code>opencode session delete</code> after the one-shot response. ArchiCode still saves its own runs and artifacts.</>}
                           </small>
                         </>
                       ) : (

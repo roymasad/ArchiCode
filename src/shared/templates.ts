@@ -108,7 +108,7 @@ export const flutterRunTargetProfiles: RunTargetProfile[] = [
 ];
 
 export function createProjectFromTemplate(rootPath: string, templateId: ProjectTemplateId): { project: Project; flow: Flow } {
-  const seed = createSeedProject(rootPath);
+  const seed = createSeedProject(rootPath, { includeProviderTemplates: false });
   const now = new Date().toISOString();
   const baseProject: Project = {
     ...seed.project,
