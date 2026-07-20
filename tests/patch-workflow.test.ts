@@ -3,12 +3,12 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { applyPatchProposal, listPatchProposals } from "../src/main/storage/patches";
-import { ensureProject, loadProject, updateProjectSettings } from "../src/main/storage/projectStore";
+import { ensureFixtureProject, loadProject, updateProjectSettings } from "../src/main/storage/projectStore";
 import { persistAndMaybeApplyPatchProposal } from "../src/main/storage/runEngine";
 
 async function createProjectWithProposal(kind: "unlocked" | "locked") {
   const projectRoot = await mkdtemp(path.join(os.tmpdir(), "archicode-patch-test-"));
-  await ensureProject(projectRoot);
+  await ensureFixtureProject(projectRoot);
   await mkdir(path.join(projectRoot, ".archicode", "artifacts"), { recursive: true });
 
   const nodeId = kind === "locked" ? "node-approved-contract" : "node-project";
@@ -49,7 +49,7 @@ async function createProjectWithProposal(kind: "unlocked" | "locked") {
 describe("patch proposal workflow", () => {
   it("preserves unusable provider handoffs as recoverable proposal artifacts", async () => {
     const projectRoot = await mkdtemp(path.join(os.tmpdir(), "archicode-invalid-handoff-test-"));
-    await ensureProject(projectRoot);
+    await ensureFixtureProject(projectRoot);
 
     const persisted = await persistAndMaybeApplyPatchProposal(projectRoot, "run-invalid", JSON.stringify({
       archicodePatch: {
@@ -69,7 +69,7 @@ describe("patch proposal workflow", () => {
 
   it("auto-applies safe graph bookkeeping patches and logs skipped content edits", async () => {
     const projectRoot = await mkdtemp(path.join(os.tmpdir(), "archicode-patch-auto-test-"));
-    await ensureProject(projectRoot);
+    await ensureFixtureProject(projectRoot);
 
     const output = JSON.stringify({
       archicodePatch: {
@@ -123,7 +123,7 @@ describe("patch proposal workflow", () => {
 
   it("auto-applies normalized LLM question notes instead of preserving them as invalid handoffs", async () => {
     const projectRoot = await mkdtemp(path.join(os.tmpdir(), "archicode-question-normalize-test-"));
-    await ensureProject(projectRoot);
+    await ensureFixtureProject(projectRoot);
 
     const output = [
       "Decision: ask_questions",
@@ -169,7 +169,7 @@ describe("patch proposal workflow", () => {
 
   it("skips planning questions when plan review is automatic", async () => {
     const projectRoot = await mkdtemp(path.join(os.tmpdir(), "archicode-question-auto-plan-test-"));
-    await ensureProject(projectRoot);
+    await ensureFixtureProject(projectRoot);
 
     const output = JSON.stringify({
       archicodePatch: {
@@ -205,7 +205,7 @@ describe("patch proposal workflow", () => {
 
   it("does not duplicate identical open LLM questions on repeated handoffs", async () => {
     const projectRoot = await mkdtemp(path.join(os.tmpdir(), "archicode-question-dedupe-test-"));
-    await ensureProject(projectRoot);
+    await ensureFixtureProject(projectRoot);
 
     const output = JSON.stringify({
       archicodePatch: {
@@ -242,7 +242,7 @@ describe("patch proposal workflow", () => {
 
   it("keeps LLM approval attempts out of auto-apply and fails them if accepted", async () => {
     const projectRoot = await mkdtemp(path.join(os.tmpdir(), "archicode-patch-approval-test-"));
-    const initial = await ensureProject(projectRoot);
+    const initial = await ensureFixtureProject(projectRoot);
     await updateProjectSettings(projectRoot, {
       ...initial.project.settings,
       planningReviewMode: "manual"
@@ -292,7 +292,7 @@ describe("patch proposal workflow", () => {
 
   it("keeps proposed graph structure pending until accepted", async () => {
     const projectRoot = await mkdtemp(path.join(os.tmpdir(), "archicode-structure-proposal-test-"));
-    const initial = await ensureProject(projectRoot);
+    const initial = await ensureFixtureProject(projectRoot);
     await updateProjectSettings(projectRoot, {
       ...initial.project.settings,
       planningReviewMode: "manual"
@@ -349,7 +349,7 @@ describe("patch proposal workflow", () => {
 
   it("does not leave planning graph proposals pending when plan review is automatic", async () => {
     const projectRoot = await mkdtemp(path.join(os.tmpdir(), "archicode-plan-auto-structure-test-"));
-    await ensureProject(projectRoot);
+    await ensureFixtureProject(projectRoot);
 
     const output = JSON.stringify({
       archicodePatch: {
@@ -385,7 +385,7 @@ describe("patch proposal workflow", () => {
 
   it("rejects proposed nodes that arrive pre-approved", async () => {
     const projectRoot = await mkdtemp(path.join(os.tmpdir(), "archicode-proposed-approval-test-"));
-    await ensureProject(projectRoot);
+    await ensureFixtureProject(projectRoot);
 
     const output = JSON.stringify({
       archicodePatch: {
@@ -421,7 +421,7 @@ describe("patch proposal workflow", () => {
 
   it("carries acceptance checks and module binding on a proposed new node", async () => {
     const projectRoot = await mkdtemp(path.join(os.tmpdir(), "archicode-proposed-checks-test-"));
-    await ensureProject(projectRoot);
+    await ensureFixtureProject(projectRoot);
 
     const output = JSON.stringify({
       archicodePatch: {
@@ -467,7 +467,7 @@ describe("patch proposal workflow", () => {
 
   it("auto-resolves project convention file proposals", async () => {
     const projectRoot = await mkdtemp(path.join(os.tmpdir(), "archicode-file-proposal-test-"));
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
       patchReviewMode: "manual"
@@ -500,7 +500,7 @@ describe("patch proposal workflow", () => {
 
   it("auto-applies safe source scaffold proposals when code review is automatic", async () => {
     const projectRoot = await mkdtemp(path.join(os.tmpdir(), "archicode-source-auto-proposal-test-"));
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
       codeReviewMode: "auto-apply",
@@ -542,7 +542,7 @@ describe("patch proposal workflow", () => {
 
   it("auto-applies run target profile proposals", async () => {
     const projectRoot = await mkdtemp(path.join(os.tmpdir(), "archicode-run-profile-proposal-test-"));
-    await ensureProject(projectRoot);
+    await ensureFixtureProject(projectRoot);
 
     const output = JSON.stringify({
       archicodePatch: {

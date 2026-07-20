@@ -15,7 +15,7 @@ import {
   setWebSearchSecretResolver
 } from "../src/main/internalTools";
 import { readArtifactText } from "../src/main/storage/patches";
-import { ensureProject, loadProject, updateNode, updateProjectSettings } from "../src/main/storage/projectStore";
+import { ensureFixtureProject, loadProject, updateNode, updateProjectSettings } from "../src/main/storage/projectStore";
 import { runInternalConsoleCommand } from "../src/main/storage/runEngine";
 import { createSeedProject } from "../src/shared/fixtures";
 import { codeKnowledgeSnapshotSchema } from "../src/shared/codeKnowledge";
@@ -126,7 +126,7 @@ describe("ArchiCode internal provider tools", () => {
 
   it("reads, creates, edits, and attaches reusable rules through the Research-only internal tool", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-rules-tool-"));
-    const initial = await ensureProject(projectRoot);
+    const initial = await ensureFixtureProject(projectRoot);
     const env = {
       projectRoot,
       settings: initial.project.settings,
@@ -191,7 +191,7 @@ describe("ArchiCode internal provider tools", () => {
 
   it("lets run agents inspect current flow violations without granting rule mutation access", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-run-rule-reads-"));
-    const initial = await ensureProject(projectRoot);
+    const initial = await ensureFixtureProject(projectRoot);
     const now = "2026-07-16T10:00:00.000Z";
     const rule = nodeRuleSchema.parse({
       id: "rule-boundary",
@@ -313,7 +313,7 @@ describe("ArchiCode internal provider tools", () => {
     const env = {
       projectRoot: "/tmp/archicode-tools",
       settings,
-      loadProject: async () => ensureProject("/tmp/archicode-tools"),
+      loadProject: async () => ensureFixtureProject("/tmp/archicode-tools"),
       readArtifactText: async () => ""
     };
 
@@ -356,7 +356,7 @@ describe("ArchiCode internal provider tools", () => {
     const env = {
       projectRoot: "/tmp/archicode-tools",
       settings,
-      loadProject: async () => ensureProject("/tmp/archicode-tools"),
+      loadProject: async () => ensureFixtureProject("/tmp/archicode-tools"),
       readArtifactText: async () => "",
       resolveWebSearchApiKey: async () => "brave-test-key"
     };
@@ -374,7 +374,7 @@ describe("ArchiCode internal provider tools", () => {
 
   it("reads and searches project files with secret redaction", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-internal-tools-"));
-    await ensureProject(projectRoot);
+    await ensureFixtureProject(projectRoot);
     await writeFile(path.join(projectRoot, "README.md"), "Hello tool parity\n", "utf8");
     await writeFile(path.join(projectRoot, ".env"), "OPENAI_API_KEY=sk-secretsecretsecret\n", "utf8");
     const settings = (await loadProject(projectRoot)).project.settings;
@@ -401,7 +401,7 @@ describe("ArchiCode internal provider tools", () => {
 
   it("recovers near-miss project file paths instead of hard failing", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-internal-file-alias-"));
-    await ensureProject(projectRoot);
+    await ensureFixtureProject(projectRoot);
     await mkdir(path.join(projectRoot, "src"), { recursive: true });
     await writeFile(path.join(projectRoot, "src", "styles.css"), "body { color: red; }\n", "utf8");
     const settings = (await loadProject(projectRoot)).project.settings;
@@ -424,7 +424,7 @@ describe("ArchiCode internal provider tools", () => {
 
   it("recovers near-miss artifact references by filename stem", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-internal-artifact-alias-"));
-    await ensureProject(projectRoot);
+    await ensureFixtureProject(projectRoot);
     const artifactPath = path.join(projectRoot, ".archicode", "artifacts", "run-alias-plan.json");
     await writeFile(artifactPath, JSON.stringify({
       id: "plan-alias-123",
@@ -454,7 +454,7 @@ describe("ArchiCode internal provider tools", () => {
 
   it("returns full plan artifact JSON for plan previews instead of unwrapping only the raw planner text", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-plan-preview-"));
-    await ensureProject(projectRoot);
+    await ensureFixtureProject(projectRoot);
     const artifactPath = path.join(projectRoot, ".archicode", "artifacts", "run-preview-plan.json");
     await writeFile(artifactPath, JSON.stringify({
       id: "plan-preview-1",
@@ -479,7 +479,7 @@ describe("ArchiCode internal provider tools", () => {
   it("runs low-risk commands and routes an unapproved runtime action through the shared broker", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-internal-console-"));
     const settings = {
-      ...(await ensureProject(projectRoot)).project.settings,
+      ...(await ensureFixtureProject(projectRoot)).project.settings,
       autoApproveShellCommands: false
     };
 
@@ -500,7 +500,7 @@ describe("ArchiCode internal provider tools", () => {
   it("requires approval for strengthened medium and high risk console commands", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-internal-console-risk-"));
     const settings = {
-      ...(await ensureProject(projectRoot)).project.settings,
+      ...(await ensureFixtureProject(projectRoot)).project.settings,
       autoApproveShellCommands: false
     };
 
@@ -519,7 +519,7 @@ describe("ArchiCode internal provider tools", () => {
 
   it("still requires approval for high-risk console commands when shell auto-approve is enabled", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-internal-console-high-auto-approve-"));
-    const settings = (await ensureProject(projectRoot)).project.settings;
+    const settings = (await ensureFixtureProject(projectRoot)).project.settings;
 
     const high = await runInternalConsoleCommand(projectRoot, settings, {
       command: "git push --force origin main"
@@ -531,7 +531,7 @@ describe("ArchiCode internal provider tools", () => {
 
   it("executes a gated console command once the user grants approval", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-internal-console-approved-"));
-    const settings = (await ensureProject(projectRoot)).project.settings;
+    const settings = (await ensureFixtureProject(projectRoot)).project.settings;
 
     // High risk (interpreter with inline script): gated without approval...
     const gated = await runInternalConsoleCommand(projectRoot, settings, {
@@ -549,7 +549,7 @@ describe("ArchiCode internal provider tools", () => {
 
   it("lets agents query the local code graph through bounded results", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-code-graph-tool-"));
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     await writeCodeKnowledgeSnapshot(projectRoot, codeKnowledgeFixture());
     const result = await callArchicodeInternalTool({
       projectRoot,
@@ -573,7 +573,7 @@ describe("ArchiCode internal provider tools", () => {
     const outputDir = await mkdtemp(path.join(tmpdir(), "archicode-internal-mcp-server-"));
     await mkdir(path.join(projectRoot, "src"), { recursive: true });
     await writeFile(path.join(projectRoot, "src", "main.ts"), "export const answer = 42;\n", "utf8");
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     await writeCodeKnowledgeSnapshot(projectRoot, codeKnowledgeFixture());
     const mcpServer = await createArchicodeInternalMcpServer(projectRoot, bundle.project.settings, outputDir);
     const client = new Client({ name: "archicode-test", version: "0.1.1" }, { capabilities: {} });
@@ -631,7 +631,7 @@ describe("ArchiCode internal provider tools", () => {
   it("passes the Brave Search API key to the generated internal MCP server when Brave search is enabled", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-internal-mcp-env-project-"));
     const outputDir = await mkdtemp(path.join(tmpdir(), "archicode-internal-mcp-env-server-"));
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     setWebSearchSecretResolver(async () => "brave-secret");
 
     const server = await createArchicodeInternalMcpServer(projectRoot, {
@@ -647,7 +647,7 @@ describe("ArchiCode internal provider tools", () => {
 
   it("preserves explicitly disabled built-in tool settings", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-internal-settings-"));
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     const updated = await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
       agentTools: {

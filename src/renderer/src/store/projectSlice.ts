@@ -215,7 +215,21 @@ export const createProjectSlice = (set: StoreSet, get: StoreGet): Pick<Archicode
         loading: false
       }));
     } catch (error) {
-      set({ error: String(error), loading: false });
+      let recentProjects = [] as RecentProjectEntry[];
+      try {
+        recentProjects = await window.archicode.listRecentProjects();
+      } catch {
+        // Keep the original restore failure as the error shown to the user.
+      }
+      set({
+        ...projectScopedResetState(),
+        rootPath: "",
+        bundle: null,
+        recentProjects,
+        activeFlowId: null,
+        loading: false,
+        error: error instanceof Error ? error.message : String(error)
+      });
     }
   },
 

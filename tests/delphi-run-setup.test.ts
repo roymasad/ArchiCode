@@ -2,7 +2,7 @@ import { access, mkdir, mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ensureProject, loadProject, updateProjectSettings } from "../src/main/storage/projectStore";
+import { ensureFixtureProject, loadProject, updateProjectSettings } from "../src/main/storage/projectStore";
 import { approveRun, startAgentRun } from "../src/main/storage/runEngine";
 import type { Run } from "../src/shared/schema";
 
@@ -74,7 +74,7 @@ describe("Delphi managed setup in build/debug runs", () => {
       });
     }));
     const root = await mkdtemp(path.join(tmpdir(), "archicode-delphi-run-setup-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       stopOnUnansweredQuestions: false,
@@ -132,7 +132,7 @@ describe("Delphi managed setup in build/debug runs", () => {
       });
     }));
     const root = await mkdtemp(path.join(tmpdir(), "archicode-delphi-run-target-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       stopOnUnansweredQuestions: false,
@@ -202,7 +202,7 @@ describe("Delphi managed setup in build/debug runs", () => {
       private: true,
       scripts: { "test:delphi": "node -e \"console.log('ok')\"" }
     }), "utf8");
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       autoApproveShellCommands: false,
@@ -260,7 +260,7 @@ describe("Delphi managed setup in build/debug runs", () => {
     await mkdir(path.join(root, "node_modules", "playwright"), { recursive: true });
     await writeFile(path.join(root, "package.json"), JSON.stringify({ private: true }), "utf8");
     await writeFile(path.join(root, "node_modules", "playwright", "package.json"), JSON.stringify({ name: "playwright" }), "utf8");
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       stopOnUnansweredQuestions: false,
@@ -341,7 +341,7 @@ describe("Delphi managed setup in build/debug runs", () => {
     await mkdir(path.join(root, "node_modules", "playwright"), { recursive: true });
     await writeFile(path.join(root, "package.json"), JSON.stringify({ private: true }), "utf8");
     await writeFile(path.join(root, "node_modules", "playwright", "package.json"), JSON.stringify({ name: "playwright" }), "utf8");
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       stopOnUnansweredQuestions: false,

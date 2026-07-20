@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildCodexLocalArgs } from "../src/main/providers/localCli";
-import { ensureProject, loadProject, updateProjectSettings } from "../src/main/storage/projectStore";
+import { ensureFixtureProject, loadProject, updateProjectSettings } from "../src/main/storage/projectStore";
 import { startAgentRun } from "../src/main/storage/runEngine";
 import { createSeedProject } from "../src/shared/fixtures";
 
@@ -41,7 +41,7 @@ describe("web search controls", () => {
   it("records web search as allowed by default", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-web-denied-"));
     const command = await createFakeCodex(root);
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       providers: bundle.project.settings.providers.map((provider) => provider.id === "codex-local"
@@ -63,7 +63,7 @@ describe("web search controls", () => {
   it("records web search as denied when disabled", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-web-allowed-"));
     const command = await createFakeCodex(root);
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       providers: bundle.project.settings.providers.map((provider) => provider.id === "codex-local"

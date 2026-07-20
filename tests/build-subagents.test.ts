@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyPatchProposal, listPatchProposals } from "../src/main/storage/patches";
-import { ensureProject, loadProject, updateProjectSettings } from "../src/main/storage/projectStore";
+import { ensureFixtureProject, loadProject, updateProjectSettings } from "../src/main/storage/projectStore";
 import { callProviderForRun, executeRunSubagentTool, extractLocalProviderSubagentRequest, runSubagentTools } from "../src/main/storage/runEngine";
 import { listRuntimeServices } from "../src/main/storage/runtimeServices";
 import { llmPatchProposalSchema, runSchema } from "../src/shared/schema";
@@ -38,7 +38,7 @@ function sseToolResponse(name: string, input: unknown = {}): Response {
 
 async function setupBuildRun() {
   const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-build-subagent-"));
-  const bundle = await ensureProject(projectRoot);
+  const bundle = await ensureFixtureProject(projectRoot);
   process.env.ANTHROPIC_BUILD_SUBAGENT_TEST_KEY = "test";
   const settings = {
     ...bundle.project.settings,
@@ -300,7 +300,7 @@ if (outputPath) fs.writeFileSync(outputPath, output, "utf8");
 process.stdout.write(output + "\\n");
 `, "utf8");
     await chmod(commandPath, 0o755);
-    const initial = await ensureProject(projectRoot);
+    const initial = await ensureFixtureProject(projectRoot);
     const settings = {
       ...initial.project.settings,
       providers: initial.project.settings.providers.map((provider) => provider.kind === "codex-local"
@@ -371,7 +371,7 @@ if (outputPath) fs.writeFileSync(outputPath, output, "utf8");
 process.stdout.write(output + "\\n");
 `, "utf8");
     await chmod(commandPath, 0o755);
-    const initial = await ensureProject(projectRoot);
+    const initial = await ensureFixtureProject(projectRoot);
     await writeFile(path.join(projectRoot, "package.json"), JSON.stringify({ private: true }), "utf8");
     const settings = {
       ...initial.project.settings,

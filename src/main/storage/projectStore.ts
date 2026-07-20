@@ -625,13 +625,17 @@ export async function applyGlobalMcpSettings(project: Project): Promise<Project>
   });
 }
 
-export async function ensureProject(projectRoot: string): Promise<ProjectBundle> {
+/**
+ * Test-only seeded project initializer. Production code must use
+ * ensureProject(), which creates an empty codebase map.
+ */
+export async function ensureFixtureProject(projectRoot: string): Promise<ProjectBundle> {
   await ensureProjectDirectories(projectRoot);
   await ensureArchicodeGitignore(projectRoot);
 
   const projectFile = projectStatePath(projectRoot, "project.json");
   if (!(await exists(projectFile))) {
-    const seed = createSeedProject(projectRoot, { includeProviderTemplates: false });
+    const seed = createSeedProject(projectRoot);
     const project = applyCommandSettings(applyRuntimeProviderDefaults(seed.project), await inferCommandSettings(projectRoot));
     await writeProjectFiles(projectRoot, project);
     await writeJson(projectStatePath(projectRoot, "flows", `${seed.flow.id}.json`), seed.flow);
@@ -657,6 +661,10 @@ export async function ensureProject(projectRoot: string): Promise<ProjectBundle>
   const bundle = await loadProject(projectRoot);
   await migrateLegacyGeneratedAgentInstructions(projectRoot, bundle).catch(() => false);
   return bundle;
+}
+
+export async function ensureProject(projectRoot: string): Promise<ProjectBundle> {
+  return ensureEmptyCodebaseProject(projectRoot);
 }
 
 export async function ensureEmptyCodebaseProject(projectRoot: string): Promise<ProjectBundle> {
@@ -978,7 +986,9 @@ export async function loadProject(projectRoot: string): Promise<ProjectBundle> {
   const graphChangesRaw = await readGraphChanges(projectRoot);
   const policyEvaluation = await readArchitecturePolicyEvaluation(projectRoot);
 
-  const fallback = createSeedProject(projectRoot, { includeProviderTemplates: false });
+  // Recovery must never substitute the internal QA harness for missing or
+  // invalid user data. Keep the project openable with a truthful empty map.
+  const fallback = createEmptyCodebaseProject(projectRoot);
   const diskProject = safeParseOne("project.json", projectSchema, projectRaw, validationErrors) ?? fallback.project;
   const localProjectState = await readLocalProjectState(projectRoot);
   let project = applyLocalProjectState(projectRoot, diskProject, localProjectState);

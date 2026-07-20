@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { reconcileRuntimeProfilesWithLlm } from "../src/main/storage/commandInference";
 import { addNote, attachNodeReferences } from "../src/main/storage/notes";
 import { applyPatchProposal, evaluateSourceFileSafety, listPatchProposals } from "../src/main/storage/patches";
-import { ensureProject, loadProject, updateProjectSettings } from "../src/main/storage/projectStore";
+import { ensureFixtureProject, loadProject, updateProjectSettings } from "../src/main/storage/projectStore";
 import { approveRun, dismissRunError, persistAndMaybeApplyPatchProposal, rejectRun, reportBug, startAgentRun, startDebuggingRun, startIncidentDebugRun, updateBugIncident } from "../src/main/storage/runEngine";
 import { runSchema, type ProjectBundle, type Run } from "../src/shared/schema";
 
@@ -76,7 +76,7 @@ describe("source file proposal workflow", () => {
     process.env.ARCHICODE_TEST_OPENAI_KEY = "test-key";
     mockOpenAIResponses();
     const root = await mkdtemp(path.join(tmpdir(), "archicode-api-source-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       stopOnUnansweredQuestions: false,
@@ -210,7 +210,7 @@ describe("source file proposal workflow", () => {
       }), { status: 200, headers: { "Content-Type": "application/json" } });
     }));
     const root = await mkdtemp(path.join(tmpdir(), "archicode-structured-source-fast-path-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       stopOnUnansweredQuestions: false,
@@ -282,7 +282,7 @@ describe("source file proposal workflow", () => {
       }), { status: 200, headers: { "Content-Type": "application/json" } });
     }));
     const root = await mkdtemp(path.join(tmpdir(), "archicode-structured-source-stale-gate-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       stopOnUnansweredQuestions: false,
@@ -368,7 +368,7 @@ describe("source file proposal workflow", () => {
       }), { status: 200, headers: { "Content-Type": "application/json" } });
     }));
     const root = await mkdtemp(path.join(tmpdir(), "archicode-chat-source-stale-gate-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       stopOnUnansweredQuestions: false,
@@ -450,7 +450,7 @@ describe("source file proposal workflow", () => {
       }), { status: 200, headers: { "Content-Type": "application/json" } });
     }));
     const root = await mkdtemp(path.join(tmpdir(), "archicode-console-approval-pause-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       stopOnUnansweredQuestions: false,
@@ -547,7 +547,7 @@ describe("source file proposal workflow", () => {
       }), { status: 200, headers: { "Content-Type": "application/json" } });
     }));
     const root = await mkdtemp(path.join(tmpdir(), "archicode-structured-source-targeted-retry-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       stopOnUnansweredQuestions: false,
@@ -654,7 +654,7 @@ describe("source file proposal workflow", () => {
       });
     }));
     const root = await mkdtemp(path.join(tmpdir(), "archicode-planning-tool-repair-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       stopOnUnansweredQuestions: false,
@@ -681,7 +681,7 @@ describe("source file proposal workflow", () => {
   it("normalizes an absolute project-root cwd for the built-in console without failing implementation", async () => {
     process.env.ARCHICODE_TEST_OPENAI_KEY = "test-key";
     const root = await mkdtemp(path.join(tmpdir(), "archicode-console-cwd-normalize-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     vi.stubGlobal("fetch", vi.fn(async (_url: string, init?: RequestInit) => {
       const body = JSON.parse(String(init?.body ?? "{}")) as {
         input?: string | Array<{ output?: string }>;
@@ -799,7 +799,7 @@ describe("source file proposal workflow", () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-run-note-image-"));
     const imagePath = path.join(root, "reference.png");
     await writeTinyPng(imagePath);
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       stopOnUnansweredQuestions: false,
@@ -844,7 +844,7 @@ describe("source file proposal workflow", () => {
     process.env.ARCHICODE_TEST_OPENAI_KEY = "test-key";
     mockOpenAIResponses();
     const root = await mkdtemp(path.join(tmpdir(), "archicode-api-preparing-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       stopOnUnansweredQuestions: false,
@@ -905,7 +905,7 @@ describe("source file proposal workflow", () => {
       });
     }));
     const root = await mkdtemp(path.join(tmpdir(), "archicode-api-no-scope-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       stopOnUnansweredQuestions: false,
@@ -948,7 +948,7 @@ describe("source file proposal workflow", () => {
       });
     }));
     const root = await mkdtemp(path.join(tmpdir(), "archicode-runtime-contract-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await writeFile(path.join(root, "package.json"), JSON.stringify({
       scripts: {
         dev: "vite --host 127.0.0.1",
@@ -975,7 +975,7 @@ describe("source file proposal workflow", () => {
     const fetchMock = vi.fn();
     vi.stubGlobal("fetch", fetchMock);
     const root = await mkdtemp(path.join(tmpdir(), "archicode-locked-targets-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await writeFile(path.join(root, "package.json"), JSON.stringify({
       scripts: { dev: "vite", build: "vite build" }
     }), "utf8");
@@ -1053,7 +1053,7 @@ describe("source file proposal workflow", () => {
       });
     }));
     const root = await mkdtemp(path.join(tmpdir(), "archicode-runtime-repair-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await writeFile(path.join(root, "package.json"), JSON.stringify({
       scripts: {
         dev: "vite --host 127.0.0.1",
@@ -1141,7 +1141,7 @@ describe("source file proposal workflow", () => {
       });
     }));
     const root = await mkdtemp(path.join(tmpdir(), "archicode-api-source-batches-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       stopOnUnansweredQuestions: false,
@@ -1233,7 +1233,7 @@ describe("source file proposal workflow", () => {
       });
     }));
     const root = await mkdtemp(path.join(tmpdir(), "archicode-planned-task-advance-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       stopOnUnansweredQuestions: false,
@@ -1317,7 +1317,7 @@ describe("source file proposal workflow", () => {
       }), { status: 200, headers: { "Content-Type": "application/json" } });
     }));
     const root = await mkdtemp(path.join(tmpdir(), "archicode-complete-noop-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       stopOnUnansweredQuestions: false,
@@ -1409,7 +1409,7 @@ describe("source file proposal workflow", () => {
       }), { status: 200, headers: { "Content-Type": "application/json" } });
     }));
     const root = await mkdtemp(path.join(tmpdir(), "archicode-same-run-delete-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       stopOnUnansweredQuestions: false,
@@ -1485,7 +1485,7 @@ describe("source file proposal workflow", () => {
         }), { status: 200, headers: { "Content-Type": "application/json" } });
       }));
       const root = await mkdtemp(path.join(tmpdir(), `archicode-delete-${decision}-`));
-      const bundle = await ensureProject(root);
+      const bundle = await ensureFixtureProject(root);
       await mkdir(path.join(root, "existing"), { recursive: true });
       await writeFile(path.join(root, "existing/user-file.custom"), "user-owned\n", "utf8");
       await updateProjectSettings(root, {
@@ -1572,7 +1572,7 @@ describe("source file proposal workflow", () => {
       }), { status: 200, headers: { "Content-Type": "application/json" } });
     }));
     const root = await mkdtemp(path.join(tmpdir(), "archicode-build-typecheck-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     // Local stub so `npm exec tsc -- -b` (derived from the build script) runs offline.
     await mkdir(path.join(root, "node_modules", ".bin"), { recursive: true });
     await writeFile(path.join(root, "node_modules", ".bin", "tsc"), "#!/usr/bin/env node\nprocess.exit(0);\n");
@@ -1657,7 +1657,7 @@ describe("source file proposal workflow", () => {
       }), { status: 200, headers: { "Content-Type": "application/json" } });
     }));
     const root = await mkdtemp(path.join(tmpdir(), "archicode-empty-retry-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       stopOnUnansweredQuestions: false,
@@ -1747,7 +1747,7 @@ describe("source file proposal workflow", () => {
       });
     }));
     const root = await mkdtemp(path.join(tmpdir(), "archicode-batch-auto-extend-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       stopOnUnansweredQuestions: false,
@@ -1840,7 +1840,7 @@ describe("source file proposal workflow", () => {
       });
     }));
     const root = await mkdtemp(path.join(tmpdir(), "archicode-targeted-verification-repair-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await writeFile(path.join(root, "verify.cjs"), [
       "const fs = require('fs');",
       "if (!fs.existsSync('src/verified.ready')) process.exit(1);",
@@ -1934,7 +1934,7 @@ describe("source file proposal workflow", () => {
       });
     }));
     const root = await mkdtemp(path.join(tmpdir(), "archicode-planned-source-batches-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await mkdir(path.join(root, "node_modules"), { recursive: true });
     await writeFile(path.join(root, "package.json"), JSON.stringify({
       scripts: {
@@ -2017,7 +2017,7 @@ describe("source file proposal workflow", () => {
       });
     }));
     const root = await mkdtemp(path.join(tmpdir(), "archicode-needs-replan-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       stopOnUnansweredQuestions: false,
@@ -2042,7 +2042,7 @@ describe("source file proposal workflow", () => {
 
   it("auto-rejects planning-time source proposals instead of asking for file review", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-planning-source-hold-"));
-    await ensureProject(root);
+    await ensureFixtureProject(root);
     const output = JSON.stringify({
       archicodePatch: {
         schemaVersion: 1,
@@ -2075,7 +2075,7 @@ describe("source file proposal workflow", () => {
 
   it("auto-resolves source proposals that already match files written by the provider", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-source-already-written-"));
-    await ensureProject(root);
+    await ensureFixtureProject(root);
     await mkdir(path.join(root, "src"), { recursive: true });
     await writeFile(path.join(root, "src/already.ts"), "export const already = true;\n", "utf8");
     const output = JSON.stringify({
@@ -2105,7 +2105,7 @@ describe("source file proposal workflow", () => {
 
   it("records a source diff when a pending source proposal is applied", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-source-apply-diff-"));
-    await ensureProject(root);
+    await ensureFixtureProject(root);
     const output = JSON.stringify({
       archicodePatch: {
         schemaVersion: 1,
@@ -2168,7 +2168,7 @@ describe("source file proposal workflow", () => {
       });
     }));
     const root = await mkdtemp(path.join(tmpdir(), "archicode-no-source-change-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       stopOnUnansweredQuestions: false,
@@ -2213,7 +2213,7 @@ describe("source file proposal workflow", () => {
       });
     }));
     const root = await mkdtemp(path.join(tmpdir(), "archicode-build-discovery-no-change-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await writeFile(path.join(root, "package.json"), JSON.stringify({
       scripts: {
         test: "node --test"
@@ -2245,7 +2245,7 @@ describe("source file proposal workflow", () => {
 
   it("applies review-required source file proposals instead of showing them as graph review", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-unsafe-source-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       codeReviewMode: "manual"
@@ -2275,7 +2275,7 @@ describe("source file proposal workflow", () => {
 
   it("rejects path traversal source file proposals", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-source-safety-"));
-    await ensureProject(root);
+    await ensureFixtureProject(root);
     const safety = await evaluateSourceFileSafety(root, {
       kind: "propose-source-file",
       path: "../outside.ts",
@@ -2290,7 +2290,7 @@ describe("source file proposal workflow", () => {
 
   it("auto-deletes only unchanged artifacts recorded by managed verification, independent of stack", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-generated-cleanup-"));
-    await ensureProject(root);
+    await ensureFixtureProject(root);
     await mkdir(path.join(root, "generated"), { recursive: true });
     await mkdir(path.join(root, "Sources"), { recursive: true });
     await mkdir(path.join(root, "src"), { recursive: true });
@@ -2371,7 +2371,7 @@ describe("source file proposal workflow", () => {
 
   it("recovers stack-neutral generated-artifact provenance from legacy verification checkpoints", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-legacy-generated-cleanup-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await mkdir(path.join(root, "generated"), { recursive: true });
     const generatedPath = "generated/opaque-output.custom";
     await writeFile(path.join(root, generatedPath), "opaque verification output\n", "utf8");
@@ -2433,7 +2433,7 @@ describe("source file proposal workflow", () => {
 
   it("surfaces malformed provider handoffs as recoverable proposals", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-invalid-handoff-"));
-    await ensureProject(root);
+    await ensureFixtureProject(root);
     const output = JSON.stringify({
       archicodePatch: {
         schemaVersion: 1,
@@ -2461,7 +2461,7 @@ describe("source file proposal workflow", () => {
 
   it("surfaces malformed direct provider handoffs as recoverable proposals", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-invalid-direct-handoff-"));
-    await ensureProject(root);
+    await ensureFixtureProject(root);
     const output = JSON.stringify({
       schemaVersion: 1,
       summary: "Broken direct handoff.",
@@ -2488,7 +2488,7 @@ describe("source file proposal workflow", () => {
 
   it("treats convention files as normal coding source-file proposals", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-convention-source-files-"));
-    await ensureProject(root);
+    await ensureFixtureProject(root);
     const output = JSON.stringify({
       archicodePatch: {
         schemaVersion: 1,
@@ -2535,7 +2535,7 @@ describe("source file proposal workflow", () => {
 
   it("auto-applies direct fenced coding handoffs with array notes", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-direct-source-handoff-"));
-    await ensureProject(root);
+    await ensureFixtureProject(root);
     const output = [
       "```json",
       JSON.stringify({
@@ -2576,7 +2576,7 @@ describe("source file proposal workflow", () => {
 
   it("salvages valid coding source proposals and quarantines optional non-source metadata", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-source-quarantine-"));
-    await ensureProject(root);
+    await ensureFixtureProject(root);
     const output = JSON.stringify({
       archicodePatch: {
         schemaVersion: 1,
@@ -2638,7 +2638,7 @@ describe("source file proposal workflow", () => {
 
   it("auto-applies a new package.json scaffold but still reviews replacements", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-package-scaffold-"));
-    await ensureProject(root);
+    await ensureFixtureProject(root);
 
     const createSafety = await evaluateSourceFileSafety(root, {
       kind: "propose-source-file",
@@ -2662,7 +2662,7 @@ describe("source file proposal workflow", () => {
 
   it("creates explicit debugging runs for failed work", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-debug-run-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       providers: bundle.project.settings.providers.map((provider) => provider.id === "openai-compatible"
@@ -2712,7 +2712,7 @@ describe("source file proposal workflow", () => {
 
   it("stores manual bug reports as open debug incidents", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-report-bug-"));
-    await ensureProject(root);
+    await ensureFixtureProject(root);
 
     const bundle = await reportBug({
       projectRoot: root,
@@ -2736,7 +2736,7 @@ describe("source file proposal workflow", () => {
 
   it("edits and resolves manual bug reports", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-edit-bug-"));
-    await ensureProject(root);
+    await ensureFixtureProject(root);
     const reported = await reportBug({
       projectRoot: root,
       flowId: "flow-main",
@@ -2764,7 +2764,7 @@ describe("source file proposal workflow", () => {
 
   it("starts incident debugging with only the selected bug reports", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-selected-bugs-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       providers: bundle.project.settings.providers.map((provider) => provider.id === "openai-compatible"
@@ -2789,7 +2789,7 @@ describe("source file proposal workflow", () => {
 
   it("starts incident debugging from open bug notes and reports", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-incident-debug-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       providers: bundle.project.settings.providers.map((provider) => provider.id === "openai-compatible"

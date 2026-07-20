@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearNodeAcceptanceTests, recordAcceptanceCheckResults, runNodeAcceptanceChecks, verifyRunAcceptanceChecks } from "../src/main/storage/acceptanceChecks";
 import { addNote } from "../src/main/storage/notes";
-import { ensureProject, loadProject, setGlobalMcpSettingsStore, updateNode, updateProjectSettings } from "../src/main/storage/projectStore";
+import { ensureFixtureProject, loadProject, setGlobalMcpSettingsStore, updateNode, updateProjectSettings } from "../src/main/storage/projectStore";
 import { approveRun, cancelRun, rejectRun, retryRun, startAgentRun, startDebuggingRun, startRunProfile } from "../src/main/storage/runEngine";
 import { runSchema, type ProjectBundle, type ProjectSettings, type Run } from "../src/shared/schema";
 
@@ -128,7 +128,7 @@ describe("phase workflow", () => {
   it("stores user guidance and context summary on retried runs", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-guided-retry-"));
     const providerCommand = await createFakeCodex(root);
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       providers: bundle.project.settings.providers.map((provider) => provider.id === "codex-local"
@@ -168,7 +168,7 @@ describe("phase workflow", () => {
 
   it("blocks retry and debug actions while another run is active", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-active-lane-block-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const flow = bundle.flows[0]!;
     const node = flow.nodes[0]!;
     const createdAt = new Date().toISOString();
@@ -208,7 +208,7 @@ describe("phase workflow", () => {
   it("serializes concurrent run creation so only one write-capable run can claim the lane", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-concurrent-run-start-"));
     const command = await createSlowFakeCodex(root);
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       providers: bundle.project.settings.providers.map((provider) => provider.id === "codex-local"
@@ -236,7 +236,7 @@ describe("phase workflow", () => {
   it.skipIf(process.platform === "win32")("force-stops a command process group when cancellation is ignored", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-force-cancel-"));
     const pidPath = path.join(root, "stubborn.pid");
-    await ensureProject(root);
+    await ensureFixtureProject(root);
     await writeFile(path.join(root, "stubborn.cjs"), [
       "const fs = require('fs');",
       `fs.writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));`,
@@ -326,7 +326,7 @@ process.stdin.on("end", () => {
         build: "node build.cjs"
       }
     }), "utf8");
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       defaultBuildCommand: buildCommand,
@@ -390,7 +390,7 @@ process.stdin.on("end", () => {
   it("creates a durable plan artifact before a provider run completes", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-plan-artifact-"));
     const command = await createFakeCodex(root);
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       providers: bundle.project.settings.providers.map((provider) => provider.id === "codex-local"
@@ -424,7 +424,7 @@ process.stdin.on("end", () => {
   it("pauses after planning when manual plan review is enabled, then codes after approval", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-plan-review-"));
     const command = await createFakeCodex(root);
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       planningReviewMode: "manual",
@@ -453,7 +453,7 @@ process.stdin.on("end", () => {
   it("does not stop for open planning questions when plan review is automatic", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-auto-plan-question-skip-"));
     const command = await createFakeCodex(root);
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const flow = bundle.flows[0]!;
     const node = flow.nodes[0]!;
     await addNote(root, {
@@ -493,7 +493,7 @@ process.stdin.on("end", () => {
   it("keeps a run cancelled when planning provider output arrives later", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-cancel-inflight-planning-"));
     const command = await createSlowFakeCodex(root);
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       planningReviewMode: "auto",
@@ -532,7 +532,7 @@ process.stdin.on("end", () => {
   it("records a rejected plan review and stops the run", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-plan-reject-"));
     const command = await createFakeCodex(root);
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       planningReviewMode: "manual",
@@ -563,7 +563,7 @@ process.stdin.on("end", () => {
   it("continues into coding without a second provider-launch approval for workspace-write Codex Local", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-code-no-provider-permission-"));
     const command = await createFakeCodex(root);
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       providers: bundle.project.settings.providers.map((provider) => provider.id === "codex-local"
@@ -645,7 +645,7 @@ process.stdin.on("end", () => {
 `, "utf8");
     await chmod(mcpServerPath, 0o755);
     await chmod(commandPath, 0o755);
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       providers: bundle.project.settings.providers.map((provider) => provider.id === "codex-local"
@@ -739,7 +739,7 @@ process.stdin.on("end", () => {
 });
 `, "utf8");
     await chmod(providerCommand, 0o755);
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       codeReviewMode: "auto-apply",
@@ -790,7 +790,7 @@ process.stdin.on("end", () => {
 });
 `, "utf8");
       await chmod(providerCommand, 0o755);
-      const bundle = await ensureProject(root);
+      const bundle = await ensureFixtureProject(root);
       await updateProjectSettings(root, {
         ...bundle.project.settings,
         codeReviewMode: "auto-apply",
@@ -823,7 +823,7 @@ process.stdin.on("end", () => {
   it("infers and automatically runs install/test/build verification after generated package scripts appear", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-code-verification-handoff-"));
     const command = await createFakeCodex(root, { failedVerification: true });
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await writeFile(path.join(root, "package.json"), JSON.stringify({
       scripts: {
         dev: "vite",
@@ -887,7 +887,7 @@ process.stdin.on("end", () => {
   it("keeps verification separate from the inferred dev command after verification passes", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-code-run-smoke-"));
     const command = await createFakeCodex(root);
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await writeFile(path.join(root, "dev-server.cjs"), `console.log("Local: http://127.0.0.1:4173/"); setInterval(() => {}, 1000);\n`);
     await writeFile(path.join(root, "package.json"), JSON.stringify({
       scripts: {
@@ -926,7 +926,7 @@ process.stdin.on("end", () => {
   it("retries a transient verification failure once before escalating", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-transient-verify-"));
     const command = await createFakeCodex(root);
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await mkdir(path.join(root, "node_modules"));
     // The build fails on its first invocation with a network-style (transient)
     // error, then passes on the retry.
@@ -970,7 +970,7 @@ process.stdin.on("end", () => {
   it("retries a cancelled verification run as a verification resume with inherited context", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-verification-resume-"));
     const command = await createFakeCodex(root);
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await mkdir(path.join(root, "node_modules"));
     await writeFile(path.join(root, "package.json"), JSON.stringify({
       scripts: {
@@ -1035,7 +1035,7 @@ process.stdin.on("end", () => {
 
   it("refreshes stale inferred verification commands when retrying a cancelled run", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-stale-verification-command-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       autoApproveShellCommands: false
@@ -1093,7 +1093,7 @@ process.stdin.on("end", () => {
 
   it("prepends install when retrying verification with declared but missing packages", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-retry-missing-deps-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       autoApproveShellCommands: false
@@ -1154,7 +1154,7 @@ process.stdin.on("end", () => {
   it("routes schema-invalid retries back into coding when verification never started", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-retry-schema-invalid-"));
     const providerCommand = await createFakeCodex(root);
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       providers: bundle.project.settings.providers.map((provider) => provider.id === "codex-local"
@@ -1204,7 +1204,7 @@ process.stdin.on("end", () => {
 
   it("rejects runtime commands in verification instead of starting the app", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-runtime-command-verification-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const flow = bundle.flows[0]!;
     await writeFile(path.join(root, "package.json"), JSON.stringify({
       scripts: {
@@ -1238,7 +1238,7 @@ process.stdin.on("end", () => {
 
   it("reconciles draft nodes as built when managed verification passed before a run smoke failure", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-built-draft-reconcile-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const flow = bundle.flows[0]!;
     const node = flow.nodes[0]!;
     const diffArtifact = {
@@ -1298,7 +1298,7 @@ process.stdin.on("end", () => {
 
   it("clears dirty graph state only inside a successfully verified flow scope", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-flow-scoped-verification-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const mainFlow = bundle.flows[0]!;
     const targetNode = mainFlow.nodes.find((node) => node.stage !== "draft-approved-production" && node.acceptanceChecks.length === 0)!;
     const dirtyFlags = ["changed", "needs-attention", "modified-not-built"];
@@ -1345,7 +1345,7 @@ process.stdin.on("end", () => {
 
   it("keeps a verified node dirty until its acceptance checks pass, then clears it", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-acceptance-check-gate-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const flow = bundle.flows[0]!;
     const node = flow.nodes[0]!;
     const diffArtifact = {
@@ -1414,7 +1414,7 @@ process.stdin.on("end", () => {
 
   it("runs acceptance-check test commands and records pass/fail on a build", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-acceptance-verify-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const flow = bundle.flows[0]!;
     const node = flow.nodes[0]!;
 
@@ -1457,7 +1457,7 @@ process.stdin.on("end", () => {
 
   it("skips high-risk acceptance checks even when shell auto-approve is enabled", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-acceptance-verify-high-risk-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const flow = bundle.flows[0]!;
     const node = flow.nodes[0]!;
 
@@ -1498,7 +1498,7 @@ process.stdin.on("end", () => {
 
   it("runs a node's acceptance checks on demand and reflects pass/fail on status and flags", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-run-checks-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const flow = bundle.flows[0]!;
     const node = flow.nodes[0]!;
 
@@ -1528,7 +1528,7 @@ process.stdin.on("end", () => {
 
   it("uses the single available run target as the implied build module when a node stays on Auto", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-auto-module-checks-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const flow = bundle.flows[0]!;
     const node = flow.nodes[0]!;
 
@@ -1569,7 +1569,7 @@ process.stdin.on("end", () => {
 
   it("clears generated acceptance tests for a node while keeping its acceptance criteria", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-clear-checks-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const flow = bundle.flows[0]!;
     const node = flow.nodes[0]!;
     const nodeSlug = (node.title.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 48) || "node");
@@ -1601,7 +1601,7 @@ process.stdin.on("end", () => {
 
   it("abandons stale in-progress runs after app restart so the queue can unblock", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-stale-run-reconcile-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const flow = bundle.flows[0]!;
     await writeFile(path.join(root, ".archicode", "runs", "run-stale-active.json"), JSON.stringify({
       id: "run-stale-active",
@@ -1631,7 +1631,7 @@ process.stdin.on("end", () => {
   it("resumes stale resumable runs from their persisted phase after app restart", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-restart-resume-"));
     const providerCommand = await createFakeCodex(root);
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       providers: bundle.project.settings.providers.map((provider) => provider.id === "codex-local"
@@ -1669,7 +1669,7 @@ process.stdin.on("end", () => {
   it("persists run logs in an append-only sidecar instead of the run document", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-log-sidecar-"));
     const providerCommand = await createFakeCodex(root);
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       providers: bundle.project.settings.providers.map((provider) => provider.id === "codex-local"
@@ -1699,7 +1699,7 @@ process.stdin.on("end", () => {
 
   it("runs a target-aware profile through discover, launch, wait, and run", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-run-profile-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       stopOnUnansweredQuestions: false,
@@ -1741,7 +1741,7 @@ process.stdin.on("end", () => {
 
   it("prefers matching targets and extracts the attached runtime target before running", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-run-profile-runtime-target-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       stopOnUnansweredQuestions: false,
@@ -1783,7 +1783,7 @@ process.stdin.on("end", () => {
 
   it("runs profile diagnostics and recovery before failing target readiness", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-run-profile-recovery-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       stopOnUnansweredQuestions: false,
@@ -1825,7 +1825,7 @@ process.stdin.on("end", () => {
   it("continues into coding without provider-launch approval for full-access Codex Local", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-code-danger-permission-"));
     const command = await createFakeCodex(root);
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       providers: bundle.project.settings.providers.map((provider) => provider.id === "codex-local"

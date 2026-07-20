@@ -3,12 +3,12 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { addNote, attachNodeReferences, deleteNote, purgeResolvedNotes, purgeSystemNotes, updateNotePinned, updateNoteResolved } from "../src/main/storage/notes";
-import { ensureProject, loadProject, saveFlow, updateNode, updateProjectSettings } from "../src/main/storage/projectStore";
+import { ensureFixtureProject, loadProject, saveFlow, updateNode, updateProjectSettings } from "../src/main/storage/projectStore";
 
 describe("node note workflow", () => {
   it("stores updates and deletions as append-only events that survive union reordering", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-notes-events-"));
-    await ensureProject(root);
+    await ensureFixtureProject(root);
     const created = await addNote(root, {
       flowId: "flow-main",
       nodeId: "node-project",
@@ -43,7 +43,7 @@ describe("node note workflow", () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-notes-"));
     const referencePath = path.join(root, "reference.txt");
     await writeFile(referencePath, "reference material", "utf8");
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const flow = bundle.flows[0]!;
     await saveFlow(root, {
       ...flow,
@@ -99,7 +99,7 @@ describe("node note workflow", () => {
 
   it("deletes notes and refreshes node question flags", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-notes-delete-"));
-    await ensureProject(root);
+    await ensureFixtureProject(root);
     const withNote = await addNote(root, {
       flowId: "flow-main",
       nodeId: "node-project",
@@ -122,7 +122,7 @@ describe("node note workflow", () => {
 
   it("purges resolved notes by node or across the whole project", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-notes-purge-"));
-    await ensureProject(root);
+    await ensureFixtureProject(root);
     const targetResolved = await addNote(root, {
       flowId: "flow-main",
       nodeId: "node-project",
@@ -177,7 +177,7 @@ describe("node note workflow", () => {
 
   it("purges system generated notes by node scope", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-notes-system-purge-"));
-    await ensureProject(root);
+    await ensureFixtureProject(root);
     const handoff = await addNote(root, {
       flowId: "flow-main",
       nodeId: "node-project",
@@ -236,7 +236,7 @@ describe("node note workflow", () => {
 
   it("toggles pinned notes independently from delete", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-notes-pin-"));
-    await ensureProject(root);
+    await ensureFixtureProject(root);
     const withNote = await addNote(root, {
       flowId: "flow-main",
       nodeId: "node-project",
@@ -258,7 +258,7 @@ describe("node note workflow", () => {
 
   it("auto-resolves open node notes when the node is approved for production", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-notes-approval-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const flow = bundle.flows[0]!;
     await saveFlow(root, {
       ...flow,
@@ -297,7 +297,7 @@ describe("node note workflow", () => {
 
   it("auto-resolves open node notes when the node moves to plan-approved", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-notes-plan-approved-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const flow = bundle.flows[0]!;
     await saveFlow(root, {
       ...flow,
@@ -321,7 +321,7 @@ describe("node note workflow", () => {
 
   it("can purge resolved node notes automatically when approving a node", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-notes-auto-purge-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       purgeResolvedNotesOnApproval: true

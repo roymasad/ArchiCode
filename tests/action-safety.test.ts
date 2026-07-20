@@ -3,9 +3,9 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { assessAgentCommandSafety } from "../src/main/actionSafety";
-import { ensureProject } from "../src/main/storage/projectStore";
+import { ensureFixtureProject } from "../src/main/storage/projectStore";
 
-async function fixture(): Promise<{ root: string; settings: Awaited<ReturnType<typeof ensureProject>>["project"]["settings"] }> {
+async function fixture(): Promise<{ root: string; settings: Awaited<ReturnType<typeof ensureFixtureProject>>["project"]["settings"] }> {
   const root = await mkdtemp(path.join(tmpdir(), "archicode-action-safety-"));
   await mkdir(path.join(root, "src"), { recursive: true });
   await writeFile(path.join(root, "package.json"), JSON.stringify({
@@ -15,7 +15,7 @@ async function fixture(): Promise<{ root: string; settings: Awaited<ReturnType<t
       dev: "vite"
     }
   }), "utf8");
-  const bundle = await ensureProject(root);
+  const bundle = await ensureFixtureProject(root);
   return { root, settings: { ...bundle.project.settings, autoApproveShellCommands: false } };
 }
 

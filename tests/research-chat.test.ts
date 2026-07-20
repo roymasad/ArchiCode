@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateAcceptanceChecksFromCriteria, generateAcceptanceChecksScoped } from "../src/main/storage/acceptanceChecks";
 import { addNote, attachNodeReferences } from "../src/main/storage/notes";
 import { readArtifactText } from "../src/main/storage/patches";
-import { ensureEmptyCodebaseProject, ensureProject, loadProject, saveFlow, setGlobalMcpSettingsStore, updateNode, updateProjectSettings } from "../src/main/storage/projectStore";
+import { ensureEmptyCodebaseProject, ensureFixtureProject, loadProject, saveFlow, setGlobalMcpSettingsStore, updateNode, updateProjectSettings } from "../src/main/storage/projectStore";
 import { reportBug } from "../src/main/storage/runEngine";
 import { listRuntimeServices } from "../src/main/storage/runtimeServices";
 import { delphiTestingInputSchema, researchChatSessionSchema, researchGraphOperationKinds, runSchema, subagentRunSchema, type ProjectSettings, type ResearchChatSession } from "../src/shared/schema";
@@ -225,7 +225,7 @@ async function setupProject(output: string | string[] = JSON.stringify({
   const promptPath = capturePrompt ? path.join(projectRoot, "research-prompt.txt") : undefined;
   const argsPath = captureArgs ? path.join(projectRoot, "research-args.jsonl") : undefined;
   const command = await createFakeResearchCodex(projectRoot, output, promptPath, argsPath);
-  const bundle = await ensureProject(projectRoot);
+  const bundle = await ensureFixtureProject(projectRoot);
   await updateProjectSettings(projectRoot, {
     ...bundle.project.settings,
     providers: bundle.project.settings.providers.map((provider) => provider.id === "codex-local"
@@ -1573,7 +1573,7 @@ describe("research chat workflow", () => {
   it("captures graph changes and folds memory from native sink-tool calls in one provider call", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-sink-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     process.env.ANTHROPIC_RESEARCH_TEST_KEY = "test";
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
@@ -1687,7 +1687,7 @@ describe("research chat workflow", () => {
   it("does not spend a second provider round repairing an omitted memory decision", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-memory-skip-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     process.env.ANTHROPIC_RESEARCH_TEST_KEY = "test";
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
@@ -1718,7 +1718,7 @@ describe("research chat workflow", () => {
   it("applies a model-chosen memory tool update without assuming English keywords", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-memory-semantic-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     process.env.ANTHROPIC_RESEARCH_TEST_KEY = "test";
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
@@ -1761,7 +1761,7 @@ describe("research chat workflow", () => {
   it("serializes concurrent turns on the same session without clobbering messages", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-concurrent-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     process.env.ANTHROPIC_RESEARCH_TEST_KEY = "test";
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
@@ -2201,7 +2201,7 @@ describe("research chat workflow", () => {
   it("includes node-scoped note images from structural scope without reading user-language keywords", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-visual-move-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     process.env.OPENAI_RESEARCH_TEST_KEY = "test";
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
@@ -2433,7 +2433,7 @@ describe("research chat workflow", () => {
       { type: "response.reasoning_text.delta", delta: "Checking context..." },
       { type: "assistant_message_delta", delta: "Final answer text." }
     ]);
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
       providers: bundle.project.settings.providers.map((provider) => provider.id === "codex-local"
@@ -2469,7 +2469,7 @@ describe("research chat workflow", () => {
         summary: "Saved after delay."
       }
     }), 150);
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
       providers: bundle.project.settings.providers.map((provider) => provider.id === "codex-local"
@@ -2517,7 +2517,7 @@ describe("research chat workflow", () => {
         })
       }
     ]);
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
       providers: bundle.project.settings.providers.map((provider) => provider.id === "codex-local"
@@ -3078,7 +3078,7 @@ describe("research chat workflow", () => {
         todos: [{ title: "Plan the Contact Page", status: "open", notes: "Graph planning is pending." }]
       })])
     ]);
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
       providers: bundle.project.settings.providers.map((provider) => provider.id === "claude-local"
@@ -3465,7 +3465,7 @@ describe("research chat workflow", () => {
   it("applies approved research note lifecycle changes", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-notes-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     const stale = await addNote(projectRoot, {
       flowId: "flow-main",
       nodeId: "node-project",
@@ -3594,7 +3594,7 @@ describe("research chat workflow", () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-metadata-"));
     const storageRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-storage-"));
     setResearchStorageRoot(storageRoot);
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     const flow = bundle.flows[0]!;
     const edgeId = flow.edges[0]!.id;
     const output = JSON.stringify({
@@ -4822,7 +4822,7 @@ describe("research chat workflow", () => {
 
   it("reads bounded planning-graph geometry from the current project bundle", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-layout-tool-"));
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     const flow = bundle.flows.find((item) => item.id === "flow-main")!;
     const target = flow.nodes.find((node) => !node.subflowId)!;
     target.position = { x: 123, y: 456 };
@@ -4871,7 +4871,7 @@ describe("research chat workflow", () => {
   it("lets direct research providers inspect graph layout and project files through built-in tools", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-tools-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     await mkdir(path.join(projectRoot, "src"), { recursive: true });
     await writeFile(path.join(projectRoot, "src", "main.ts"), "export const visibleSourceMarker = 'source-snippet-present';\n", "utf8");
     await writeFile(path.join(projectRoot, ".env"), "OPENAI_API_KEY=secret-value\n", "utf8");
@@ -4944,7 +4944,7 @@ describe("research chat workflow", () => {
 
   it("preflights the effective Delphi model override instead of assuming the parent chat model capability", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-delphi-model-preflight-"));
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     const provider = bundle.project.settings.providers.find((entry) => entry.kind === "openai-compatible")!;
     const configuredProvider = {
       ...provider,
@@ -4973,7 +4973,7 @@ describe("research chat workflow", () => {
   it("lets the chat auto-approve toggle cover medium-risk parent commands without a static CLI allowlist", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-delphi-cli-recovery-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     await writeFile(path.join(projectRoot, "package.json"), JSON.stringify({
       name: "parent-guarded-console",
       private: true,
@@ -5045,7 +5045,7 @@ describe("research chat workflow", () => {
     const storageRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-storage-"));
     const promptPath = path.join(projectRoot, "captured-prompts.txt");
     setResearchStorageRoot(storageRoot);
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     await writeFile(path.join(projectRoot, "package.json"), JSON.stringify({
       name: "local-delphi-repair",
       private: true,
@@ -5136,7 +5136,7 @@ describe("research chat workflow", () => {
   it("returns an omitted Delphi delegation to the same Anthropic trajectory instead of forcing a provider-specific first tool", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-anthropic-delphi-route-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     await writeFile(path.join(projectRoot, "package.json"), JSON.stringify({
       name: "anthropic-delphi-route",
       private: true,
@@ -5187,7 +5187,7 @@ describe("research chat workflow", () => {
   it("asks the user to choose one or several compatible Delphi runtime targets", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-delphi-target-choice-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     process.env.OPENAI_RESEARCH_TEST_KEY = "test";
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
@@ -5268,7 +5268,7 @@ describe("research chat workflow", () => {
       private: true,
       scripts: { test: "node -e \"console.log('multi-target-check-ok')\"" }
     }), "utf8");
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     process.env.OPENAI_RESEARCH_TEST_KEY = "test";
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
@@ -5429,7 +5429,7 @@ describe("research chat workflow", () => {
         markerPath
       }
     ]);
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
       providers: bundle.project.settings.providers.map((provider) => provider.id === "codex-local"
@@ -5515,7 +5515,7 @@ describe("research chat workflow", () => {
       },
       { exitCode: 1, stderr: "provider transport blew up" }
     ]);
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
       providers: bundle.project.settings.providers.map((provider) => provider.id === "codex-local"
@@ -5594,7 +5594,7 @@ describe("research chat workflow", () => {
         markerPath
       }
     ]);
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
       providers: bundle.project.settings.providers.map((provider) => provider.id === "codex-local"
@@ -5774,7 +5774,7 @@ describe("research chat workflow", () => {
   it("recovers an unknown tool name with the exact allowlist after switching chat models", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-tool-recovery-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     process.env.OPENAI_RESEARCH_TEST_KEY = "test";
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
@@ -5836,7 +5836,7 @@ describe("research chat workflow", () => {
   it("keeps a multi-step Research investigation in one provider trajectory without synthetic host turns", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-durable-goal-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     process.env.OPENAI_RESEARCH_TEST_KEY = "test";
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
@@ -5877,7 +5877,7 @@ describe("research chat workflow", () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-goal-run-wake-"));
     const storageRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-storage-"));
     setResearchStorageRoot(storageRoot);
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     process.env.OPENAI_RESEARCH_TEST_KEY = "test";
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
@@ -5948,7 +5948,7 @@ describe("research chat workflow", () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-goal-review-resume-"));
     const storageRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-storage-"));
     setResearchStorageRoot(storageRoot);
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     process.env.OPENAI_RESEARCH_TEST_KEY = "test";
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
@@ -6045,7 +6045,7 @@ describe("research chat workflow", () => {
   it("stops an exact consecutive unknown-tool loop with a precise host error", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-tool-limit-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     process.env.OPENAI_RESEARCH_TEST_KEY = "test";
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
@@ -6095,7 +6095,7 @@ describe("research chat workflow", () => {
   it("continues the same trajectory when a claimed graph card has not yet been submitted", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-card-repair-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     process.env.OPENAI_RESEARCH_TEST_KEY = "test";
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
@@ -6155,7 +6155,7 @@ describe("research chat workflow", () => {
   it("replaces a false review-card completion with an honest answer when repair cannot build one", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-card-honesty-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     process.env.OPENAI_RESEARCH_TEST_KEY = "test";
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
@@ -6191,7 +6191,7 @@ describe("research chat workflow", () => {
   it("lets Research read current flow violations without requesting mutation approval", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-violation-tool-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     const now = "2026-07-16T10:00:00.000Z";
     const rule = {
       id: "rule-research-boundary",
@@ -6286,7 +6286,7 @@ describe("research chat workflow", () => {
   it("lets direct research providers retrieve older chat history through a capped built-in tool", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-history-tool-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     process.env.OPENAI_RESEARCH_TEST_KEY = "test";
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
@@ -6341,7 +6341,7 @@ describe("research chat workflow", () => {
   it("searches previous chat titles, summaries, and bodies in requested time order", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-previous-chats-tool-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     process.env.OPENAI_RESEARCH_TEST_KEY = "test";
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
@@ -6400,7 +6400,7 @@ describe("research chat workflow", () => {
   it("falls back to recent previous chats when a provider reads history from a fresh chat", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-fresh-chat-history-fallback-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     process.env.OPENAI_RESEARCH_TEST_KEY = "test";
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
@@ -6446,7 +6446,7 @@ describe("research chat workflow", () => {
   it("normalizes inside-project absolute paths for built-in research file tools", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-absolute-paths-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     await mkdir(path.join(projectRoot, "src"), { recursive: true });
     await writeFile(path.join(projectRoot, "src", "main.ts"), "export const normalizedPath = true;\n", "utf8");
     process.env.OPENAI_RESEARCH_TEST_KEY = "test";
@@ -6523,7 +6523,7 @@ describe("research chat workflow", () => {
   it("creates an approval request only after a direct provider attempts an Ask MCP tool", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-ask-mcp-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     process.env.OPENAI_RESEARCH_TEST_KEY = "test";
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
@@ -6619,7 +6619,7 @@ describe("research chat workflow", () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-approved-mcp-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
     const mcpServerPath = await createFakeContext7McpServer(projectRoot);
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     process.env.OPENAI_RESEARCH_TEST_KEY = "test";
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
@@ -6699,7 +6699,7 @@ describe("research chat workflow", () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-anthropic-mcp-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
     const mcpServerPath = await createFakeContext7McpServer(projectRoot);
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     process.env.ANTHROPIC_RESEARCH_TEST_KEY = "test";
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
@@ -6783,7 +6783,7 @@ describe("research chat workflow", () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-resume-mcp-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
     const mcpServerPath = await createFakeContext7McpServer(projectRoot);
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     process.env.ANTHROPIC_RESEARCH_TEST_KEY = "test";
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,

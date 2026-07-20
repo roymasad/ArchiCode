@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { inferCommandSettings } from "../src/main/storage/commandInference";
-import { createProject, ensureEmptyCodebaseProject, ensureProject, loadProject, migrateDefaultPhaseModelPolicies, setGlobalMcpSettingsStore, setGlobalProviderSettingsStore, updateProjectSettings } from "../src/main/storage/projectStore";
+import { createProject, ensureEmptyCodebaseProject, ensureFixtureProject, loadProject, migrateDefaultPhaseModelPolicies, setGlobalMcpSettingsStore, setGlobalProviderSettingsStore, updateProjectSettings } from "../src/main/storage/projectStore";
 import { createSeedProject } from "../src/shared/fixtures";
 import { defaultPhaseModelPolicies, type ProjectSettings } from "../src/shared/schema";
 import { createProjectFromTemplate, projectTemplates } from "../src/shared/templates";
@@ -346,7 +346,7 @@ describe("project templates", () => {
 
     try {
       const firstRoot = await mkdtemp(path.join(tmpdir(), "archicode-global-provider-one-"));
-      const first = await ensureProject(firstRoot);
+      const first = await ensureFixtureProject(firstRoot);
       expect(first.project.settings.providers.find((provider) => provider.id === "openai-compatible")?.model).toBe("global-model");
 
       await updateProjectSettings(firstRoot, {
@@ -357,7 +357,7 @@ describe("project templates", () => {
       });
 
       const secondRoot = await mkdtemp(path.join(tmpdir(), "archicode-global-provider-two-"));
-      const second = await ensureProject(secondRoot);
+      const second = await ensureFixtureProject(secondRoot);
       expect(second.project.settings.providers.find((provider) => provider.id === "openai-compatible")?.model).toBe("saved-global-model");
     } finally {
       setGlobalProviderSettingsStore(null);
@@ -375,7 +375,7 @@ describe("project templates", () => {
 
     try {
       const firstRoot = await mkdtemp(path.join(tmpdir(), "archicode-global-mcp-one-"));
-      const first = await ensureProject(firstRoot);
+      const first = await ensureFixtureProject(firstRoot);
       expect(first.project.settings.mcp.servers).toEqual([]);
 
       await updateProjectSettings(firstRoot, {
@@ -404,7 +404,7 @@ describe("project templates", () => {
 
       // A second, unrelated project immediately sees the same server, secrets included.
       const secondRoot = await mkdtemp(path.join(tmpdir(), "archicode-global-mcp-two-"));
-      const second = await ensureProject(secondRoot);
+      const second = await ensureFixtureProject(secondRoot);
       expect(second.project.settings.mcp.servers[0]?.env[0]).toEqual({ name: "API_TOKEN", value: "super-secret-token" });
       expect(second.project.settings.mcp.servers[0]?.headers[0]).toEqual({ name: "Authorization", value: "Bearer super-secret-token" });
 
@@ -447,7 +447,7 @@ describe("project templates", () => {
 
     try {
       const root = await mkdtemp(path.join(tmpdir(), "archicode-global-provider-metadata-"));
-      const bundle = await ensureProject(root);
+      const bundle = await ensureFixtureProject(root);
       const provider = bundle.project.settings.providers.find((item) => item.id === "openai-compatible");
       expect(provider?.model).toBe("metadata-model");
       expect(provider?.apiKey).toBeUndefined();
@@ -743,7 +743,7 @@ describe("project templates", () => {
       }
     }), "utf8");
 
-    const initial = await ensureProject(root);
+    const initial = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...initial.project.settings,
       runTargetProfiles: [
@@ -778,7 +778,7 @@ describe("project templates", () => {
       }
     }), "utf8");
 
-    const initial = await ensureProject(root);
+    const initial = await ensureFixtureProject(root);
     const initialProfileIds = initial.project.settings.runTargetProfiles.map((profile) => profile.id);
 
     await mkdir(path.join(root, "apps", "api"), { recursive: true });

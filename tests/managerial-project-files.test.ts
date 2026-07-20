@@ -7,7 +7,7 @@ import {
   generatedTargetProjectAgentInstructions,
   isUntouchedLegacyGeneratedAgentInstructions
 } from "../src/main/storage/commandInference";
-import { createProject, ensureProject } from "../src/main/storage/projectStore";
+import { createProject, ensureFixtureProject } from "../src/main/storage/projectStore";
 import { createProjectFromTemplate } from "../src/shared/templates";
 
 const legacyGeneratedInstructions = [
@@ -57,7 +57,7 @@ describe("managed target-project instruction files", () => {
     expect(created).not.toContain("Treat ArchiCode as stack-neutral");
 
     await writeFile(path.join(root, "AGENTS.md"), legacyGeneratedInstructions, "utf8");
-    await ensureProject(root);
+    await ensureFixtureProject(root);
     const migrated = await readFile(path.join(root, "AGENTS.md"), "utf8");
     expect(migrated).toContain("# Project Agent Instructions");
     expect(migrated).toContain("They are not instructions for developing the ArchiCode application itself.");
@@ -65,7 +65,7 @@ describe("managed target-project instruction files", () => {
 
     const custom = "# Project Team Rules\n\n- Preserve the team's custom deployment workflow.\n";
     await writeFile(path.join(root, "AGENTS.md"), custom, "utf8");
-    await ensureProject(root);
+    await ensureFixtureProject(root);
     await expect(readFile(path.join(root, "AGENTS.md"), "utf8")).resolves.toBe(custom);
   });
 });

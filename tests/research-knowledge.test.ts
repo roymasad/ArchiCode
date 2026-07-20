@@ -15,12 +15,12 @@ import {
   updateChatArtifact,
   updateProjectMemoryNote
 } from "../src/main/storage/researchKnowledge";
-import { ensureProject, loadProject } from "../src/main/storage/projectStore";
+import { ensureFixtureProject, loadProject } from "../src/main/storage/projectStore";
 
 async function researchProject(prefix: string) {
   const projectRoot = await mkdtemp(path.join(tmpdir(), prefix));
   setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), `${prefix}chat-store-`)));
-  const bundle = await ensureProject(projectRoot);
+  const bundle = await ensureFixtureProject(projectRoot);
   const chat = await createResearchChat({
     projectRoot,
     scope: { type: "project", projectId: bundle.project.id }

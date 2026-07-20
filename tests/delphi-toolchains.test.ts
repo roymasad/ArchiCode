@@ -11,7 +11,7 @@ import {
 } from "../src/main/testing/toolchains";
 import { delphiManagedAppiumHome, installDelphiManagedTool, setDelphiToolCacheRoot } from "../src/main/testing/toolCache";
 import { delphiTestingAgent } from "../src/main/microRunAgents/delphiTesting";
-import { ensureProject } from "../src/main/storage/projectStore";
+import { ensureFixtureProject } from "../src/main/storage/projectStore";
 import { delphiTestingInputSchema, type DelphiTestingOutput } from "../src/shared/schema";
 
 afterEach(() => setDelphiToolCacheRoot(null));
@@ -156,7 +156,7 @@ describe("Delphi toolchain planning", () => {
 
   it("does not count rejected commands as passing evidence", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-delphi-rejected-command-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const input = delphiTestingInputSchema.parse({ objective: "Audit safely", platforms: ["generic"] });
     const tools = delphiTestingAgent.tools({
       projectRoot: root,
@@ -190,7 +190,7 @@ describe("Delphi toolchain planning", () => {
 
   it("does not consume an audit attempt when the guarded console declines to execute", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-delphi-attempt-accounting-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const input = delphiTestingInputSchema.parse({
       objective: "Audit after approval",
       platforms: ["generic"],
@@ -219,7 +219,7 @@ describe("Delphi toolchain planning", () => {
 
   it("does not consume a browser-lane attempt for invalid preflight plans", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-delphi-direct-attempts-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const input = delphiTestingInputSchema.parse({
       objective: "Audit a live browser",
       platforms: ["web"],
@@ -242,7 +242,7 @@ describe("Delphi toolchain planning", () => {
   it("canonicalizes safe Playwright aliases at the tool boundary and records the accepted form", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-delphi-alias-boundary-"));
     setDelphiToolCacheRoot(await mkdtemp(path.join(tmpdir(), "archicode-delphi-alias-cache-")));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const input = delphiTestingInputSchema.parse({
       objective: "Audit a live browser",
       platforms: ["web"],
@@ -317,7 +317,7 @@ describe("Delphi toolchain planning", () => {
 
   it("preserves authoritative terminal evidence in report repair", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-delphi-repair-evidence-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const input = delphiTestingInputSchema.parse({ objective: "Build and typecheck", platforms: ["generic"] });
     const context = { projectRoot: root, bundle, provider: bundle.project.settings.providers[0]! };
     const toolCalls = [
@@ -379,7 +379,7 @@ describe("Delphi toolchain planning", () => {
 
   it("distinguishes human screenshot evidence from model-visible analysis", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-delphi-vision-contract-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const input = delphiTestingInputSchema.parse({ objective: "Audit visual behavior", platforms: ["web"] });
     const context = {
       projectRoot: root,
@@ -449,7 +449,7 @@ describe("Delphi toolchain planning", () => {
 
   it("requires a vision-capable Delphi model to inspect pixels for an explicit visual audit", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-delphi-required-vision-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const input = delphiTestingInputSchema.parse({
       objective: "Audit the responsive layout and visual quality",
       platforms: ["web"],
@@ -496,7 +496,7 @@ describe("Delphi toolchain planning", () => {
 
   it("requires visual analysis when a failed browser flow already captured evidence", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-delphi-failed-flow-vision-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const input = delphiTestingInputSchema.parse({
       objective: "Visually audit the responsive layout",
       platforms: ["web"],
@@ -559,7 +559,7 @@ describe("Delphi toolchain planning", () => {
     await writeFile(path.join(root, "package.json"), JSON.stringify({
       scripts: { "test:reviewed": "vitest run", "test:added-later": "vitest run changed" }
     }), "utf8");
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const input = delphiTestingInputSchema.parse({
       objective: "Audit the reviewed command only",
       platforms: ["generic"],
@@ -679,7 +679,7 @@ describe("Delphi toolchain planning", () => {
 
   it("accepts the local-model visual prompt alias and exposes capture suppression", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-delphi-corrective-args-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const input = delphiTestingInputSchema.parse({
       objective: "Audit a live browser visually",
       platforms: ["web"],
@@ -725,7 +725,7 @@ describe("Delphi toolchain planning", () => {
       export const firefox = { launch };
       export const webkit = { launch };
     `, "utf8");
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const input = delphiTestingInputSchema.parse({
       objective: "Visually inspect the landing page",
       platforms: ["web"],

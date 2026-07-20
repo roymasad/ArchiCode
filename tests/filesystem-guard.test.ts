@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { deleteProjectState, ensureProject, loadProject, updateProjectSettings } from "../src/main/storage/projectStore";
+import { deleteProjectState, ensureFixtureProject, loadProject, updateProjectSettings } from "../src/main/storage/projectStore";
 import { startAgentRun } from "../src/main/storage/runEngine";
 import { createResearchChat, setResearchStorageRoot } from "../src/main/research/chatStore";
 
@@ -19,7 +19,7 @@ describe("filesystem guard", () => {
     setResearchStorageRoot(storageRoot);
     const sourcePath = path.join(root, "package.json");
     await writeFile(sourcePath, "{\"scripts\":{}}\n", "utf8");
-    await ensureProject(root);
+    await ensureFixtureProject(root);
     await createResearchChat({
       projectRoot: root,
       scope: { type: "project", projectId: "project-seed" }
@@ -38,7 +38,7 @@ describe("filesystem guard", () => {
   it("blocks shell runs whose cwd escapes the project under project-write", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-fs-root-"));
     const outside = await mkdtemp(path.join(tmpdir(), "archicode-fs-outside-"));
-    await ensureProject(root);
+    await ensureFixtureProject(root);
 
     const { runId } = await startAgentRun({
       projectRoot: root,
@@ -59,7 +59,7 @@ describe("filesystem guard", () => {
 
   it("blocks obvious command path references outside the project", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-fs-path-"));
-    await ensureProject(root);
+    await ensureFixtureProject(root);
 
     const { runId } = await startAgentRun({
       projectRoot: root,
@@ -79,7 +79,7 @@ describe("filesystem guard", () => {
   it("allows full-access policy to request permission for outside cwd", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-fs-full-"));
     const outside = await mkdtemp(path.join(tmpdir(), "archicode-fs-full-outside-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       filesystem: {

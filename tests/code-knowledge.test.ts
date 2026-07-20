@@ -7,7 +7,7 @@ import { refreshProjectGraphEvidence } from "../src/main/importer/evidenceRefres
 import { buildCodeKnowledgeSnapshot, codeKnowledgeSnapshotNeedsRefresh, readCodeKnowledgeSnapshot, writeCodeKnowledgeSnapshot } from "../src/main/importer/knowledgeSnapshot";
 import { parseFiles } from "../src/main/importer/parsers";
 import { scanRepository } from "../src/main/importer/scanner";
-import { ensureProject } from "../src/main/storage/projectStore";
+import { ensureFixtureProject } from "../src/main/storage/projectStore";
 import { codeKnowledgeImpact, queryCodeKnowledgeSnapshot, shortestCodeKnowledgePath } from "../src/shared/codeKnowledge";
 
 const roots: string[] = [];
@@ -87,7 +87,7 @@ describe("local code knowledge snapshot", () => {
   it("refreshes Code Knowledge without rewriting architecture flows", async () => {
     const root = await mkdtemp(path.join(os.tmpdir(), "archicode-code-only-refresh-"));
     roots.push(root);
-    await ensureProject(root);
+    await ensureFixtureProject(root);
     await mkdir(path.join(root, "src"), { recursive: true });
     await writeFile(path.join(root, "src/main.ts"), "export const ready = true;\n", "utf8");
     const flowPath = path.join(root, ".archicode", "flows", "flow-main.json");

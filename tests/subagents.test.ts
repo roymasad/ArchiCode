@@ -4,7 +4,7 @@ import path from "node:path";
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ensureProject, updateNode, updateProjectSettings } from "../src/main/storage/projectStore";
+import { ensureFixtureProject, updateNode, updateProjectSettings } from "../src/main/storage/projectStore";
 import { respondToSubagentRun, sendResearchChatMessage } from "../src/main/research";
 import { createResearchChat, setResearchStorageRoot } from "../src/main/research/chatStore";
 
@@ -81,7 +81,7 @@ function graphReconciliationOutputText(withChangeSet = true): string {
 async function setupSubagentProject(subagents?: Partial<{ mergeConflictResolution: boolean; graphReconciliation: boolean; sherlockResearch: boolean; delphiTesting: boolean }>) {
   const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-subagents-project-"));
   setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-subagents-storage-")));
-  const bundle = await ensureProject(projectRoot);
+  const bundle = await ensureFixtureProject(projectRoot);
   process.env.ANTHROPIC_SUBAGENT_TEST_KEY = "test";
   await updateProjectSettings(projectRoot, {
     ...bundle.project.settings,
@@ -237,7 +237,7 @@ describe("Research chat subagent tools", () => {
 
   it("lists an exact Run App lifecycle in Delphi's approval card without launching it", async () => {
     const { projectRoot, session } = await setupSubagentProject();
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
       runTargetProfiles: [{
@@ -280,7 +280,7 @@ describe("Research chat subagent tools", () => {
 
   it("runs an approved Delphi audit through the guarded command path", async () => {
     const { projectRoot, session } = await setupSubagentProject();
-    const configured = await ensureProject(projectRoot);
+    const configured = await ensureFixtureProject(projectRoot);
     await updateProjectSettings(projectRoot, {
       ...configured.project.settings,
       autoApproveShellCommands: false

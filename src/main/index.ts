@@ -7,6 +7,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as pty from "node-pty";
 import type { IPty } from "node-pty";
+import { reconcileProjectRoots } from "./recentProjects";
 import { authorAcceptanceTestsScoped, clearNodeAcceptanceTests, enhanceNodeField, generateGitCommitMessage, runNodeAcceptanceChecks } from "./storage/acceptanceChecks";
 import { listAgentInstructionFiles, readAgentInstructionFile, readAgentMemory, writeAgentInstructionFile, writeAgentMemory } from "./storage/agentFiles";
 import { exportDrawioFlow, exportFlow, exportProjectBundle, importDrawioFlow, importFlow, listDrawioPages } from "./storage/flowImportExport";
@@ -577,8 +578,7 @@ function providerForAppState(provider: ProjectSettings["providers"][number]): Pr
 }
 
 async function lastProjectRoot(): Promise<string | null> {
-  const roots = await recentProjectRoots();
-  return roots[0] ?? null;
+  return (await reconciledProjectRoots()).lastProjectRoot ?? null;
 }
 
 async function rememberProjectRoot(projectRoot: string): Promise<void> {
@@ -598,30 +598,25 @@ async function rememberProjectRoot(projectRoot: string): Promise<void> {
   });
 }
 
-async function recentProjectRoots(): Promise<string[]> {
+async function reconciledProjectRoots(): Promise<{ lastProjectRoot?: string; recentProjectRoots: string[] }> {
   const state = await readAppState();
-  const recentRoots = [state.lastProjectRoot, ...(state.recentProjectRoots ?? [])]
-    .filter((candidate): candidate is string => Boolean(candidate))
-    .map((candidate) => path.resolve(candidate));
-  const seen = new Set<string>();
-  const validRoots = recentRoots.filter((candidate) => {
-    if (seen.has(candidate)) return false;
-    seen.add(candidate);
-    return existsSync(candidate);
-  }).slice(0, MAX_RECENT_PROJECTS);
-  const normalizedLastRoot = validRoots[0];
+  const reconciled = reconcileProjectRoots(state, existsSync, MAX_RECENT_PROJECTS);
   const currentRecentRoots = state.recentProjectRoots ?? [];
-  const changed = state.lastProjectRoot !== normalizedLastRoot ||
-    currentRecentRoots.length !== validRoots.length ||
-    currentRecentRoots.some((candidate, index) => path.resolve(candidate) !== validRoots[index]);
+  const changed = state.lastProjectRoot !== reconciled.lastProjectRoot ||
+    currentRecentRoots.length !== reconciled.recentProjectRoots.length ||
+    currentRecentRoots.some((candidate, index) => path.resolve(candidate) !== reconciled.recentProjectRoots[index]);
   if (changed) {
     await writeAppState({
       ...state,
-      lastProjectRoot: normalizedLastRoot,
-      recentProjectRoots: validRoots
+      lastProjectRoot: reconciled.lastProjectRoot,
+      recentProjectRoots: reconciled.recentProjectRoots
     });
   }
-  return validRoots;
+  return reconciled;
+}
+
+async function recentProjectRoots(): Promise<string[]> {
+  return (await reconciledProjectRoots()).recentProjectRoots;
 }
 
 async function listRecentProjects(): Promise<RecentProjectEntry[]> {
@@ -724,7 +719,9 @@ async function forgetProjectRoot(projectRoot: string): Promise<void> {
     .filter((candidate) => candidate !== normalizedRoot);
   await writeAppState({
     ...state,
-    lastProjectRoot: remainingRoots[0],
+    lastProjectRoot: state.lastProjectRoot && path.resolve(state.lastProjectRoot) !== normalizedRoot
+      ? path.resolve(state.lastProjectRoot)
+      : undefined,
     recentProjectRoots: remainingRoots
   });
 }

@@ -5,7 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { getGraphNodeHistory, listGraphHistory, listHistoricalProjectFiles, loadHistoricalGraphBundle, readHistoricalProjectFile } from "../src/main/graphHistory";
-import { ensureProject, saveFlow } from "../src/main/storage/projectStore";
+import { ensureFixtureProject, saveFlow } from "../src/main/storage/projectStore";
 
 const execFileAsync = promisify(execFile);
 
@@ -17,7 +17,7 @@ async function git(root: string, ...args: string[]): Promise<string> {
 describe("Git-backed graph history", () => {
   it("groups source-only commits and loads every flow from a historical commit", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-graph-history-"));
-    const initial = await ensureProject(root);
+    const initial = await ensureFixtureProject(root);
     await mkdir(path.join(root, "src"));
     await writeFile(path.join(root, "src", "example.ts"), "export const version = 1;\n", "utf8");
     await git(root, "init");
@@ -85,7 +85,7 @@ describe("Git-backed graph history", () => {
 
   it("loads first-parent history in bounded commit pages", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-graph-history-pages-"));
-    await ensureProject(root);
+    await ensureFixtureProject(root);
     await git(root, "init");
     await git(root, "config", "user.email", "history-test@example.com");
     await git(root, "config", "user.name", "History Test");

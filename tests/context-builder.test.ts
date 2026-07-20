@@ -4,12 +4,12 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { buildContext } from "../src/main/storage/contextBuilder";
 import { addNote, attachNodeReferences } from "../src/main/storage/notes";
-import { createProject, ensureProject, loadProject, saveFlow, updateNode, updateProjectSettings } from "../src/main/storage/projectStore";
+import { createProject, ensureFixtureProject, loadProject, saveFlow, updateNode, updateProjectSettings } from "../src/main/storage/projectStore";
 
 describe("context builder controls", () => {
   it("omits disabled context sections", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-context-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await addNote(root, {
       flowId: "flow-main",
       nodeId: "node-orchestrator",
@@ -43,7 +43,7 @@ describe("context builder controls", () => {
 
   it("adds fresh Git repository state to each agent context", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-context-git-"));
-    await ensureProject(root);
+    await ensureFixtureProject(root);
 
     const context = await buildContext(root, "flow-main", undefined, "offline-manual", undefined, { persistArtifacts: false });
     const parsed = JSON.parse(context.text) as {
@@ -63,7 +63,7 @@ describe("context builder controls", () => {
 
   it("strips legacy hidden node dependencies from loaded and saved flows", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-context-migrate-"));
-    await ensureProject(root);
+    await ensureFixtureProject(root);
     const flowPath = path.join(root, ".archicode", "flows", "flow-main.json");
     const stored = JSON.parse(await readFile(flowPath, "utf8")) as {
       nodes: Record<string, Record<string, unknown>>;
@@ -86,7 +86,7 @@ describe("context builder controls", () => {
 
   it("creates a summary artifact when context exceeds threshold", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-compact-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       contextBudgetMode: "manual",
@@ -120,7 +120,7 @@ describe("context builder controls", () => {
 
   it("can build context without persisting artifacts or memory records", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-context-preview-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       contextBudgetMode: "manual",
@@ -139,7 +139,7 @@ describe("context builder controls", () => {
 
   it("builds a graph-aware context manifest and durable memory records", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-context-plan-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const flow = bundle.flows[0]!;
     await saveFlow(root, {
       ...flow,
@@ -179,7 +179,7 @@ describe("context builder controls", () => {
 
   it("adds multi-node AI Implement scope directives to context", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-context-scope-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const flow = bundle.flows[0]!;
     const selectedNodeIds = flow.nodes.slice(0, 2).map((node) => node.id);
 
@@ -205,7 +205,7 @@ describe("context builder controls", () => {
 
   it("includes every root flow and nested subflow in project-scoped AI Implement context", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-context-project-scope-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const sourceNode = bundle.flows[0]!.nodes[0]!;
     await saveFlow(root, {
       id: "flow-secondary",
@@ -245,7 +245,7 @@ describe("context builder controls", () => {
 
   it("includes compact best-effort implementation hints with an explicit advisory", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-context-implementation-scope-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const flow = bundle.flows[0]!;
     const node = flow.nodes[0]!;
     await updateNode(root, flow.id, {
@@ -280,7 +280,7 @@ describe("context builder controls", () => {
 
   it("adds no-scope AI Implement directives without selecting graph nodes", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-context-no-scope-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const flow = bundle.flows[0]!;
 
     const context = await buildContext(root, flow.id, undefined, "offline-manual", {
@@ -303,7 +303,7 @@ describe("context builder controls", () => {
 
   it("keeps unresolved and pinned notes in context while filtering other resolved notes", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-context-notes-"));
-    await ensureProject(root);
+    await ensureFixtureProject(root);
     await addNote(root, {
       flowId: "flow-main",
       nodeId: "node-orchestrator",
@@ -363,7 +363,7 @@ describe("context builder controls", () => {
 
   it("lists node note attachments as metadata in build context", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-context-attachments-"));
-    await ensureProject(root);
+    await ensureFixtureProject(root);
     const attachmentPath = path.join(root, "note-reference.md");
     await writeFile(attachmentPath, "Attachment body should be read only on demand.", "utf8");
     const withNote = await addNote(root, {
@@ -425,7 +425,7 @@ describe("context builder controls", () => {
 
   it("includes compact pending graph changes for meaningful node edits", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-context-graph-change-node-"));
-    await ensureProject(root);
+    await ensureFixtureProject(root);
 
     const updated = await updateNode(root, "flow-main", {
       id: "node-project",
@@ -453,7 +453,7 @@ describe("context builder controls", () => {
 
   it("retires pending graph changes whose node was deleted, keeping surviving ones pending", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-context-graph-change-obsolete-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const flow = bundle.flows[0]!;
 
     await updateNode(root, "flow-main", {
@@ -498,7 +498,7 @@ describe("context builder controls", () => {
 
   it("archives resolved graph-change records older than the retention window and keeps pending ones", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-graph-change-retention-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, { ...bundle.project.settings, graphChangeRetention: "1day" });
 
     const ledgerPath = path.join(root, ".archicode", "graph-changes.jsonl");
@@ -525,7 +525,7 @@ describe("context builder controls", () => {
 
   it("never compacts the ledger when retention is disabled", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-graph-change-retention-never-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, { ...bundle.project.settings, graphChangeRetention: "never" });
 
     const ledgerPath = path.join(root, ".archicode", "graph-changes.jsonl");
@@ -542,7 +542,7 @@ describe("context builder controls", () => {
 
   it("includes custom node properties and their reusable definitions in agent context", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-context-custom-props-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       customNodeProperties: [{ id: "custom-owner", label: "Owner", type: "text" }]
@@ -566,7 +566,7 @@ describe("context builder controls", () => {
 
   it("includes attached node rules and reusable rule definitions in agent context", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-context-node-rules-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       nodeRules: [{
@@ -600,7 +600,7 @@ describe("context builder controls", () => {
 
   it("removes deleted node rules from every node attachment", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-context-node-rule-delete-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const now = new Date().toISOString();
     const deletedRule = {
       id: "rule-delete-me",
@@ -642,7 +642,7 @@ describe("context builder controls", () => {
       updatedAt: now
     });
 
-    const latest = await ensureProject(root);
+    const latest = await ensureFixtureProject(root);
     const updated = await updateProjectSettings(root, {
       ...latest.project.settings,
       nodeRules: [keptRule]
@@ -657,12 +657,12 @@ describe("context builder controls", () => {
 
   it("rejects changing a custom node property type after creation", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-context-custom-prop-type-lock-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       customNodeProperties: [{ id: "custom-owner", label: "Owner", type: "text" }]
     });
-    const updated = await ensureProject(root);
+    const updated = await ensureFixtureProject(root);
 
     await expect(updateProjectSettings(root, {
       ...updated.project.settings,
@@ -672,7 +672,7 @@ describe("context builder controls", () => {
 
   it("uses edge-only graph changes to pull affected endpoints into context without raw graph spam", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-context-graph-change-edge-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const flow = bundle.flows[0]!;
     const edge = {
       id: "edge-user-added",
@@ -702,7 +702,7 @@ describe("context builder controls", () => {
 
   it("excludes ignored graph items from the working context while listing them compactly", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-context-ignored-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const flow = bundle.flows[0]!;
     await saveFlow(root, {
       ...flow,
@@ -737,7 +737,7 @@ describe("context builder controls", () => {
 
   it("excludes ignored subflows from the working context while listing them compactly", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-context-ignored-subflow-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const flow = bundle.flows[0]!;
     await saveFlow(root, {
       ...flow,
@@ -773,7 +773,7 @@ describe("context builder controls", () => {
 
   it("blocks context creation for ignored run scopes", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-context-ignored-scope-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const flow = bundle.flows[0]!;
     await saveFlow(root, {
       ...flow,
@@ -784,7 +784,7 @@ describe("context builder controls", () => {
 
     await expect(buildContext(root, "flow-main", "node-canvas", "offline-manual")).rejects.toThrow(/ignored and outside the agent working set/);
 
-    const reloaded = (await ensureProject(root)).flows[0]!;
+    const reloaded = (await ensureFixtureProject(root)).flows[0]!;
     await saveFlow(root, {
       ...reloaded,
       subflows: reloaded.subflows.map((subflow) => subflow.id === "subflow-json" ? { ...subflow, ignored: true } : subflow),
@@ -798,7 +798,7 @@ describe("context builder controls", () => {
 
   it("includes project conventions and missing recommendations", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-context-conventions-"));
-    await ensureProject(root);
+    await ensureFixtureProject(root);
     await writeFile(path.join(root, ".gitignore"), "node_modules\n.env\n.archicode/artifacts\n", "utf8");
 
     const context = await buildContext(root, "flow-main", "node-orchestrator", "offline-manual");

@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { ensureProject, updateProjectSettings } from "../src/main/storage/projectStore";
+import { ensureFixtureProject, updateProjectSettings } from "../src/main/storage/projectStore";
 import { listRuntimeServices, runtimeServiceSpawnOptions, shutdownRuntimeServices, startRuntimeService, stopRuntimeService, waitForRuntimeServiceReady } from "../src/main/storage/runtimeServices";
 import { runtimeInsight } from "../src/shared/runtimeInsights";
 
@@ -27,7 +27,7 @@ describe("runtime services", () => {
 
   it("stops ArchiCode-owned runtime processes during app shutdown", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-runtime-shutdown-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       runTargetProfiles: [{
@@ -77,7 +77,7 @@ describe("runtime services", () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-runtime-services-"));
     await mkdir(path.join(root, "apps", "web"), { recursive: true });
     await mkdir(path.join(root, "apps", "api"), { recursive: true });
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       runTargetProfiles: [
@@ -128,7 +128,7 @@ describe("runtime services", () => {
 
   it("rejects runtime profile cwd outside the project root", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-runtime-cwd-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       runTargetProfiles: [
@@ -153,7 +153,7 @@ describe("runtime services", () => {
 
   it("runs setup before starting a runtime service", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-runtime-setup-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       runTargetProfiles: [
@@ -185,7 +185,7 @@ describe("runtime services", () => {
 
   it("discovers, launches, waits for, runs, and cleans up an owned target", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-runtime-target-lifecycle-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       runTargetProfiles: [{
@@ -227,7 +227,7 @@ describe("runtime services", () => {
 
   it("captures an emitted runtime URL onto the service", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-runtime-url-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       runTargetProfiles: [
@@ -269,7 +269,7 @@ describe("runtime services", () => {
     const address = orphan.address();
     if (!address || typeof address === "string") throw new Error("Expected a TCP port for the fixture server.");
     const occupiedPort = address.port;
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       runTargetProfiles: [{
@@ -311,7 +311,7 @@ describe("runtime services", () => {
 
   it("strips ANSI escapes before storing and linking runtime URLs", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-runtime-ansi-url-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       runTargetProfiles: [
@@ -343,7 +343,7 @@ describe("runtime services", () => {
 
   it("does not treat a 404 app URL as runtime readiness", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-runtime-404-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       runTargetProfiles: [{
@@ -372,7 +372,7 @@ describe("runtime services", () => {
 
   it("requires an explicit readiness signal for generic desktop/native runtimes", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-runtime-explicit-readiness-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     await updateProjectSettings(root, {
       ...bundle.project.settings,
       runTargetProfiles: [{

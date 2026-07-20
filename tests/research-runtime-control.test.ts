@@ -4,13 +4,13 @@ import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { applyResearchOperation } from "../src/main/research/graphOps";
 import { researchToolDiscoverRunTargets, researchToolListRuntimeServices } from "../src/main/research/inspectionTools";
-import { ensureProject, updateProjectSettings } from "../src/main/storage/projectStore";
+import { ensureFixtureProject, updateProjectSettings } from "../src/main/storage/projectStore";
 import { listRuntimeServices, startRuntimeService, stopRuntimeService } from "../src/main/storage/runtimeServices";
 
 describe("Archi chat runtime control", () => {
   it("inspects profiles and targets, then applies reviewed stop and restart actions", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-runtime-"));
-    const bundle = await ensureProject(projectRoot);
+    const bundle = await ensureFixtureProject(projectRoot);
     await updateProjectSettings(projectRoot, {
       ...bundle.project.settings,
       runTargetProfiles: [{

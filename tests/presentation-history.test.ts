@@ -2,12 +2,12 @@ import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
-import { applyPresentationPatch, ensureProject, updateNode } from "../src/main/storage/projectStore";
+import { applyPresentationPatch, ensureFixtureProject, updateNode } from "../src/main/storage/projectStore";
 
 describe("guarded presentation history persistence", () => {
   it("reverses presentation fields without overwriting a later semantic edit", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-presentation-history-"));
-    const initial = await ensureProject(root);
+    const initial = await ensureFixtureProject(root);
     const flow = initial.flows[0]!;
     const node = flow.nodes[0]!;
     const moved = { x: node.position.x + 240, y: node.position.y + 120 };
@@ -33,7 +33,7 @@ describe("guarded presentation history persistence", () => {
 
   it("rejects a stale inverse without partially applying its batch", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-presentation-conflict-"));
-    const initial = await ensureProject(root);
+    const initial = await ensureFixtureProject(root);
     const flow = initial.flows[0]!;
     const [first, second] = flow.nodes;
     expect(first).toBeTruthy();
@@ -70,7 +70,7 @@ describe("guarded presentation history persistence", () => {
 
   it("supports nullable node size while rejecting semantic fields at validation", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-presentation-size-"));
-    const initial = await ensureProject(root);
+    const initial = await ensureFixtureProject(root);
     const flow = initial.flows[0]!;
     const node = flow.nodes[0]!;
     const size = { width: 420, height: 260 };

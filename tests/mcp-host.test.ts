@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { addNote, attachNodeReferences } from "../src/main/storage/notes";
-import { ensureExternalMcpHostToken, ensureProject, loadProject, updateNode, updateProjectSettings } from "../src/main/storage/projectStore";
+import { ensureExternalMcpHostToken, ensureFixtureProject, loadProject, updateNode, updateProjectSettings } from "../src/main/storage/projectStore";
 import { getExternalMcpHostStatus, setExternalMcpProjectUpdatePublisher, stopExternalMcpHost, syncExternalMcpHost } from "../src/main/mcpHost";
 import { sanitizeExternalValue } from "../src/shared/redaction";
 import { codeKnowledgeSnapshotSchema } from "../src/shared/codeKnowledge";
@@ -33,7 +33,7 @@ describe("Hosted ArchiCode MCP", () => {
 
   it("keeps hosted MCP disabled by default and stores tokens only in local state", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-mcp-host-default-"));
-    const bundle = await ensureProject(root);
+    const bundle = await ensureFixtureProject(root);
     const token = await ensureExternalMcpHostToken(root);
     const shared = await readFile(path.join(root, ".archicode", "project.json"), "utf8");
     const local = await readFile(path.join(root, ".archicode", "local.json"), "utf8");
@@ -186,7 +186,7 @@ describe("Hosted ArchiCode MCP", () => {
 
   it("exposes reusable node rules and node attachments over hosted MCP", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-mcp-host-rules-"));
-    const initial = await ensureProject(root);
+    const initial = await ensureFixtureProject(root);
     const flow = initial.flows[0]!;
     const node = flow.nodes[0]!;
     const port = await freePort();
@@ -237,7 +237,7 @@ describe("Hosted ArchiCode MCP", () => {
 
   it("exposes node note attachments as artifact metadata over hosted MCP", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-mcp-host-note-attachments-"));
-    const initial = await ensureProject(root);
+    const initial = await ensureFixtureProject(root);
     const flow = initial.flows[0]!;
     const node = flow.nodes[0]!;
     const attachmentPath = path.join(root, "note-notes.md");
@@ -509,7 +509,7 @@ describe("Hosted ArchiCode MCP", () => {
 });
 
 async function enableHost(root: string, port: number) {
-  const bundle = await ensureProject(root);
+  const bundle = await ensureFixtureProject(root);
   const updated = await updateProjectSettings(root, {
     ...bundle.project.settings,
     externalMcpHost: {
