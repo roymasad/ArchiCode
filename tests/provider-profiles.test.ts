@@ -36,6 +36,7 @@ describe("provider profile helpers", () => {
       { value: "codex-local", label: "Codex Local CLI" },
       { value: "antigravity-local", label: "Google Antigravity CLI" },
       { value: "grok-local", label: "Grok Build CLI" },
+      { value: "kimi-local", label: "Kimi Code CLI" },
       { value: "opencode-local", label: "OpenCode Local CLI" }
     ]);
   });
@@ -97,6 +98,20 @@ describe("provider profile helpers", () => {
     expect(grok).toMatchObject({
       kind: "grok-local",
       localCommand: "grok",
+      model: "",
+      ephemeral: true,
+      enabled: false
+    });
+  });
+
+  it("creates Kimi Code profiles without adding a default provider card", () => {
+    const seedProviders = createSeedProject("/tmp/archicode", { includeProviderTemplates: false }).project.settings.providers;
+    const kimi = createProviderProfile(seedProviders, "kimi-local", "Kimi Code");
+
+    expect(seedProviders).toHaveLength(1);
+    expect(kimi).toMatchObject({
+      kind: "kimi-local",
+      localCommand: "kimi",
       model: "",
       ephemeral: true,
       enabled: false

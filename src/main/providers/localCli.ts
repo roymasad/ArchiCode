@@ -1,6 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { constants } from "node:fs";
-import { access, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { homedir, tmpdir } from "node:os";
 import path from "node:path";
@@ -36,6 +36,10 @@ export function isGrokLocalProvider(provider: Provider): provider is Provider & 
   return provider.kind === "grok-local";
 }
 
+export function isKimiLocalProvider(provider: Provider): provider is Provider & { kind: "kimi-local" } {
+  return provider.kind === "kimi-local";
+}
+
 export function localCliCommand(provider: Pick<Provider, "kind" | "localCommand">): string {
   return provider.localCommand?.trim() || (provider.kind === "claude-local"
     ? "claude"
@@ -45,6 +49,8 @@ export function localCliCommand(provider: Pick<Provider, "kind" | "localCommand"
         ? "agy"
         : provider.kind === "grok-local"
           ? "grok"
+        : provider.kind === "kimi-local"
+          ? "kimi"
         : "codex");
 }
 
@@ -144,7 +150,7 @@ export async function callCodexLocal(provider: Provider, contextText: string, pr
 }
 
 export async function callLocalResearchProvider(
-  transport: "codex-local" | "claude-local" | "opencode-local" | "antigravity-local" | "grok-local",
+  transport: "codex-local" | "claude-local" | "opencode-local" | "antigravity-local" | "grok-local" | "kimi-local",
   provider: Provider,
   userMessage: string,
   options: ResearchProviderOptions,
@@ -163,7 +169,9 @@ export async function callLocalResearchProvider(
         ? "OpenCode"
         : transport === "antigravity-local"
           ? "Antigravity"
-          : "Grok Build";
+          : transport === "grok-local"
+            ? "Grok Build"
+            : "Kimi Code";
   const askModeNote = (options.mcpTools ?? []).some((tool) => !options.isTerminalTool?.(tool.providerToolName))
     ? "Enabled Ask-mode MCP servers remain visible through the structured tool list. If an Ask-mode tool is requested, ArchiCode will pause for approval and then resume this same turn with the tool result."
     : "";
@@ -215,6 +223,8 @@ export async function callLocalResearchProvider(
                   ? "Web search is enabled for this chat. Use Antigravity's built-in web tools only when current external information is needed, and cite sources when web results inform the answer."
                   : transport === "grok-local"
                     ? "Web search is enabled for this chat. Use Grok Build's web tools only when current external information is needed, and cite sources when web results inform the answer."
+                    : transport === "kimi-local"
+                      ? "Web search is enabled for this chat. Use Kimi Code's built-in web tools only when current external information is needed, and cite sources when web results inform the answer."
                     : "Web search is enabled for this chat. Use Codex web search only when current external information is needed, and cite sources when web results inform the answer."
             : "Web search is disabled by project settings. Use only provided context and local model knowledge.",
           askModeNote,
@@ -701,6 +711,242 @@ export async function callAntigravityLocalResearch(provider: Provider, userMessa
         throw new Error(`Antigravity local research provider failed with exit code ${processResult.exitCode}.\n${processResult.stderr || processResult.stdout}`);
       }
       return processResult.stdout.trim() || "Antigravity local research provider returned no content.";
+    }
+  );
+  emitUnavailableUsage(provider, policy, options.onUsage);
+  return result;
+}
+
+export function buildKimiLocalArgs(provider: Provider, phase: LlmPhase, prompt: string): string[] {
+  const args = ["--prompt", prompt, "--output-format", "stream-json"];
+  const model = resolvePhaseModelPolicy(provider, phase).modelOverride?.trim() || provider.model?.trim();
+  if (model) args.push("--model", model);
+  return args;
+}
+
+function kimiContentText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(kimiContentText).filter(Boolean).join("");
+  if (!value || typeof value !== "object") return "";
+  const record = value as Record<string, unknown>;
+  if (typeof record.text === "string") return record.text;
+  return kimiContentText(record.content ?? record.parts ?? record.delta);
+}
+
+export function kimiJsonEvent(line: string): { text?: { kind: "delta" | "full"; tokenKind: ProviderTokenKind; value: string } } | null {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+  let event: Record<string, unknown>;
+  try {
+    event = JSON.parse(trimmed) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  const message = event.message && typeof event.message === "object" ? event.message as Record<string, unknown> : undefined;
+  const role = typeof event.role === "string"
+    ? event.role.toLowerCase()
+    : typeof message?.role === "string"
+      ? message.role.toLowerCase()
+      : "";
+  const type = typeof event.type === "string" ? event.type.toLowerCase() : "";
+  if (role !== "assistant" && !type.includes("assistant")) return {};
+  const value = kimiContentText(message?.content ?? event.content ?? event.delta ?? event.text);
+  if (!value) return {};
+  return {
+    text: {
+      kind: type.includes("delta") || type.includes("chunk") ? "delta" : "full",
+      tokenKind: type.includes("thinking") || type.includes("reason") ? "thinking" : "answer",
+      value
+    }
+  };
+}
+
+export function createKimiLocalTokenStreamer(onToken?: (text: string, kind?: ProviderTokenKind) => void): {
+  (chunk: string): void;
+  finalText(): string;
+} {
+  let buffer = "";
+  let answer = "";
+  let thinking = "";
+  const processLines = (lines: string[]): void => {
+    for (const line of lines) {
+      const event = kimiJsonEvent(line);
+      if (!event?.text) continue;
+      if (event.text.tokenKind === "thinking") thinking = emitLocalCliJsonText(event.text, thinking, onToken);
+      else answer = emitLocalCliJsonText(event.text, answer, onToken);
+    }
+  };
+  const push = (chunk: string): void => {
+    buffer += chunk;
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() ?? "";
+    processLines(lines);
+  };
+  push.finalText = () => {
+    if (buffer.trim()) processLines([buffer]);
+    buffer = "";
+    return (answer || thinking).trim();
+  };
+  return push;
+}
+
+function kimiAttachmentReferences(options: Pick<ProviderCallOptions, "imageAttachments" | "textAttachments">): string {
+  const paths = [...new Set([
+    ...(options.imageAttachments ?? []).map((attachment) => attachment.path.trim()),
+    ...(options.textAttachments ?? []).map((attachment) => attachment.path.trim())
+  ].filter(Boolean))];
+  return paths.length ? ["Kimi Code attachment references:", ...paths.map((attachmentPath) => `@${attachmentPath}`)].join("\n") : "";
+}
+
+function kimiPermissionInstructions(provider: Provider, phase: LlmPhase): string {
+  const writeCapable = provider.localSandbox !== "read-only" && (phase === "coding" || phase === "debugging" || phase === "verifying");
+  if (!writeCapable) {
+    return "This Kimi one-shot must remain read-only. Do not call Write or Edit, and do not run shell commands or tools with side effects. Static deny rules configured in Kimi Code remain authoritative.";
+  }
+  if (provider.localSandbox === "workspace-write") {
+    return "Limit all file operations and commands to the current project workspace. Do not access parent, home, credential, or external directories. Kimi Code static permission rules remain authoritative.";
+  }
+  return "Full local command access is enabled for this trusted Kimi Code run. Keep every action necessary and directly related to the requested project task.";
+}
+
+function kimiPermissionRule(decision: "allow" | "deny", pattern: string, reason: string): string {
+  return [
+    "[[permission.rules]]",
+    `decision = ${JSON.stringify(decision)}`,
+    'scope = "session-runtime"',
+    `pattern = ${JSON.stringify(pattern)}`,
+    `reason = ${JSON.stringify(reason)}`
+  ].join("\n");
+}
+
+export function kimiArchiCodePermissionConfig(provider: Provider, phase: LlmPhase, projectRoot: string): string {
+  const writeCapable = provider.localSandbox !== "read-only" && (phase === "coding" || phase === "debugging" || phase === "verifying");
+  if (provider.localSandbox === "danger-full-access" && writeCapable) return "";
+  const rules: string[] = [];
+  if (writeCapable) {
+    const root = path.resolve(projectRoot).replace(/\\/g, "/").replace(/\/$/, "");
+    rules.push(kimiPermissionRule("allow", `Write(${root}/**)`, "ArchiCode workspace write"));
+    rules.push(kimiPermissionRule("allow", `Edit(${root}/**)`, "ArchiCode workspace edit"));
+  }
+  rules.push(kimiPermissionRule("deny", "Write", writeCapable ? "Outside the ArchiCode workspace" : "ArchiCode read-only phase"));
+  rules.push(kimiPermissionRule("deny", "Edit", writeCapable ? "Outside the ArchiCode workspace" : "ArchiCode read-only phase"));
+  rules.push(kimiPermissionRule("deny", "Bash", "ArchiCode owns finite command verification"));
+  rules.push(kimiPermissionRule("deny", "Shell", "ArchiCode owns finite command verification"));
+  rules.push(kimiPermissionRule("deny", "Agent", "Prevent delegated tools from bypassing ArchiCode access boundaries"));
+  rules.push(kimiPermissionRule("deny", "AgentSwarm", "Prevent delegated tools from bypassing ArchiCode access boundaries"));
+  rules.push(kimiPermissionRule("deny", "mcp__*", "Use ArchiCode's permissioned MCP tool loop instead"));
+  rules.push(kimiPermissionRule("deny", "CronCreate", "Scheduled background work is outside a one-shot provider call"));
+  return `${rules.join("\n\n")}\n`;
+}
+
+async function prepareKimiProcessEnvironment(provider: Provider, phase: LlmPhase, projectRoot: string | undefined): Promise<{
+  env: NodeJS.ProcessEnv;
+  cleanup: () => Promise<void>;
+}> {
+  const sourceHome = path.resolve(process.env.KIMI_CODE_HOME?.trim() || path.join(homedir(), ".kimi-code"));
+  const isolatedHome = await mkdtemp(path.join(tmpdir(), "archicode-kimi-"));
+  let config = "";
+  try {
+    config = await readFile(path.join(sourceHome, "config.toml"), "utf8");
+  } catch {
+    // Kimi will report its normal missing-configuration/login error.
+  }
+  const permissionConfig = kimiArchiCodePermissionConfig(provider, phase, projectRoot ?? process.cwd());
+  await writeFile(path.join(isolatedHome, "config.toml"), `${permissionConfig}${config.replace(/^\uFEFF/, "")}`, { encoding: "utf8", mode: 0o600 });
+  const credentialsSource = path.join(sourceHome, "credentials");
+  try {
+    await access(credentialsSource, constants.R_OK);
+    await symlink(credentialsSource, path.join(isolatedHome, "credentials"), process.platform === "win32" ? "junction" : "dir");
+  } catch {
+    await mkdir(path.join(isolatedHome, "credentials"), { recursive: true, mode: 0o700 });
+  }
+  return {
+    env: {
+      KIMI_CODE_HOME: isolatedHome,
+      KIMI_DISABLE_TELEMETRY: "1",
+      KIMI_CODE_NO_AUTO_UPDATE: "1"
+    },
+    cleanup: async () => {
+      await rm(isolatedHome, { recursive: true, force: true });
+    }
+  };
+}
+
+export async function callKimiLocal(provider: Provider, contextText: string, promptSummary: string, options: ProviderCallOptions, policy: PhaseModelPolicy): Promise<string> {
+  const command = localCliCommand(provider);
+  const phase = options.phase ?? "planning";
+  const profile = inferModelCapabilityProfile(provider, policy.modelOverride);
+  const prompt = options.bareExtraction
+    ? [extractionSystemPrompt, "", contextText].join("\n")
+    : [
+        orchestratorSystemPrompt,
+        "",
+        "You are being called as ArchiCode's local Kimi Code provider through a fresh one-shot kimi --prompt process.",
+        ...localCodingPhaseInstructions(provider, phase, "Kimi Code"),
+        kimiPermissionInstructions(provider, phase),
+        phasePolicyText(phase, policy, profile),
+        options.selectedSkillsPrompt?.trim() ?? "",
+        imageAttachmentText(options.imageAttachments),
+        await textAttachmentText(options.textAttachments),
+        kimiAttachmentReferences(options),
+        options.webSearchEnabled
+          ? "Use Kimi Code's built-in web tools only when current external information is needed, and cite sources."
+          : "Web search is disabled. Use the supplied project context and local knowledge.",
+        "",
+        `Prompt summary: ${promptSummary}`,
+        "",
+        "Project JSON context:",
+        contextText
+      ].filter(Boolean).join("\n");
+  const args = buildKimiLocalArgs(provider, phase, prompt);
+  const processEnvironment = await prepareKimiProcessEnvironment(provider, phase, options.projectRoot);
+  const stream = createKimiLocalTokenStreamer(options.onProgress
+    ? (text, kind) => options.onProgress?.({ stream: kind === "thinking" ? "system" : "stdout", text })
+    : undefined);
+  let result: Awaited<ReturnType<typeof runLocalProcess>>;
+  try {
+    result = await runLocalProcess(command, args, "", options.projectRoot, (event) => {
+      if (event.stream === "stdout") stream(event.text);
+      else options.onProgress?.(event);
+    }, options.signal, { env: processEnvironment.env });
+  } finally {
+    await processEnvironment.cleanup();
+  }
+  const finalText = stream.finalText();
+  if (result.exitCode !== 0) {
+    throw new Error(`Kimi Code local provider failed with exit code ${result.exitCode}.\n${result.stderr || result.stdout}`);
+  }
+  emitUnavailableUsage(provider, policy, options.onUsage);
+  return finalText || result.stdout.trim() || "Kimi Code local provider returned no content.";
+}
+
+export async function callKimiLocalResearch(provider: Provider, userMessage: string, options: ResearchProviderOptions, policy: PhaseModelPolicy): Promise<string> {
+  const result = await callLocalResearchProvider(
+    "kimi-local",
+    provider,
+    userMessage,
+    options,
+    policy,
+    async (prompt, onToken) => {
+      const command = localCliCommand(provider);
+      const attachmentReferences = kimiAttachmentReferences(options);
+      const finalPrompt = [prompt, attachmentReferences, kimiPermissionInstructions(provider, "brainstorming")].filter(Boolean).join("\n\n");
+      const args = buildKimiLocalArgs(provider, "brainstorming", finalPrompt);
+      const stream = createKimiLocalTokenStreamer(onToken);
+      const processEnvironment = await prepareKimiProcessEnvironment(provider, "brainstorming", options.projectRoot);
+      let processResult: Awaited<ReturnType<typeof runLocalProcess>>;
+      try {
+        processResult = await runLocalProcess(command, args, "", options.projectRoot, (event) => {
+          if (event.stream === "stdout") stream(event.text);
+        }, options.signal, { env: processEnvironment.env });
+      } finally {
+        await processEnvironment.cleanup();
+      }
+      const finalText = stream.finalText();
+      if (processResult.exitCode !== 0) {
+        throw new Error(`Kimi Code local research provider failed with exit code ${processResult.exitCode}.\n${processResult.stderr || processResult.stdout}`);
+      }
+      return finalText || processResult.stdout.trim() || "Kimi Code local research provider returned no content.";
     }
   );
   emitUnavailableUsage(provider, policy, options.onUsage);
@@ -2180,6 +2426,70 @@ export async function checkAntigravityLocal(provider: Provider, checkedAt: strin
         : `Antigravity CLI is installed (${(version.stdout || version.stderr).trim()}) but its model catalog failed or returned no models: ${catalog.stderr || catalog.stdout}`,
       availableModels: availableModels.length ? availableModels : undefined,
       modelListSource: availableModels.length ? "agy models" : undefined
+    };
+  } catch (error) {
+    return {
+      providerId: provider.id,
+      ok: false,
+      status: "failed",
+      checkedAt,
+      message: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+export function parseKimiModels(output: string): string[] {
+  try {
+    const payload = JSON.parse(output) as { models?: unknown };
+    if (Array.isArray(payload.models)) {
+      return [...new Set(payload.models.map((model) => {
+        if (typeof model === "string") return model;
+        if (!model || typeof model !== "object") return "";
+        const record = model as Record<string, unknown>;
+        return [record.alias, record.id, record.name, record.model].find((value): value is string => typeof value === "string") ?? "";
+      }).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+    }
+    if (payload.models && typeof payload.models === "object") {
+      return Object.keys(payload.models).sort((a, b) => a.localeCompare(b));
+    }
+  } catch {
+    // Fall back to the human-readable provider list for older Kimi releases.
+  }
+  const ansi = /\u001b\[[0-?]*[ -/]*[@-~]/g;
+  return [...new Set(output
+    .replace(ansi, "")
+    .split(/\r?\n/)
+    .map((line) => line.trim().match(/^([A-Za-z0-9][A-Za-z0-9._:/-]*)/)?.[1] ?? "")
+    .filter((model) => model.includes("/")))]
+    .sort((a, b) => a.localeCompare(b));
+}
+
+export async function checkKimiLocal(provider: Provider, checkedAt: string): Promise<ProviderHealthResult> {
+  const command = localCliCommand(provider);
+  try {
+    const version = await runLocalProcess(command, ["--version"], "", undefined, undefined, undefined, { inactivityTimeoutMs: 30_000 });
+    if (version.exitCode !== 0) {
+      return {
+        providerId: provider.id,
+        ok: false,
+        status: "failed",
+        checkedAt,
+        message: `Kimi Code CLI check failed: ${version.stderr || version.stdout}`
+      };
+    }
+    const catalog = await runLocalProcess(command, ["provider", "list", "--json"], "", undefined, undefined, undefined, { inactivityTimeoutMs: 60_000 });
+    const availableModels = catalog.exitCode === 0 ? parseKimiModels(catalog.stdout) : [];
+    const ready = catalog.exitCode === 0 && availableModels.length > 0;
+    return {
+      providerId: provider.id,
+      ok: ready,
+      status: ready ? "ready" : "failed",
+      checkedAt,
+      message: ready
+        ? `Kimi Code CLI is available (${(version.stdout || version.stderr).trim()}) with ${availableModels.length} configured model${availableModels.length === 1 ? "" : "s"}. Authentication is managed by Kimi Code; run kimi login if the saved membership or API credentials need refreshing.`
+        : `Kimi Code CLI is installed (${(version.stdout || version.stderr).trim()}) but its configured model catalog failed or returned no models: ${catalog.stderr || catalog.stdout}`,
+      availableModels: availableModels.length ? availableModels : undefined,
+      modelListSource: availableModels.length ? "kimi provider list --json" : undefined
     };
   } catch (error) {
     return {

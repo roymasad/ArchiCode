@@ -142,7 +142,7 @@ export function isOfficialOpenAiCompatibleProvider(provider: ProjectSettings["pr
 }
 
 export function providerCheckHint(kind: ProjectSettings["providers"][number]["kind"]): string {
-  if (kind === "codex-local" || kind === "claude-local" || kind === "opencode-local" || kind === "antigravity-local" || kind === "grok-local") {
+  if (kind === "codex-local" || kind === "claude-local" || kind === "opencode-local" || kind === "antigravity-local" || kind === "grok-local" || kind === "kimi-local") {
     return "Checks the CLI connection and refreshes available models. Make sure the latest CLI version is installed.";
   }
   return "Checks the provider connection and refreshes available models when the provider exposes a model catalog.";
@@ -206,6 +206,11 @@ export function modelHint(provider: ProjectSettings["providers"][number]): strin
     return provider.detectedAvailableModels.length
       ? `Loaded ${provider.detectedAvailableModels.length} models from Grok Build.`
       : "Click Check to load the models available to the signed-in Grok Build account and configured custom providers.";
+  }
+  if (provider.kind === "kimi-local") {
+    return provider.detectedAvailableModels.length
+      ? `Loaded ${provider.detectedAvailableModels.length} configured Kimi Code models.`
+      : "Click Check to load Kimi Code's configured models. Sign in with kimi login to use a Kimi membership.";
   }
   if (provider.detectedAvailableModels.length) {
     if (isOfficialOpenAiCompatibleProvider(provider)) {
@@ -411,7 +416,7 @@ export const runtimeUrlPattern = /(https?:\/\/[^\s"'<>),]+)/g;
 
 export function providerSupportsImages(provider: ProjectSettings["providers"][number] | undefined): boolean {
   if (!provider || provider.kind === "offline-manual") return false;
-  if (provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local" || provider.kind === "antigravity-local" || provider.kind === "grok-local") return true;
+  if (provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local" || provider.kind === "antigravity-local" || provider.kind === "grok-local" || provider.kind === "kimi-local") return true;
   const model = (provider.model ?? "").toLowerCase();
   return !model.includes("text");
 }
@@ -598,6 +603,7 @@ export function providerDescription(kind: ProjectSettings["providers"][number]["
   if (kind === "opencode-local") return "Runs one-shot OpenCode CLI processes and uses OpenCode's configured providers and composite model IDs.";
   if (kind === "antigravity-local") return "Runs one-shot Google Antigravity CLI print calls using the models available to the signed-in agy account.";
   if (kind === "grok-local") return "Runs one-shot Grok Build CLI processes using the signed-in account or models configured in Grok Build.";
+  if (kind === "kimi-local") return "Runs fresh one-shot Kimi Code CLI processes using the signed-in Kimi membership or configured API provider.";
   return "";
 }
 

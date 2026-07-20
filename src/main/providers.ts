@@ -26,16 +26,20 @@ import {
   callAntigravityLocalResearch,
   callGrokLocal,
   callGrokLocalResearch,
+  callKimiLocal,
+  callKimiLocalResearch,
   checkClaudeLocal,
   checkCodexLocal,
   checkOpenCodeLocal,
   checkAntigravityLocal,
   checkGrokLocal,
+  checkKimiLocal,
   isClaudeLocalProvider,
   isCodexLocalProvider,
   isOpenCodeLocalProvider,
   isAntigravityLocalProvider,
-  isGrokLocalProvider
+  isGrokLocalProvider,
+  isKimiLocalProvider
 } from "./providers/localCli";
 
 import {
@@ -275,7 +279,7 @@ export type ResearchProviderOptions = {
 };
 
 export type ResearchProviderContinuation = {
-  transport: "anthropic" | "openai-chat" | "openai-responses" | "codex-local" | "claude-local" | "opencode-local" | "antigravity-local" | "grok-local";
+  transport: "anthropic" | "openai-chat" | "openai-responses" | "codex-local" | "claude-local" | "opencode-local" | "antigravity-local" | "grok-local" | "kimi-local";
   messages?: unknown[];
   previousResponseId?: string;
   pendingToolCall: { id: string; providerToolName: string; argumentsJson: string };
@@ -363,6 +367,9 @@ export async function callProvider(provider: Provider, contextText: string, prom
   if (isGrokLocalProvider(provider)) {
     return callGrokLocal(provider, contextText, promptSummary, { ...options, phase }, policy);
   }
+  if (isKimiLocalProvider(provider)) {
+    return callKimiLocal(provider, contextText, promptSummary, { ...options, phase }, policy);
+  }
 
   const apiKey = resolveProviderApiKey(provider);
   if (!apiKey) {
@@ -404,6 +411,9 @@ export async function callResearchProvider(provider: Provider, userMessage: stri
   }
   if (isGrokLocalProvider(provider)) {
     return callGrokLocalResearch(provider, userMessage, options, policy);
+  }
+  if (isKimiLocalProvider(provider)) {
+    return callKimiLocalResearch(provider, userMessage, options, policy);
   }
 
   const apiKey = resolveProviderApiKey(provider);
@@ -673,6 +683,9 @@ export async function checkProviderHealth(provider: Provider): Promise<ProviderH
   }
   if (isGrokLocalProvider(provider)) {
     return checkGrokLocal(provider, checkedAt);
+  }
+  if (isKimiLocalProvider(provider)) {
+    return checkKimiLocal(provider, checkedAt);
   }
 
   const apiKey = resolveProviderApiKey(provider);
@@ -1191,7 +1204,7 @@ export function formatLocalResearchTranscript(messages: LocalResearchContinuatio
 
 export function localResearchTranscriptFromContinuation(
   continuation: ResearchProviderContinuation & { approvedResult: string },
-  transport: "codex-local" | "claude-local" | "opencode-local" | "antigravity-local" | "grok-local"
+  transport: "codex-local" | "claude-local" | "opencode-local" | "antigravity-local" | "grok-local" | "kimi-local"
 ): LocalResearchContinuationMessage[] {
   if (continuation.transport !== transport || !continuation.messages) return [];
   const transcript = (continuation.messages as LocalResearchContinuationMessage[]).map((message) => ({ ...message }));
@@ -1405,7 +1418,7 @@ export function inferModelCapabilityProfile(provider: Provider, modelOverride?: 
       reasoningField: "none"
     };
   }
-  if (provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local" || provider.kind === "antigravity-local" || provider.kind === "grok-local") {
+  if (provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local" || provider.kind === "antigravity-local" || provider.kind === "grok-local" || provider.kind === "kimi-local") {
     return {
       providerKind: provider.kind,
       model: provider.model,

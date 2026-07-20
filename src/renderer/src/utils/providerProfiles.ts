@@ -15,6 +15,7 @@ export const providerKindOptions: Array<{ value: ProviderKind; label: string }> 
   { value: "codex-local", label: "Codex Local CLI" },
   { value: "antigravity-local", label: "Google Antigravity CLI" },
   { value: "grok-local", label: "Grok Build CLI" },
+  { value: "kimi-local", label: "Kimi Code CLI" },
   { value: "opencode-local", label: "OpenCode Local CLI" }
 ];
 
@@ -52,6 +53,8 @@ export function localProviderUsageUnavailableDetail(provider?: ProviderSettings)
         ? "Antigravity CLI provider"
         : provider?.kind === "grok-local"
           ? "Grok Build CLI provider"
+        : provider?.kind === "kimi-local"
+          ? "Kimi Code CLI provider"
       : "Local CLI provider";
   const profile = provider?.label?.trim();
   return `${cliName}${profile ? ` (${profile})` : ""} — token usage is not reported.`;
@@ -152,6 +155,7 @@ export function defaultProviderLabel(kind: ProviderKind): string {
   if (kind === "opencode-local") return "OpenCode Local CLI";
   if (kind === "antigravity-local") return "Google Antigravity CLI";
   if (kind === "grok-local") return "Grok Build CLI";
+  if (kind === "kimi-local") return "Kimi Code CLI";
   return "Manual / Offline";
 }
 
@@ -309,6 +313,17 @@ function providerDefaultsForKind(kind: ProviderKind): Omit<ProviderSettings, "id
       ephemeral: true
     };
   }
+  if (kind === "kimi-local") {
+    return {
+      ...common,
+      baseUrl: undefined,
+      model: "",
+      openAiEndpointMode: undefined,
+      localCommand: "kimi",
+      localSandbox: defaultCodexLocalSandbox(),
+      ephemeral: true
+    };
+  }
   return {
     ...common,
     baseUrl: undefined,
@@ -370,7 +385,7 @@ function providerAutoCheckFingerprint(provider: ProviderSettings): string {
       ephemeral: Boolean(provider.ephemeral)
     });
   }
-  if (provider.kind === "claude-local" || provider.kind === "opencode-local" || provider.kind === "antigravity-local" || provider.kind === "grok-local") {
+  if (provider.kind === "claude-local" || provider.kind === "opencode-local" || provider.kind === "antigravity-local" || provider.kind === "grok-local" || provider.kind === "kimi-local") {
     return JSON.stringify({
       kind: provider.kind,
       model: provider.model ?? "",

@@ -68,7 +68,7 @@ function isOfficialOpenAiCompatibleProvider(provider: ProjectSettings["providers
 }
 
 function providerCheckHint(kind: ProjectSettings["providers"][number]["kind"]): string {
-  if (kind === "codex-local" || kind === "claude-local" || kind === "opencode-local" || kind === "antigravity-local" || kind === "grok-local") {
+  if (kind === "codex-local" || kind === "claude-local" || kind === "opencode-local" || kind === "antigravity-local" || kind === "grok-local" || kind === "kimi-local") {
     return "Checks the CLI connection and refreshes available models. Make sure the latest CLI version is installed.";
   }
   return "Checks the provider connection and refreshes available models when the provider exposes a model catalog.";
@@ -103,6 +103,11 @@ function modelHint(provider: ProjectSettings["providers"][number]): string {
     return provider.detectedAvailableModels.length
       ? `Loaded ${provider.detectedAvailableModels.length} models from Grok Build.`
       : "Click Check to load the models available to the signed-in Grok Build account and configured custom providers.";
+  }
+  if (provider.kind === "kimi-local") {
+    return provider.detectedAvailableModels.length
+      ? `Loaded ${provider.detectedAvailableModels.length} configured Kimi Code models.`
+      : "Click Check to load Kimi Code's configured models. Sign in with kimi login to use a Kimi membership.";
   }
   if (provider.detectedAvailableModels.length) {
     if (isOfficialOpenAiCompatibleProvider(provider)) {
@@ -159,6 +164,7 @@ function providerDescription(kind: ProjectSettings["providers"][number]["kind"])
   if (kind === "opencode-local") return "Runs one-shot OpenCode CLI processes using OpenCode's configured providers and models.";
   if (kind === "antigravity-local") return "Runs one-shot Google Antigravity CLI print calls using the models available to the signed-in agy account.";
   if (kind === "grok-local") return "Runs one-shot Grok Build CLI processes using the signed-in account or models configured in Grok Build.";
+  if (kind === "kimi-local") return "Runs fresh one-shot Kimi Code CLI processes using the signed-in Kimi membership or configured API provider.";
   return "";
 }
 
@@ -562,26 +568,26 @@ export function GlobalProviderSetup() {
                     {providerHealth[provider.id].status}: {providerHealth[provider.id].message}
                   </small>
                 ) : null}
-                {provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local" || provider.kind === "antigravity-local" || provider.kind === "grok-local" ? (
+                {provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local" || provider.kind === "antigravity-local" || provider.kind === "grok-local" || provider.kind === "kimi-local" ? (
                   <>
-                    {renderProviderModelField(provider, provider.kind === "codex-local" ? "configured Codex default" : provider.kind === "claude-local" ? "configured Claude default" : provider.kind === "opencode-local" ? "provider/model" : provider.kind === "antigravity-local" ? "configured agy default" : "configured Grok Build default")}
+                    {renderProviderModelField(provider, provider.kind === "codex-local" ? "configured Codex default" : provider.kind === "claude-local" ? "configured Claude default" : provider.kind === "opencode-local" ? "provider/model" : provider.kind === "antigravity-local" ? "configured agy default" : provider.kind === "kimi-local" ? "configured Kimi default" : "configured Grok Build default")}
                     {provider.kind === "codex-local" ? renderOutputVerbosityField(provider) : null}
                     {renderContextWindowField(provider)}
                     <Field label="Local command">
                       <TextInput
-                        value={provider.localCommand ?? (provider.kind === "codex-local" ? "codex" : provider.kind === "claude-local" ? "claude" : provider.kind === "opencode-local" ? "opencode" : provider.kind === "antigravity-local" ? "agy" : "grok")}
-                        placeholder={provider.kind === "codex-local" ? "codex" : provider.kind === "claude-local" ? "claude" : provider.kind === "opencode-local" ? "opencode" : provider.kind === "antigravity-local" ? "agy" : "grok"}
+                        value={provider.localCommand ?? (provider.kind === "codex-local" ? "codex" : provider.kind === "claude-local" ? "claude" : provider.kind === "opencode-local" ? "opencode" : provider.kind === "antigravity-local" ? "agy" : provider.kind === "kimi-local" ? "kimi" : "grok")}
+                        placeholder={provider.kind === "codex-local" ? "codex" : provider.kind === "claude-local" ? "claude" : provider.kind === "opencode-local" ? "opencode" : provider.kind === "antigravity-local" ? "agy" : provider.kind === "kimi-local" ? "kimi" : "grok"}
                         onChange={(event) => updateProvider(provider.id, { localCommand: event.target.value || undefined })}
                       />
                     </Field>
-                    <Field label={provider.kind === "opencode-local" || provider.kind === "antigravity-local" || provider.kind === "grok-local" ? "Agent" : provider.kind === "codex-local" ? "Profile" : "Settings override"}>
+                    {provider.kind === "kimi-local" ? null : <Field label={provider.kind === "opencode-local" || provider.kind === "antigravity-local" || provider.kind === "grok-local" ? "Agent" : provider.kind === "codex-local" ? "Profile" : "Settings override"}>
                       <TextInput
                         value={provider.localProfile ?? ""}
                         placeholder={provider.kind === "codex-local" ? "optional Codex profile" : provider.kind === "claude-local" ? "optional Claude settings profile" : provider.kind === "opencode-local" ? "optional OpenCode agent" : provider.kind === "antigravity-local" ? "optional Antigravity agent" : "optional Grok Build agent"}
                         onChange={(event) => updateProvider(provider.id, { localProfile: event.target.value || undefined })}
                       />
-                    </Field>
-                    <Field label={`${provider.kind === "codex-local" ? "Codex" : provider.kind === "claude-local" ? "Claude" : provider.kind === "opencode-local" ? "OpenCode" : provider.kind === "antigravity-local" ? "Antigravity" : "Grok Build"} command access`}>
+                    </Field>}
+                    <Field label={`${provider.kind === "codex-local" ? "Codex" : provider.kind === "claude-local" ? "Claude" : provider.kind === "opencode-local" ? "OpenCode" : provider.kind === "antigravity-local" ? "Antigravity" : provider.kind === "kimi-local" ? "Kimi Code" : "Grok Build"} command access`}>
                       <Select
                         value={provider.localSandbox ?? "read-only"}
                         onValueChange={(value) => updateProvider(provider.id, {
@@ -598,9 +604,11 @@ export function GlobalProviderSetup() {
                           ? "OpenCode runs once per request. Read-only phases receive explicit edit, shell, and external-directory denies; write-capable build phases use --auto."
                           : provider.kind === "antigravity-local"
                             ? "Antigravity uses plan+sandbox for read-only phases, accept-edits+sandbox for workspace writes, and bypasses permissions only in full-access mode."
+                            : provider.kind === "kimi-local"
+                              ? "Kimi print mode is autonomous, so ArchiCode injects first-match static deny rules in an isolated Kimi home. Read-only blocks edits and shell tools; workspace write allows project Write/Edit but leaves shell, delegated agents, and MCP denied. Full access falls back to the user's Kimi rules."
                             : "Grok Build uses dontAsk plus its read-only sandbox for review phases, and bypassPermissions inside the selected workspace/off sandbox only for write-capable phases."}</small>
-                    {provider.kind === "antigravity-local" ? (
-                      <small>Antigravity always runs through one-shot <code>agy --print</code> calls; ArchiCode owns conversation continuity.</small>
+                    {provider.kind === "antigravity-local" || provider.kind === "kimi-local" ? (
+                      <small>{provider.kind === "kimi-local" ? <>Kimi receives a fresh one-shot <code>kimi --prompt</code> call in a temporary Kimi home. The temporary session is removed afterward; the signed-in credential store remains shared.</> : <>Antigravity always runs through one-shot <code>agy --print</code> calls; ArchiCode owns conversation continuity.</>}</small>
                     ) : (
                       <>
                         <Switch

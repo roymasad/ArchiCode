@@ -6,7 +6,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyOpenRouterSessionId, callProvider, callResearchProvider, checkProviderHealth, createConsecutiveToolCallLoopDetector, createUsageAccumulator, isExplicitDelphiAuditRequest, localResearchToolLoopInstructions, localResearchTurnValidationFeedback, researchHistoryThread, extractModelCapabilitiesFromModels, extractContextWindowFromModels, extractModelIdsFromModels, inferModelCapabilityProfile, researchResponseStyleDirective, researchSystemInstructions, type ResearchProviderContinuation, resolveProviderApiKey, resolvePhaseModelPolicy } from "../src/main/providers";
 import { buildAnthropicCompatibleBody, buildAnthropicResearchBody } from "../src/main/providers/anthropic";
-import { activeLocalProviderProcesses, buildAntigravityLocalArgs, buildClaudeLocalArgs, buildClaudeLocalResearchArgs, buildCodexLocalArgs, buildCodexLocalResearchArgs, buildGrokLocalArgs, buildOpenCodeLocalArgs, grokCatalogLooksUnauthenticated, grokJsonEvent, openCodeJsonEvent, openCodeProcessEnv, parseAntigravityModels, parseGrokModels, parseOpenCodeModels, runLocalProcess, windowsBatchCommandLine, windowsExecutableCandidates } from "../src/main/providers/localCli";
+import { activeLocalProviderProcesses, buildAntigravityLocalArgs, buildClaudeLocalArgs, buildClaudeLocalResearchArgs, buildCodexLocalArgs, buildCodexLocalResearchArgs, buildGrokLocalArgs, buildKimiLocalArgs, buildOpenCodeLocalArgs, grokCatalogLooksUnauthenticated, grokJsonEvent, kimiArchiCodePermissionConfig, kimiJsonEvent, openCodeJsonEvent, openCodeProcessEnv, parseAntigravityModels, parseGrokModels, parseKimiModels, parseOpenCodeModels, runLocalProcess, windowsBatchCommandLine, windowsExecutableCandidates } from "../src/main/providers/localCli";
 import { buildOpenAICompatibleBody, buildOpenAIResearchChatCompletionsBody, buildOpenAIResponsesBody, buildOpenAIResearchResponsesBody } from "../src/main/providers/openai";
 import { createSeedProject } from "../src/shared/fixtures";
 import { defaultPhaseModelPolicies, defaultSubagentModelPolicies } from "../src/shared/schema";
@@ -324,6 +324,20 @@ describe("provider health checks", () => {
     expect(result.status).toBe("failed");
   });
 
+  it("reports unavailable Kimi Code local command", async () => {
+    const provider = {
+      ...createSeedProject("/tmp/archicode").project.settings.providers.find((item) => item.kind === "codex-local")!,
+      id: "kimi-local",
+      kind: "kimi-local" as const,
+      label: "Kimi Code CLI",
+      localCommand: "archicode-missing-kimi-command"
+    };
+    const result = await checkProviderHealth(provider);
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("failed");
+  });
+
   it("keeps OpenCode provider/model IDs intact and parses JSON text events", () => {
     expect(parseOpenCodeModels("opencode-go/kimi-k2.5\nanthropic/claude-sonnet-4-5\nnoise\n")).toEqual([
       "anthropic/claude-sonnet-4-5",
@@ -398,6 +412,89 @@ describe("provider health checks", () => {
     expect(writeArgs).toContain("workspace");
     expect(writeArgs).not.toContain("--disable-web-search");
     expect(buildGrokLocalArgs({ ...provider, localSandbox: "danger-full-access" }, "coding", "Build it", true)).toContain("off");
+  });
+
+  it("parses Kimi configured models and assistant JSONL and builds one-shot args", () => {
+    expect(parseKimiModels(JSON.stringify({
+      providers: { kimi: { type: "kimi" } },
+      models: {
+        "kimi-code/kimi-for-coding": { provider: "kimi" },
+        "openai/gpt-test": { provider: "openai" }
+      }
+    }))).toEqual(["kimi-code/kimi-for-coding", "openai/gpt-test"]);
+    expect(kimiJsonEvent(JSON.stringify({
+      role: "assistant",
+      content: [{ type: "text", text: "Kimi answer" }]
+    }))).toEqual({
+      text: { kind: "full", tokenKind: "answer", value: "Kimi answer" }
+    });
+    const provider = {
+      ...createSeedProject("/tmp/archicode").project.settings.providers.find((item) => item.kind === "codex-local")!,
+      id: "kimi-local",
+      kind: "kimi-local" as const,
+      label: "Kimi Code CLI",
+      localCommand: "kimi",
+      model: "kimi-code/kimi-for-coding"
+    };
+    expect(buildKimiLocalArgs(provider, "planning", "Plan it")).toEqual([
+      "--prompt", "Plan it", "--output-format", "stream-json", "--model", "kimi-code/kimi-for-coding"
+    ]);
+    const readOnlyRules = kimiArchiCodePermissionConfig({ ...provider, localSandbox: "read-only" }, "planning", "/tmp/archicode");
+    expect(readOnlyRules).toContain('pattern = "Write"');
+    expect(readOnlyRules).toContain('pattern = "Bash"');
+    expect(readOnlyRules).not.toContain("ArchiCode workspace write");
+    const workspaceRules = kimiArchiCodePermissionConfig({ ...provider, localSandbox: "workspace-write" }, "coding", "/tmp/archicode");
+    expect(workspaceRules.indexOf('pattern = "Write(/tmp/archicode/**)"')).toBeLessThan(workspaceRules.indexOf('pattern = "Write"'));
+    expect(workspaceRules).toContain('pattern = "mcp__*"');
+    expect(kimiArchiCodePermissionConfig({ ...provider, localSandbox: "danger-full-access" }, "coding", "/tmp/archicode")).toBe("");
+  });
+
+  it("discovers Kimi models and runs a fresh one-shot response", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "archicode-kimi-path-"));
+    const binDir = path.join(root, "bin");
+    await mkdir(binDir, { recursive: true });
+    const commandPath = path.join(binDir, "mock-kimi");
+    await writeFile(commandPath, `#!/usr/bin/env node
+const fs = require("node:fs");
+const path = require("node:path");
+const args = process.argv.slice(2);
+if (args.join(" ") === "--version") process.stdout.write("kimi 1.0.0\\n");
+else if (args.join(" ") === "provider list --json") process.stdout.write(JSON.stringify({ providers: { kimi: {} }, models: { "kimi-code/kimi-for-coding": {} } }) + "\\n");
+else if (args.includes("--prompt") && args.includes("--output-format")) {
+  const prompt = args[args.indexOf("--prompt") + 1] || "";
+  const kimiHome = process.env.KIMI_CODE_HOME || "";
+  fs.writeFileSync(path.join(process.cwd(), "kimi-home.txt"), kimiHome);
+  const isolatedConfig = fs.readFileSync(path.join(kimiHome, "config.toml"), "utf8");
+  if (!prompt.includes("Kimi test") || !isolatedConfig.includes('pattern = "Write"')) process.exitCode = 2;
+  else process.stdout.write(JSON.stringify({ role: "assistant", content: [{ type: "text", text: "Kimi answer" }] }) + "\\n");
+} else process.exitCode = 1;
+`, "utf8");
+    await chmod(commandPath, 0o755);
+    const previousPath = process.env.PATH;
+    process.env.PATH = [binDir, previousPath].filter(Boolean).join(path.delimiter);
+    const provider = {
+      ...createSeedProject(root).project.settings.providers.find((item) => item.kind === "codex-local")!,
+      id: "kimi-local",
+      kind: "kimi-local" as const,
+      label: "Kimi Code CLI",
+      localCommand: "mock-kimi",
+      model: "kimi-code/kimi-for-coding",
+      localSandbox: "read-only" as const
+    };
+    try {
+      const health = await checkProviderHealth(provider);
+      expect(health.ok).toBe(true);
+      expect(health.availableModels).toEqual(["kimi-code/kimi-for-coding"]);
+      expect(health.modelListSource).toBe("kimi provider list --json");
+      await expect(callProvider(provider, "{}", "Kimi test", {
+        projectRoot: root,
+        phase: "planning"
+      })).resolves.toBe("Kimi answer");
+      const isolatedHome = await readFile(path.join(root, "kimi-home.txt"), "utf8");
+      await expect(readFile(path.join(isolatedHome, "config.toml"), "utf8")).rejects.toThrow();
+    } finally {
+      process.env.PATH = previousPath;
+    }
   });
 
   it("discovers Grok Build models, parses a one-shot response, and deletes its session", async () => {

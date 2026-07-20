@@ -1428,7 +1428,7 @@ export function ProjectToolbar({
     policy: PhaseModelPolicy
   ): string => {
     const phaseCeiling = policy.maxOutputTokens;
-    if (provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local" || provider.kind === "antigravity-local" || provider.kind === "grok-local") {
+    if (provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local" || provider.kind === "antigravity-local" || provider.kind === "grok-local" || provider.kind === "kimi-local") {
       return phaseCeiling
         ? `Advisory ceiling: ${formatTokenCount(phaseCeiling)}. The local CLI controls its effective output limit.`
         : "The local CLI controls its effective output limit.";
@@ -2790,26 +2790,26 @@ export function ProjectToolbar({
                       ) : null}
                       {provider.kind === "offline-manual" ? (
                         <small>This is a non-AI offline mode for using ArchiCode as a living diagram, run ledger, artifact browser, and permissioned command shell. It cannot plan or code with an LLM until another provider is selected.</small>
-                      ) : provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local" || provider.kind === "antigravity-local" || provider.kind === "grok-local" ? (
+                      ) : provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local" || provider.kind === "antigravity-local" || provider.kind === "grok-local" || provider.kind === "kimi-local" ? (
                         <>
-                          {renderProviderModelField(provider, provider.kind === "codex-local" ? "configured Codex default" : provider.kind === "claude-local" ? "configured Claude default" : provider.kind === "opencode-local" ? "provider/model" : provider.kind === "antigravity-local" ? "configured agy default" : "configured Grok Build default")}
+                          {renderProviderModelField(provider, provider.kind === "codex-local" ? "configured Codex default" : provider.kind === "claude-local" ? "configured Claude default" : provider.kind === "opencode-local" ? "provider/model" : provider.kind === "antigravity-local" ? "configured agy default" : provider.kind === "kimi-local" ? "configured Kimi default" : "configured Grok Build default")}
                           {provider.kind === "codex-local" ? renderOutputVerbosityField(provider) : null}
                           {renderContextWindowField(provider)}
                           <Field label="Local command">
                             <TextInput
-                              value={provider.localCommand ?? (provider.kind === "codex-local" ? "codex" : provider.kind === "claude-local" ? "claude" : provider.kind === "opencode-local" ? "opencode" : provider.kind === "antigravity-local" ? "agy" : "grok")}
-                              placeholder={provider.kind === "codex-local" ? "codex" : provider.kind === "claude-local" ? "claude" : provider.kind === "opencode-local" ? "opencode" : provider.kind === "antigravity-local" ? "agy" : "grok"}
+                              value={provider.localCommand ?? (provider.kind === "codex-local" ? "codex" : provider.kind === "claude-local" ? "claude" : provider.kind === "opencode-local" ? "opencode" : provider.kind === "antigravity-local" ? "agy" : provider.kind === "kimi-local" ? "kimi" : "grok")}
+                              placeholder={provider.kind === "codex-local" ? "codex" : provider.kind === "claude-local" ? "claude" : provider.kind === "opencode-local" ? "opencode" : provider.kind === "antigravity-local" ? "agy" : provider.kind === "kimi-local" ? "kimi" : "grok"}
                               onChange={(event) => updateProvider(provider.id, { localCommand: event.target.value || undefined })}
                             />
                           </Field>
-                          <Field label={provider.kind === "opencode-local" || provider.kind === "antigravity-local" || provider.kind === "grok-local" ? "Agent" : provider.kind === "codex-local" ? "Profile" : "Settings override"}>
+                          {provider.kind === "kimi-local" ? null : <Field label={provider.kind === "opencode-local" || provider.kind === "antigravity-local" || provider.kind === "grok-local" ? "Agent" : provider.kind === "codex-local" ? "Profile" : "Settings override"}>
                             <TextInput
                               value={provider.localProfile ?? ""}
                               placeholder={provider.kind === "codex-local" ? "optional Codex profile" : provider.kind === "claude-local" ? "optional Claude settings profile" : provider.kind === "opencode-local" ? "optional OpenCode agent" : provider.kind === "antigravity-local" ? "optional Antigravity agent" : "optional Grok Build agent"}
                               onChange={(event) => updateProvider(provider.id, { localProfile: event.target.value || undefined })}
                             />
-                          </Field>
-                          <Field label={`${provider.kind === "codex-local" ? "Codex" : provider.kind === "claude-local" ? "Claude" : provider.kind === "opencode-local" ? "OpenCode" : provider.kind === "antigravity-local" ? "Antigravity" : "Grok Build"} command access`}>
+                          </Field>}
+                          <Field label={`${provider.kind === "codex-local" ? "Codex" : provider.kind === "claude-local" ? "Claude" : provider.kind === "opencode-local" ? "OpenCode" : provider.kind === "antigravity-local" ? "Antigravity" : provider.kind === "kimi-local" ? "Kimi Code" : "Grok Build"} command access`}>
                             <Select
                               value={provider.localSandbox ?? "read-only"}
                               onValueChange={(value) => updateProvider(provider.id, {
@@ -2826,9 +2826,11 @@ export function ProjectToolbar({
                                 ? "OpenCode runs once per request. Write-capable build phases add --auto; use OpenCode permissions/config for finer-grained tool restrictions."
                                 : provider.kind === "antigravity-local"
                                   ? "Antigravity uses plan+sandbox for read-only phases, accept-edits+sandbox for workspace writes, and bypasses permissions only in full-access mode."
+                                  : provider.kind === "kimi-local"
+                                    ? "Kimi print mode is autonomous, so ArchiCode injects first-match static deny rules in an isolated Kimi home. Read-only blocks edits and shell tools; workspace write allows project Write/Edit but leaves shell, delegated agents, and MCP denied. Full access falls back to the user's Kimi rules."
                                   : "Grok Build uses dontAsk plus its read-only sandbox for review phases, and bypassPermissions inside the selected workspace/off sandbox only for write-capable phases."}</small>
-                          {provider.kind === "antigravity-local" ? (
-                            <small>Antigravity always runs through one-shot <code>agy --print</code> calls; ArchiCode owns conversation continuity.</small>
+                          {provider.kind === "antigravity-local" || provider.kind === "kimi-local" ? (
+                            <small>{provider.kind === "kimi-local" ? <>Kimi receives a fresh one-shot <code>kimi --prompt</code> call in a temporary Kimi home. The temporary session is removed afterward; the signed-in credential store remains shared.</> : <>Antigravity always runs through one-shot <code>agy --print</code> calls; ArchiCode owns conversation continuity.</>}</small>
                           ) : (
                             <>
                               <Switch

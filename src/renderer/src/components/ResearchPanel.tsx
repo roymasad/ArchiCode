@@ -433,7 +433,7 @@ export function ruleApprovalPresentation(argumentsJson: string): RuleApprovalPre
 
 function providerSupportsImages(provider: ProjectSettings["providers"][number] | undefined, modelId?: string): boolean {
   if (!provider || provider.kind === "offline-manual") return false;
-  if (provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local" || provider.kind === "antigravity-local" || provider.kind === "grok-local") return true;
+  if (provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local" || provider.kind === "antigravity-local" || provider.kind === "grok-local" || provider.kind === "kimi-local") return true;
   const support = providerImageInputSupportStatus(provider, modelId);
   if (support.status !== "unknown") return support.status === "supported";
   return !(modelId ?? provider.model ?? "").toLowerCase().includes("text");
