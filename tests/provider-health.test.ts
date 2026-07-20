@@ -6,7 +6,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyOpenRouterSessionId, callProvider, callResearchProvider, checkProviderHealth, createConsecutiveToolCallLoopDetector, createUsageAccumulator, isExplicitDelphiAuditRequest, localResearchToolLoopInstructions, localResearchTurnValidationFeedback, researchHistoryThread, extractModelCapabilitiesFromModels, extractContextWindowFromModels, extractModelIdsFromModels, inferModelCapabilityProfile, researchResponseStyleDirective, researchSystemInstructions, type ResearchProviderContinuation, resolveProviderApiKey, resolvePhaseModelPolicy } from "../src/main/providers";
 import { buildAnthropicCompatibleBody, buildAnthropicResearchBody } from "../src/main/providers/anthropic";
-import { activeLocalProviderProcesses, buildClaudeLocalArgs, buildClaudeLocalResearchArgs, buildCodexLocalArgs, buildCodexLocalResearchArgs, buildOpenCodeLocalArgs, openCodeJsonEvent, openCodeProcessEnv, parseOpenCodeModels, runLocalProcess, windowsBatchCommandLine, windowsExecutableCandidates } from "../src/main/providers/localCli";
+import { activeLocalProviderProcesses, buildAntigravityLocalArgs, buildClaudeLocalArgs, buildClaudeLocalResearchArgs, buildCodexLocalArgs, buildCodexLocalResearchArgs, buildOpenCodeLocalArgs, openCodeJsonEvent, openCodeProcessEnv, parseAntigravityModels, parseOpenCodeModels, runLocalProcess, windowsBatchCommandLine, windowsExecutableCandidates } from "../src/main/providers/localCli";
 import { buildOpenAICompatibleBody, buildOpenAIResearchChatCompletionsBody, buildOpenAIResponsesBody, buildOpenAIResearchResponsesBody } from "../src/main/providers/openai";
 import { createSeedProject } from "../src/shared/fixtures";
 import { defaultPhaseModelPolicies, defaultSubagentModelPolicies } from "../src/shared/schema";
@@ -296,6 +296,20 @@ describe("provider health checks", () => {
     expect(result.status).toBe("failed");
   });
 
+  it("reports unavailable Antigravity local command", async () => {
+    const provider = {
+      ...createSeedProject("/tmp/archicode").project.settings.providers.find((item) => item.kind === "codex-local")!,
+      id: "antigravity-local",
+      kind: "antigravity-local" as const,
+      label: "Google Antigravity CLI",
+      localCommand: "archicode-missing-agy-command"
+    };
+    const result = await checkProviderHealth(provider);
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("failed");
+  });
+
   it("keeps OpenCode provider/model IDs intact and parses JSON text events", () => {
     expect(parseOpenCodeModels("opencode-go/kimi-k2.5\nanthropic/claude-sonnet-4-5\nnoise\n")).toEqual([
       "anthropic/claude-sonnet-4-5",
@@ -309,6 +323,70 @@ describe("provider health checks", () => {
       sessionId: "ses_test",
       text: { tokenKind: "answer", value: "hello" }
     });
+  });
+
+  it("keeps Antigravity model display names intact and builds safe one-shot modes", () => {
+    expect(parseAntigravityModels("Gemini 3.5 Flash (High)\nClaude Sonnet 4.6 (Thinking)\n")).toEqual([
+      "Claude Sonnet 4.6 (Thinking)",
+      "Gemini 3.5 Flash (High)"
+    ]);
+    const provider = {
+      ...createSeedProject("/tmp/archicode").project.settings.providers.find((item) => item.kind === "codex-local")!,
+      id: "antigravity-local",
+      kind: "antigravity-local" as const,
+      label: "Google Antigravity CLI",
+      localCommand: "agy",
+      model: "Gemini 3.5 Flash (High)",
+      localProfile: "reviewer"
+    };
+    expect(buildAntigravityLocalArgs({ ...provider, localSandbox: "read-only" }, "planning", "Plan it")).toEqual([
+      "--print", "Plan it", "--print-timeout", "5m", "--mode", "plan", "--model", "Gemini 3.5 Flash (High)", "--agent", "reviewer", "--sandbox"
+    ]);
+    expect(buildAntigravityLocalArgs({ ...provider, localSandbox: "workspace-write" }, "coding", "Build it")).toEqual([
+      "--print", "Build it", "--print-timeout", "5m", "--mode", "accept-edits", "--model", "Gemini 3.5 Flash (High)", "--agent", "reviewer", "--sandbox", "--dangerously-skip-permissions"
+    ]);
+    expect(buildAntigravityLocalArgs({ ...provider, localSandbox: "danger-full-access" }, "coding", "Build it")).not.toContain("--sandbox");
+  });
+
+  it("discovers Antigravity models and runs a plain-text one-shot call", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "archicode-agy-path-"));
+    const binDir = path.join(root, "bin");
+    await mkdir(binDir, { recursive: true });
+    const commandPath = path.join(binDir, "mock-agy");
+    await writeFile(commandPath, `#!/usr/bin/env node
+const args = process.argv.slice(2);
+if (args.join(" ") === "--version") process.stdout.write("1.1.4\\n");
+else if (args.join(" ") === "models") process.stdout.write("Gemini 3.5 Flash (High)\\nClaude Sonnet 4.6 (Thinking)\\n");
+else if (args.includes("--print")) {
+  const prompt = args[args.indexOf("--print") + 1] || "";
+  if (!prompt.includes("Antigravity test")) process.exitCode = 2;
+  else process.stdout.write("Antigravity answer\\n");
+} else process.exitCode = 1;
+`, "utf8");
+    await chmod(commandPath, 0o755);
+    const previousPath = process.env.PATH;
+    process.env.PATH = [binDir, previousPath].filter(Boolean).join(path.delimiter);
+    const provider = {
+      ...createSeedProject(root).project.settings.providers.find((item) => item.kind === "codex-local")!,
+      id: "antigravity-local",
+      kind: "antigravity-local" as const,
+      label: "Google Antigravity CLI",
+      localCommand: "mock-agy",
+      model: "Gemini 3.5 Flash (High)",
+      localSandbox: "read-only" as const
+    };
+    try {
+      const health = await checkProviderHealth(provider);
+      expect(health.ok).toBe(true);
+      expect(health.availableModels).toEqual(["Claude Sonnet 4.6 (Thinking)", "Gemini 3.5 Flash (High)"]);
+      expect(health.modelListSource).toBe("agy models");
+      await expect(callProvider(provider, "{}", "Antigravity test", {
+        projectRoot: root,
+        phase: "planning"
+      })).resolves.toBe("Antigravity answer");
+    } finally {
+      process.env.PATH = previousPath;
+    }
   });
 
   it("builds one-shot OpenCode args with a composite phase model", () => {

@@ -22,12 +22,16 @@ import {
   callCodexLocalResearch,
   callOpenCodeLocal,
   callOpenCodeLocalResearch,
+  callAntigravityLocal,
+  callAntigravityLocalResearch,
   checkClaudeLocal,
   checkCodexLocal,
   checkOpenCodeLocal,
+  checkAntigravityLocal,
   isClaudeLocalProvider,
   isCodexLocalProvider,
-  isOpenCodeLocalProvider
+  isOpenCodeLocalProvider,
+  isAntigravityLocalProvider
 } from "./providers/localCli";
 
 import {
@@ -267,7 +271,7 @@ export type ResearchProviderOptions = {
 };
 
 export type ResearchProviderContinuation = {
-  transport: "anthropic" | "openai-chat" | "openai-responses" | "codex-local" | "claude-local" | "opencode-local";
+  transport: "anthropic" | "openai-chat" | "openai-responses" | "codex-local" | "claude-local" | "opencode-local" | "antigravity-local";
   messages?: unknown[];
   previousResponseId?: string;
   pendingToolCall: { id: string; providerToolName: string; argumentsJson: string };
@@ -349,6 +353,9 @@ export async function callProvider(provider: Provider, contextText: string, prom
   if (isOpenCodeLocalProvider(provider)) {
     return callOpenCodeLocal(provider, contextText, promptSummary, { ...options, phase }, policy);
   }
+  if (isAntigravityLocalProvider(provider)) {
+    return callAntigravityLocal(provider, contextText, promptSummary, { ...options, phase }, policy);
+  }
 
   const apiKey = resolveProviderApiKey(provider);
   if (!apiKey) {
@@ -384,6 +391,9 @@ export async function callResearchProvider(provider: Provider, userMessage: stri
   }
   if (isOpenCodeLocalProvider(provider)) {
     return callOpenCodeLocalResearch(provider, userMessage, options, policy);
+  }
+  if (isAntigravityLocalProvider(provider)) {
+    return callAntigravityLocalResearch(provider, userMessage, options, policy);
   }
 
   const apiKey = resolveProviderApiKey(provider);
@@ -647,6 +657,9 @@ export async function checkProviderHealth(provider: Provider): Promise<ProviderH
   }
   if (isOpenCodeLocalProvider(provider)) {
     return checkOpenCodeLocal(provider, checkedAt);
+  }
+  if (isAntigravityLocalProvider(provider)) {
+    return checkAntigravityLocal(provider, checkedAt);
   }
 
   const apiKey = resolveProviderApiKey(provider);
@@ -1165,7 +1178,7 @@ export function formatLocalResearchTranscript(messages: LocalResearchContinuatio
 
 export function localResearchTranscriptFromContinuation(
   continuation: ResearchProviderContinuation & { approvedResult: string },
-  transport: "codex-local" | "claude-local" | "opencode-local"
+  transport: "codex-local" | "claude-local" | "opencode-local" | "antigravity-local"
 ): LocalResearchContinuationMessage[] {
   if (continuation.transport !== transport || !continuation.messages) return [];
   const transcript = (continuation.messages as LocalResearchContinuationMessage[]).map((message) => ({ ...message }));
@@ -1379,7 +1392,7 @@ export function inferModelCapabilityProfile(provider: Provider, modelOverride?: 
       reasoningField: "none"
     };
   }
-  if (provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local") {
+  if (provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local" || provider.kind === "antigravity-local") {
     return {
       providerKind: provider.kind,
       model: provider.model,

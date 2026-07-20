@@ -52,7 +52,7 @@ export function heuristicImageInputSupportStatus(
   model?: string
 ): ProviderImageInputSupportStatus {
   if (providerKind === "offline-manual") return "unsupported";
-  if (providerKind === "codex-local" || providerKind === "claude-local" || providerKind === "opencode-local") return "supported";
+  if (providerKind === "codex-local" || providerKind === "claude-local" || providerKind === "opencode-local" || providerKind === "antigravity-local") return "supported";
   const normalized = normalizeModelId(model);
   if (!normalized) return "unknown";
   if (providerKind === "anthropic-compatible") {
@@ -93,6 +93,7 @@ export function providerHasCompletedCapabilityCheck(
   return provider.kind === "codex-local" ||
     provider.kind === "claude-local" ||
     provider.kind === "opencode-local" ||
+    provider.kind === "antigravity-local" ||
     provider.detectedAvailableModels.length > 0 ||
     Object.keys(provider.detectedModelCapabilities ?? {}).length > 0 ||
     typeof provider.detectedContextWindowTokens === "number" ||

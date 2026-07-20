@@ -68,7 +68,7 @@ function isOfficialOpenAiCompatibleProvider(provider: ProjectSettings["providers
 }
 
 function providerCheckHint(kind: ProjectSettings["providers"][number]["kind"]): string {
-  if (kind === "codex-local" || kind === "claude-local" || kind === "opencode-local") {
+  if (kind === "codex-local" || kind === "claude-local" || kind === "opencode-local" || kind === "antigravity-local") {
     return "Checks the CLI connection and refreshes available models. Make sure the latest CLI version is installed.";
   }
   return "Checks the provider connection and refreshes available models when the provider exposes a model catalog.";
@@ -93,6 +93,11 @@ function modelHint(provider: ProjectSettings["providers"][number]): string {
     return provider.detectedAvailableModels.length
       ? `Loaded ${provider.detectedAvailableModels.length} configured OpenCode models. Model IDs retain their provider prefix.`
       : "Click Check to load the configured OpenCode provider/model catalog. Authentication is managed with opencode auth login.";
+  }
+  if (provider.kind === "antigravity-local") {
+    return provider.detectedAvailableModels.length
+      ? `Loaded ${provider.detectedAvailableModels.length} models from agy.`
+      : "Click Check to load the models available to your Antigravity account. Authentication is managed by agy.";
   }
   if (provider.detectedAvailableModels.length) {
     if (isOfficialOpenAiCompatibleProvider(provider)) {
@@ -147,6 +152,7 @@ function providerDescription(kind: ProjectSettings["providers"][number]["kind"])
   if (kind === "codex-local") return "Runs the local Codex CLI/app bridge when installed and signed in.";
   if (kind === "claude-local") return "Runs the local Claude Code CLI when installed and signed in.";
   if (kind === "opencode-local") return "Runs one-shot OpenCode CLI processes using OpenCode's configured providers and models.";
+  if (kind === "antigravity-local") return "Runs one-shot Google Antigravity CLI print calls using the models available to the signed-in agy account.";
   return "";
 }
 
@@ -537,7 +543,7 @@ export function GlobalProviderSetup() {
                     onChange={(event) => updateProvider(provider.id, { label: event.target.value })}
                   />
                 </Field>
-                <Field label="API compatibility">
+                <Field label="LLM Provider Source">
                   <Select
                     value={provider.kind}
                     onValueChange={(value) => changeProviderKind(provider.id, value as ProviderKind)}
@@ -550,26 +556,26 @@ export function GlobalProviderSetup() {
                     {providerHealth[provider.id].status}: {providerHealth[provider.id].message}
                   </small>
                 ) : null}
-                {provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local" ? (
+                {provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local" || provider.kind === "antigravity-local" ? (
                   <>
-                    {renderProviderModelField(provider, provider.kind === "codex-local" ? "configured Codex default" : provider.kind === "claude-local" ? "configured Claude default" : "provider/model")}
+                    {renderProviderModelField(provider, provider.kind === "codex-local" ? "configured Codex default" : provider.kind === "claude-local" ? "configured Claude default" : provider.kind === "opencode-local" ? "provider/model" : "configured agy default")}
                     {provider.kind === "codex-local" ? renderOutputVerbosityField(provider) : null}
                     {renderContextWindowField(provider)}
                     <Field label="Local command">
                       <TextInput
-                        value={provider.localCommand ?? (provider.kind === "codex-local" ? "codex" : provider.kind === "claude-local" ? "claude" : "opencode")}
-                        placeholder={provider.kind === "codex-local" ? "codex" : provider.kind === "claude-local" ? "claude" : "opencode"}
+                        value={provider.localCommand ?? (provider.kind === "codex-local" ? "codex" : provider.kind === "claude-local" ? "claude" : provider.kind === "opencode-local" ? "opencode" : "agy")}
+                        placeholder={provider.kind === "codex-local" ? "codex" : provider.kind === "claude-local" ? "claude" : provider.kind === "opencode-local" ? "opencode" : "agy"}
                         onChange={(event) => updateProvider(provider.id, { localCommand: event.target.value || undefined })}
                       />
                     </Field>
-                    <Field label={provider.kind === "opencode-local" ? "Agent" : provider.kind === "codex-local" ? "Profile" : "Settings override"}>
+                    <Field label={provider.kind === "opencode-local" || provider.kind === "antigravity-local" ? "Agent" : provider.kind === "codex-local" ? "Profile" : "Settings override"}>
                       <TextInput
                         value={provider.localProfile ?? ""}
-                        placeholder={provider.kind === "codex-local" ? "optional Codex profile" : provider.kind === "claude-local" ? "optional Claude settings profile" : "optional OpenCode agent"}
+                        placeholder={provider.kind === "codex-local" ? "optional Codex profile" : provider.kind === "claude-local" ? "optional Claude settings profile" : provider.kind === "opencode-local" ? "optional OpenCode agent" : "optional Antigravity agent"}
                         onChange={(event) => updateProvider(provider.id, { localProfile: event.target.value || undefined })}
                       />
                     </Field>
-                    <Field label={`${provider.kind === "codex-local" ? "Codex" : provider.kind === "claude-local" ? "Claude" : "OpenCode"} command access`}>
+                    <Field label={`${provider.kind === "codex-local" ? "Codex" : provider.kind === "claude-local" ? "Claude" : provider.kind === "opencode-local" ? "OpenCode" : "Antigravity"} command access`}>
                       <Select
                         value={provider.localSandbox ?? "read-only"}
                         onValueChange={(value) => updateProvider(provider.id, {
@@ -582,19 +588,25 @@ export function GlobalProviderSetup() {
                       ? codexLocalCommandAccessHint
                       : provider.kind === "claude-local"
                         ? "Claude Code uses permission modes instead of a true filesystem sandbox. ArchiCode maps these access levels to read-only planning, auto-accepted workspace edits, or full bypass mode."
-                        : "OpenCode runs once per request. Read-only phases receive explicit edit, shell, and external-directory denies; write-capable build phases use --auto."}</small>
-                    <Switch
-                      checked={Boolean(provider.ephemeral)}
-                      onCheckedChange={(checked) => updateProvider(provider.id, { ephemeral: checked })}
-                      label={provider.kind === "codex-local" ? "Use throwaway Codex sessions" : provider.kind === "claude-local" ? "Disable Claude session persistence" : "Delete OpenCode sessions after each call"}
-                    />
-                    <small>
-                      {provider.kind === "codex-local"
-                        ? <>Adds <code>--ephemeral</code> for local Codex runs. ArchiCode still saves runs and artifacts, but Codex should not reuse or save its own CLI session state.</>
-                        : provider.kind === "claude-local"
-                          ? <>Adds <code>--no-session-persistence</code> for local Claude runs. ArchiCode still saves runs and artifacts, but Claude should not reuse or save its own CLI session state.</>
-                          : <>Runs <code>opencode session delete</code> after the one-shot response. ArchiCode still saves its own runs and artifacts.</>}
-                    </small>
+                        : provider.kind === "opencode-local"
+                          ? "OpenCode runs once per request. Read-only phases receive explicit edit, shell, and external-directory denies; write-capable build phases use --auto."
+                          : "Antigravity uses plan+sandbox for read-only phases, accept-edits+sandbox for workspace writes, and bypasses permissions only in full-access mode."}</small>
+                    {provider.kind === "antigravity-local" ? (
+                      <small>Antigravity always runs through one-shot <code>agy --print</code> calls; ArchiCode owns conversation continuity.</small>
+                    ) : (
+                      <>
+                        <Switch
+                          checked={Boolean(provider.ephemeral)}
+                          onCheckedChange={(checked) => updateProvider(provider.id, { ephemeral: checked })}
+                          label={provider.kind === "codex-local" ? "Use throwaway Codex sessions" : provider.kind === "claude-local" ? "Disable Claude session persistence" : "Delete OpenCode sessions after each call"}
+                        />
+                        <small>{provider.kind === "codex-local"
+                          ? <>Adds <code>--ephemeral</code> for local Codex runs. ArchiCode still saves runs and artifacts, but Codex should not reuse or save its own CLI session state.</>
+                          : provider.kind === "claude-local"
+                            ? <>Adds <code>--no-session-persistence</code> for local Claude runs. ArchiCode still saves runs and artifacts, but Claude should not reuse or save its own CLI session state.</>
+                            : <>Runs <code>opencode session delete</code> after the one-shot response. ArchiCode still saves its own runs and artifacts.</>}</small>
+                      </>
+                    )}
                   </>
                 ) : provider.kind === "offline-manual" ? (
                   <small>This is a non-AI offline mode for using ArchiCode as a living diagram, run ledger, artifact browser, and permissioned command shell. It cannot plan or code with an LLM until another provider is selected.</small>

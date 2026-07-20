@@ -28,8 +28,18 @@ export function isOpenCodeLocalProvider(provider: Provider): provider is Provide
   return provider.kind === "opencode-local";
 }
 
+export function isAntigravityLocalProvider(provider: Provider): provider is Provider & { kind: "antigravity-local" } {
+  return provider.kind === "antigravity-local";
+}
+
 export function localCliCommand(provider: Pick<Provider, "kind" | "localCommand">): string {
-  return provider.localCommand?.trim() || (provider.kind === "claude-local" ? "claude" : provider.kind === "opencode-local" ? "opencode" : "codex");
+  return provider.localCommand?.trim() || (provider.kind === "claude-local"
+    ? "claude"
+    : provider.kind === "opencode-local"
+      ? "opencode"
+      : provider.kind === "antigravity-local"
+        ? "agy"
+        : "codex");
 }
 
 export async function callCodexLocal(provider: Provider, contextText: string, promptSummary: string, options: ProviderCallOptions, policy: PhaseModelPolicy): Promise<string> {
@@ -128,7 +138,7 @@ export async function callCodexLocal(provider: Provider, contextText: string, pr
 }
 
 export async function callLocalResearchProvider(
-  transport: "codex-local" | "claude-local" | "opencode-local",
+  transport: "codex-local" | "claude-local" | "opencode-local" | "antigravity-local",
   provider: Provider,
   userMessage: string,
   options: ResearchProviderOptions,
@@ -139,7 +149,13 @@ export async function callLocalResearchProvider(
   const transcript = options.resumeContinuation
     ? localResearchTranscriptFromContinuation(options.resumeContinuation, transport)
     : [];
-  const providerLabel = transport === "codex-local" ? "Codex" : transport === "claude-local" ? "Claude" : "OpenCode";
+  const providerLabel = transport === "codex-local"
+    ? "Codex"
+    : transport === "claude-local"
+      ? "Claude"
+      : transport === "opencode-local"
+        ? "OpenCode"
+        : "Antigravity";
   const askModeNote = (options.mcpTools ?? []).some((tool) => !options.isTerminalTool?.(tool.providerToolName))
     ? "Enabled Ask-mode MCP servers remain visible through the structured tool list. If an Ask-mode tool is requested, ArchiCode will pause for approval and then resume this same turn with the tool result."
     : "";
@@ -187,7 +203,9 @@ export async function callLocalResearchProvider(
               ? "Web search is enabled for this chat. Use Claude's built-in web tools only when current external information is needed, and cite sources when web results inform the answer."
               : transport === "opencode-local"
                 ? "Web search is enabled for this chat. Use OpenCode's configured web tools only when current external information is needed, and cite sources when web results inform the answer."
-                : "Web search is enabled for this chat. Use Codex web search only when current external information is needed, and cite sources when web results inform the answer."
+                : transport === "antigravity-local"
+                  ? "Web search is enabled for this chat. Use Antigravity's built-in web tools only when current external information is needed, and cite sources when web results inform the answer."
+                  : "Web search is enabled for this chat. Use Codex web search only when current external information is needed, and cite sources when web results inform the answer."
             : "Web search is disabled by project settings. Use only provided context and local model knowledge.",
           askModeNote,
           localResearchToolLoopInstructions(options),
@@ -503,13 +521,13 @@ export function openCodeProcessEnv(provider: Provider, phase: LlmPhase): NodeJS.
   };
 }
 
-function openCodePhaseInstructions(provider: Provider, phase: LlmPhase): string[] {
+function localCodingPhaseInstructions(provider: Provider, phase: LlmPhase, providerName: string): string[] {
   const writeCapable = provider.localSandbox !== "read-only";
   if (phase === "coding") return [
     `You are ${gaiaAgent.title}, ArchiCode's implementation agent.`,
     writeCapable
       ? "Implement the requested change directly in the project. Keep edits bounded to the project and do not start a server, watcher, simulator, or other long-running process."
-      : "OpenCode is configured read-only. Do not edit files; return complete source changes using ArchiCode's propose-source-file operations.",
+      : `${providerName} is configured read-only. Do not edit files; return complete source changes using ArchiCode's propose-source-file operations.`,
     writeCapable ? "Return a concise summary of changed files and finite checks run." : codingSourceHandoffInstructions,
     writeCapable ? "" : sourceProposalBatchingInstructions
   ];
@@ -539,7 +557,7 @@ export async function callOpenCodeLocal(provider: Provider, contextText: string,
         orchestratorSystemPrompt,
         "",
         "You are being called as ArchiCode's local OpenCode provider through a one-shot OpenCode CLI process.",
-        ...openCodePhaseInstructions(provider, phase),
+        ...localCodingPhaseInstructions(provider, phase, "OpenCode"),
         phasePolicyText(phase, policy, profile),
         options.selectedSkillsPrompt?.trim() ?? "",
         imageAttachmentText(options.imageAttachments),
@@ -589,6 +607,90 @@ export async function callOpenCodeLocalResearch(provider: Provider, userMessage:
         throw new Error(`OpenCode local research provider failed with exit code ${processResult.exitCode}.\n${processResult.stderr || processResult.stdout}`);
       }
       return finalText || processResult.stdout.trim() || "OpenCode local research provider returned no content.";
+    }
+  );
+  emitUnavailableUsage(provider, policy, options.onUsage);
+  return result;
+}
+
+export function buildAntigravityLocalArgs(provider: Provider, phase: LlmPhase, prompt: string): string[] {
+  const writeCapable = provider.localSandbox !== "read-only" && (phase === "coding" || phase === "debugging" || phase === "verifying");
+  const args = ["--print", prompt, "--print-timeout", "5m", "--mode", writeCapable ? "accept-edits" : "plan"];
+  const model = resolvePhaseModelPolicy(provider, phase).modelOverride?.trim() || provider.model?.trim();
+  if (model) args.push("--model", model);
+  if (provider.localProfile?.trim()) args.push("--agent", provider.localProfile.trim());
+  if (provider.localSandbox !== "danger-full-access") args.push("--sandbox");
+  if (writeCapable) args.push("--dangerously-skip-permissions");
+  return args;
+}
+
+function antigravityAttachmentReferences(options: Pick<ProviderCallOptions, "imageAttachments" | "textAttachments">): string {
+  const paths = [...new Set([
+    ...(options.imageAttachments ?? []).map((attachment) => attachment.path.trim()),
+    ...(options.textAttachments ?? []).map((attachment) => attachment.path.trim())
+  ].filter(Boolean))];
+  if (!paths.length) return "";
+  return [
+    "Antigravity file references for the supplied attachments:",
+    ...paths.map((attachmentPath) => `@${attachmentPath}`)
+  ].join("\n");
+}
+
+export async function callAntigravityLocal(provider: Provider, contextText: string, promptSummary: string, options: ProviderCallOptions, policy: PhaseModelPolicy): Promise<string> {
+  const command = localCliCommand(provider);
+  const phase = options.phase ?? "planning";
+  const profile = inferModelCapabilityProfile(provider, policy.modelOverride);
+  const prompt = options.bareExtraction
+    ? [extractionSystemPrompt, "", contextText].join("\n")
+    : [
+        orchestratorSystemPrompt,
+        "",
+        "You are being called as ArchiCode's local Google Antigravity provider through a one-shot agy --print process.",
+        ...localCodingPhaseInstructions(provider, phase, "Antigravity"),
+        phasePolicyText(phase, policy, profile),
+        options.selectedSkillsPrompt?.trim() ?? "",
+        imageAttachmentText(options.imageAttachments),
+        await textAttachmentText(options.textAttachments),
+        antigravityAttachmentReferences(options),
+        options.webSearchEnabled
+          ? "Use Antigravity's built-in web tools only when current external information is needed, and cite sources."
+          : "Web search is disabled. Use the supplied project context and local knowledge.",
+        "",
+        `Prompt summary: ${promptSummary}`,
+        "",
+        "Project JSON context:",
+        contextText
+      ].filter(Boolean).join("\n");
+  const args = buildAntigravityLocalArgs(provider, phase, prompt);
+  const result = await runLocalProcess(command, args, "", options.projectRoot, options.onProgress, options.signal);
+  if (result.exitCode !== 0) {
+    throw new Error(`Antigravity local provider failed with exit code ${result.exitCode}.\n${result.stderr || result.stdout}`);
+  }
+  emitUnavailableUsage(provider, policy, options.onUsage);
+  return result.stdout.trim() || "Antigravity local provider returned no content.";
+}
+
+export async function callAntigravityLocalResearch(provider: Provider, userMessage: string, options: ResearchProviderOptions, policy: PhaseModelPolicy): Promise<string> {
+  const result = await callLocalResearchProvider(
+    "antigravity-local",
+    provider,
+    userMessage,
+    options,
+    policy,
+    async (prompt, onToken) => {
+      const command = localCliCommand(provider);
+      const attachmentReferences = antigravityAttachmentReferences(options);
+      const finalPrompt = attachmentReferences ? `${prompt}\n\n${attachmentReferences}` : prompt;
+      const args = buildAntigravityLocalArgs(provider, "brainstorming", finalPrompt);
+      const processResult = await runLocalProcess(command, args, "", options.projectRoot, onToken
+        ? (event) => {
+            if (event.stream === "stdout") onToken(event.text, "answer");
+          }
+        : undefined, options.signal);
+      if (processResult.exitCode !== 0) {
+        throw new Error(`Antigravity local research provider failed with exit code ${processResult.exitCode}.\n${processResult.stderr || processResult.stdout}`);
+      }
+      return processResult.stdout.trim() || "Antigravity local research provider returned no content.";
     }
   );
   emitUnavailableUsage(provider, policy, options.onUsage);
@@ -1818,6 +1920,53 @@ export async function checkOpenCodeLocal(provider: Provider, checkedAt: string):
         : `OpenCode CLI is installed (${(version.stdout || version.stderr).trim()}) but its model catalog failed: ${catalog.stderr || catalog.stdout}`,
       availableModels: availableModels.length ? availableModels : undefined,
       modelListSource: availableModels.length ? "opencode models" : undefined
+    };
+  } catch (error) {
+    return {
+      providerId: provider.id,
+      ok: false,
+      status: "failed",
+      checkedAt,
+      message: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+export function parseAntigravityModels(output: string): string[] {
+  const ansi = /\u001b\[[0-?]*[ -/]*[@-~]/g;
+  return [...new Set(output
+    .replace(ansi, "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && line.length <= 200 && !/^[IEWF]\d{4}\s/.test(line)))]
+    .sort((a, b) => a.localeCompare(b));
+}
+
+export async function checkAntigravityLocal(provider: Provider, checkedAt: string): Promise<ProviderHealthResult> {
+  const command = localCliCommand(provider);
+  try {
+    const version = await runLocalProcess(command, ["--version"], "", undefined, undefined, undefined, { inactivityTimeoutMs: 30_000 });
+    if (version.exitCode !== 0) {
+      return {
+        providerId: provider.id,
+        ok: false,
+        status: "failed",
+        checkedAt,
+        message: `Antigravity CLI check failed: ${version.stderr || version.stdout}`
+      };
+    }
+    const catalog = await runLocalProcess(command, ["models"], "", undefined, undefined, undefined, { inactivityTimeoutMs: 60_000 });
+    const availableModels = catalog.exitCode === 0 ? parseAntigravityModels(catalog.stdout) : [];
+    return {
+      providerId: provider.id,
+      ok: catalog.exitCode === 0 && availableModels.length > 0,
+      status: catalog.exitCode === 0 && availableModels.length > 0 ? "ready" : "failed",
+      checkedAt,
+      message: catalog.exitCode === 0 && availableModels.length > 0
+        ? `Antigravity CLI is available (${(version.stdout || version.stderr).trim()}) with ${availableModels.length} model${availableModels.length === 1 ? "" : "s"}. Authentication is managed by agy through Google Sign-In or the configured Google Cloud project.`
+        : `Antigravity CLI is installed (${(version.stdout || version.stderr).trim()}) but its model catalog failed or returned no models: ${catalog.stderr || catalog.stdout}`,
+      availableModels: availableModels.length ? availableModels : undefined,
+      modelListSource: availableModels.length ? "agy models" : undefined
     };
   } catch (error) {
     return {

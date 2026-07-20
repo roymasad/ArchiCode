@@ -706,7 +706,7 @@ export function ProjectToolbar({
     ? `Run configured build command: ${buildCommand}`
     : "Ask AI to detect the build or verification target and troubleshoot setup.";
   const debugTooltip = runChangeBlocked
-    ? `${pandoraAgent.title}. Review flow logic or manage bug reports while the active run finishes. Starting another repair run remains unavailable.`
+    ? `${pandoraAgent.title}. AI Debug is unavailable while another AI run is active or waiting for review.`
     : debugSignalCount
       ? `${pandoraAgent.title}. Review flow logic, or debug ${debugSignalCount} flagged bug/failure signal${debugSignalCount === 1 ? "" : "s"}.`
       : `${pandoraAgent.title}. Review flow logic in chat, report a bug, or wait for a failed run/runtime before starting AI Debug.`;
@@ -1428,7 +1428,7 @@ export function ProjectToolbar({
     policy: PhaseModelPolicy
   ): string => {
     const phaseCeiling = policy.maxOutputTokens;
-    if (provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local") {
+    if (provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local" || provider.kind === "antigravity-local") {
       return phaseCeiling
         ? `Advisory ceiling: ${formatTokenCount(phaseCeiling)}. The local CLI controls its effective output limit.`
         : "The local CLI controls its effective output limit.";
@@ -1862,7 +1862,7 @@ export function ProjectToolbar({
                       type="button"
                       size="sm"
                       aria-label="AI Debug"
-                      disabled={!bundle}
+                      disabled={!bundle || runChangeBlocked}
                     >
                       <Bug size={16} />
                       <span>AI Debug</span>
@@ -2775,7 +2775,7 @@ export function ProjectToolbar({
                           onChange={(event) => updateProvider(provider.id, { label: event.target.value })}
                         />
                       </Field>
-                      <Field label="API compatibility">
+                      <Field label="LLM Provider Source">
                         <Select
                           value={provider.kind}
                           onValueChange={(value) => changeProviderKind(provider.id, value as ProviderKind)}
@@ -2790,26 +2790,26 @@ export function ProjectToolbar({
                       ) : null}
                       {provider.kind === "offline-manual" ? (
                         <small>This is a non-AI offline mode for using ArchiCode as a living diagram, run ledger, artifact browser, and permissioned command shell. It cannot plan or code with an LLM until another provider is selected.</small>
-                      ) : provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local" ? (
+                      ) : provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local" || provider.kind === "antigravity-local" ? (
                         <>
-                          {renderProviderModelField(provider, provider.kind === "codex-local" ? "configured Codex default" : provider.kind === "claude-local" ? "configured Claude default" : "provider/model")}
+                          {renderProviderModelField(provider, provider.kind === "codex-local" ? "configured Codex default" : provider.kind === "claude-local" ? "configured Claude default" : provider.kind === "opencode-local" ? "provider/model" : "configured agy default")}
                           {provider.kind === "codex-local" ? renderOutputVerbosityField(provider) : null}
                           {renderContextWindowField(provider)}
                           <Field label="Local command">
                             <TextInput
-                              value={provider.localCommand ?? (provider.kind === "codex-local" ? "codex" : provider.kind === "claude-local" ? "claude" : "opencode")}
-                              placeholder={provider.kind === "codex-local" ? "codex" : provider.kind === "claude-local" ? "claude" : "opencode"}
+                              value={provider.localCommand ?? (provider.kind === "codex-local" ? "codex" : provider.kind === "claude-local" ? "claude" : provider.kind === "opencode-local" ? "opencode" : "agy")}
+                              placeholder={provider.kind === "codex-local" ? "codex" : provider.kind === "claude-local" ? "claude" : provider.kind === "opencode-local" ? "opencode" : "agy"}
                               onChange={(event) => updateProvider(provider.id, { localCommand: event.target.value || undefined })}
                             />
                           </Field>
-                          <Field label={provider.kind === "opencode-local" ? "Agent" : provider.kind === "codex-local" ? "Profile" : "Settings override"}>
+                          <Field label={provider.kind === "opencode-local" || provider.kind === "antigravity-local" ? "Agent" : provider.kind === "codex-local" ? "Profile" : "Settings override"}>
                             <TextInput
                               value={provider.localProfile ?? ""}
-                              placeholder={provider.kind === "codex-local" ? "optional Codex profile" : provider.kind === "claude-local" ? "optional Claude settings profile" : "optional OpenCode agent"}
+                              placeholder={provider.kind === "codex-local" ? "optional Codex profile" : provider.kind === "claude-local" ? "optional Claude settings profile" : provider.kind === "opencode-local" ? "optional OpenCode agent" : "optional Antigravity agent"}
                               onChange={(event) => updateProvider(provider.id, { localProfile: event.target.value || undefined })}
                             />
                           </Field>
-                          <Field label={`${provider.kind === "codex-local" ? "Codex" : provider.kind === "claude-local" ? "Claude" : "OpenCode"} command access`}>
+                          <Field label={`${provider.kind === "codex-local" ? "Codex" : provider.kind === "claude-local" ? "Claude" : provider.kind === "opencode-local" ? "OpenCode" : "Antigravity"} command access`}>
                             <Select
                               value={provider.localSandbox ?? "read-only"}
                               onValueChange={(value) => updateProvider(provider.id, {
@@ -2822,19 +2822,25 @@ export function ProjectToolbar({
                             ? codexLocalCommandAccessHint
                             : provider.kind === "claude-local"
                               ? "Claude Code uses permission modes instead of a true filesystem sandbox. ArchiCode maps these access levels to read-only planning, auto-accepted workspace edits, or full bypass mode."
-                              : "OpenCode runs once per request. Write-capable build phases add --auto; use OpenCode permissions/config for finer-grained tool restrictions."}</small>
-                          <Switch
-                            checked={Boolean(provider.ephemeral)}
-                            onCheckedChange={(checked) => updateProvider(provider.id, { ephemeral: checked })}
-                            label={provider.kind === "codex-local" ? "Use throwaway Codex sessions" : provider.kind === "claude-local" ? "Disable Claude session persistence" : "Delete OpenCode sessions after each call"}
-                          />
-                          <small>
-                            {provider.kind === "codex-local"
-                              ? <>Adds <code>--ephemeral</code> for local Codex runs. ArchiCode still saves runs and artifacts, but Codex should not reuse or save its own CLI session state.</>
-                              : provider.kind === "claude-local"
-                                ? <>Adds <code>--no-session-persistence</code> for local Claude runs. ArchiCode still saves runs and artifacts, but Claude should not reuse or save its own CLI session state.</>
-                                : <>Runs <code>opencode session delete</code> after the one-shot response. ArchiCode still saves its own runs and artifacts.</>}
-                          </small>
+                              : provider.kind === "opencode-local"
+                                ? "OpenCode runs once per request. Write-capable build phases add --auto; use OpenCode permissions/config for finer-grained tool restrictions."
+                                : "Antigravity uses plan+sandbox for read-only phases, accept-edits+sandbox for workspace writes, and bypasses permissions only in full-access mode."}</small>
+                          {provider.kind === "antigravity-local" ? (
+                            <small>Antigravity always runs through one-shot <code>agy --print</code> calls; ArchiCode owns conversation continuity.</small>
+                          ) : (
+                            <>
+                              <Switch
+                                checked={Boolean(provider.ephemeral)}
+                                onCheckedChange={(checked) => updateProvider(provider.id, { ephemeral: checked })}
+                                label={provider.kind === "codex-local" ? "Use throwaway Codex sessions" : provider.kind === "claude-local" ? "Disable Claude session persistence" : "Delete OpenCode sessions after each call"}
+                              />
+                              <small>{provider.kind === "codex-local"
+                                ? <>Adds <code>--ephemeral</code> for local Codex runs. ArchiCode still saves runs and artifacts, but Codex should not reuse or save its own CLI session state.</>
+                                : provider.kind === "claude-local"
+                                  ? <>Adds <code>--no-session-persistence</code> for local Claude runs. ArchiCode still saves runs and artifacts, but Claude should not reuse or save its own CLI session state.</>
+                                  : <>Runs <code>opencode session delete</code> after the one-shot response. ArchiCode still saves its own runs and artifacts.</>}</small>
+                            </>
+                          )}
                         </>
                       ) : (
                         <>

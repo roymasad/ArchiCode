@@ -29,13 +29,23 @@ describe("provider profile helpers", () => {
   });
 
   it("only offers functional LLM provider adapters", () => {
-    expect(providerKindOptions.map((option) => option.value)).toEqual([
-      "openai-compatible",
-      "codex-local",
-      "anthropic-compatible",
-      "claude-local",
-      "opencode-local"
+    expect(providerKindOptions).toEqual([
+      { value: "openai-compatible", label: "OpenAI Compatible API" },
+      { value: "codex-local", label: "Codex Local CLI" },
+      { value: "anthropic-compatible", label: "Anthropic Compatible API" },
+      { value: "claude-local", label: "Claude Code CLI" },
+      { value: "opencode-local", label: "OpenCode Local CLI" },
+      { value: "antigravity-local", label: "Google Antigravity CLI" }
     ]);
+  });
+
+  it("creates a generically named provider from the default add action", () => {
+    const seedProviders = createSeedProject("/tmp/archicode").project.settings.providers;
+    const provider = createProviderProfile(seedProviders);
+
+    expect(provider.label).toBe("New provider");
+    expect(provider.id).toBe("new-provider");
+    expect(provider.kind).toBe("openai-compatible");
   });
 
   it("uses one configurable provider card for production defaults", () => {
@@ -63,6 +73,19 @@ describe("provider profile helpers", () => {
     expect(openRouter.kind).toBe("openai-compatible");
     expect(openRouter.baseUrl).toBe("https://api.openai.com/v1");
     expect(openRouter.enabled).toBe(false);
+  });
+
+  it("creates Antigravity profiles without adding a default provider card", () => {
+    const seedProviders = createSeedProject("/tmp/archicode", { includeProviderTemplates: false }).project.settings.providers;
+    const antigravity = createProviderProfile(seedProviders, "antigravity-local", "Google Antigravity");
+
+    expect(seedProviders).toHaveLength(1);
+    expect(antigravity).toMatchObject({
+      kind: "antigravity-local",
+      localCommand: "agy",
+      model: "",
+      enabled: false
+    });
   });
 
   it("duplicates provider profiles without copying local secrets or health cache", () => {

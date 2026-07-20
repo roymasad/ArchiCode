@@ -1013,7 +1013,8 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
     provider.kind === "anthropic-compatible" ||
     provider.kind === "codex-local" ||
     provider.kind === "claude-local" ||
-    provider.kind === "opencode-local";
+    provider.kind === "opencode-local" ||
+    provider.kind === "antigravity-local";
   const toolVisibleMcpSettings = {
     ...researchMcpSettings,
     mcp: {
@@ -2099,6 +2100,8 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
           ? "Claude Code Local failed. Check that the Claude Code CLI is installed, signed in, and reachable from the Local command setting, then try again."
           : provider.kind === "opencode-local"
             ? "OpenCode Local failed. Check that the OpenCode CLI is installed, authenticated, has configured models, and is reachable from the Local command setting, then try again."
+            : provider.kind === "antigravity-local"
+              ? "Antigravity Local failed. Check that agy is installed, signed in, trusts the project workspace, and is reachable from the Local command setting, then try again."
           : "Research provider failed. Check provider settings, API keys, web capability, or rate limits, then try again.",
       createdAt: iso(),
       attachmentIds: [],

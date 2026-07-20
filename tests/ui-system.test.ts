@@ -61,6 +61,17 @@ describe("renderer UI system", () => {
     expect(identities).toContain('title: "Pandora — Debug & Recovery"');
   });
 
+  it("disables AI Debug while an implementation or other blocking AI run is active", () => {
+    const toolbar = readProjectToolbarSource();
+    const debugTrigger = toolbar.slice(
+      toolbar.indexOf('aria-label="AI Debug"') - 160,
+      toolbar.indexOf('aria-label="AI Debug"') + 240
+    );
+
+    expect(toolbar).toContain("bundle?.runs.some(isRunBlockingNewChange)");
+    expect(debugTrigger).toContain("disabled={!bundle || runChangeBlocked}");
+  });
+
   it("keeps renderer store subscriptions selector-scoped", () => {
     const rendererRoot = resolve(repoRoot, "src/renderer/src");
     const offenders = sourceFilesUnder(rendererRoot)
@@ -664,7 +675,7 @@ describe("renderer UI system", () => {
 
     expect(toolbar).toContain("New Provider");
     expect(toolbar).toContain("Profile name");
-    expect(toolbar).toContain("API compatibility");
+    expect(toolbar).toContain("LLM Provider Source");
     expect(toolbar).toContain("Duplicate provider profile");
     expect(toolbar).toContain("Delete provider profile");
     expect(toolbar).toContain("createProviderProfile");
@@ -672,7 +683,7 @@ describe("renderer UI system", () => {
     expect(toolbar).toContain("pendingProviderRevealId");
     expect(toolbar).toContain("data-provider-name-input");
     expect(globalSetup).toContain("New Provider");
-    expect(globalSetup).toContain("API compatibility");
+    expect(globalSetup).toContain("LLM Provider Source");
     expect(globalSetup).toContain("checkGlobalProvider");
     expect(globalSetup).toContain("Checking...");
     expect(globalSetup).toContain("Context window");

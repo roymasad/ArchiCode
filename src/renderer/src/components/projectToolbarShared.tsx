@@ -142,7 +142,7 @@ export function isOfficialOpenAiCompatibleProvider(provider: ProjectSettings["pr
 }
 
 export function providerCheckHint(kind: ProjectSettings["providers"][number]["kind"]): string {
-  if (kind === "codex-local" || kind === "claude-local" || kind === "opencode-local") {
+  if (kind === "codex-local" || kind === "claude-local" || kind === "opencode-local" || kind === "antigravity-local") {
     return "Checks the CLI connection and refreshes available models. Make sure the latest CLI version is installed.";
   }
   return "Checks the provider connection and refreshes available models when the provider exposes a model catalog.";
@@ -196,6 +196,11 @@ export function modelHint(provider: ProjectSettings["providers"][number]): strin
     return provider.detectedAvailableModels.length
       ? `Loaded ${provider.detectedAvailableModels.length} configured OpenCode models. Model IDs retain their provider prefix.`
       : "Click Check to load the configured OpenCode provider/model catalog. Authentication is managed with opencode auth login.";
+  }
+  if (provider.kind === "antigravity-local") {
+    return provider.detectedAvailableModels.length
+      ? `Loaded ${provider.detectedAvailableModels.length} models from agy.`
+      : "Click Check to load the models available to your Antigravity account. Authentication is managed by agy.";
   }
   if (provider.detectedAvailableModels.length) {
     if (isOfficialOpenAiCompatibleProvider(provider)) {
@@ -401,7 +406,7 @@ export const runtimeUrlPattern = /(https?:\/\/[^\s"'<>),]+)/g;
 
 export function providerSupportsImages(provider: ProjectSettings["providers"][number] | undefined): boolean {
   if (!provider || provider.kind === "offline-manual") return false;
-  if (provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local") return true;
+  if (provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local" || provider.kind === "antigravity-local") return true;
   const model = (provider.model ?? "").toLowerCase();
   return !model.includes("text");
 }
@@ -586,6 +591,7 @@ export function providerDescription(kind: ProjectSettings["providers"][number]["
   if (kind === "codex-local") return "Runs the local Codex CLI/app bridge when installed and signed in.";
   if (kind === "claude-local") return "Runs the local Claude Code CLI when installed and signed in.";
   if (kind === "opencode-local") return "Runs one-shot OpenCode CLI processes and uses OpenCode's configured providers and composite model IDs.";
+  if (kind === "antigravity-local") return "Runs one-shot Google Antigravity CLI print calls using the models available to the signed-in agy account.";
   return "";
 }
 
