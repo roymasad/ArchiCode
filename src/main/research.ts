@@ -1014,7 +1014,8 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
     provider.kind === "codex-local" ||
     provider.kind === "claude-local" ||
     provider.kind === "opencode-local" ||
-    provider.kind === "antigravity-local";
+    provider.kind === "antigravity-local" ||
+    provider.kind === "grok-local";
   const toolVisibleMcpSettings = {
     ...researchMcpSettings,
     mcp: {
@@ -2102,6 +2103,8 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
             ? "OpenCode Local failed. Check that the OpenCode CLI is installed, authenticated, has configured models, and is reachable from the Local command setting, then try again."
             : provider.kind === "antigravity-local"
               ? "Antigravity Local failed. Check that agy is installed, signed in, trusts the project workspace, and is reachable from the Local command setting, then try again."
+              : provider.kind === "grok-local"
+                ? "Grok Build Local failed. Check that grok is installed, authenticated, has available models, and is reachable from the Local command setting, then try again."
           : "Research provider failed. Check provider settings, API keys, web capability, or rate limits, then try again.",
       createdAt: iso(),
       attachmentIds: [],

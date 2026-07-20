@@ -30,12 +30,13 @@ describe("provider profile helpers", () => {
 
   it("only offers functional LLM provider adapters", () => {
     expect(providerKindOptions).toEqual([
-      { value: "openai-compatible", label: "OpenAI Compatible API" },
-      { value: "codex-local", label: "Codex Local CLI" },
       { value: "anthropic-compatible", label: "Anthropic Compatible API" },
+      { value: "openai-compatible", label: "OpenAI Compatible API" },
       { value: "claude-local", label: "Claude Code CLI" },
-      { value: "opencode-local", label: "OpenCode Local CLI" },
-      { value: "antigravity-local", label: "Google Antigravity CLI" }
+      { value: "codex-local", label: "Codex Local CLI" },
+      { value: "antigravity-local", label: "Google Antigravity CLI" },
+      { value: "grok-local", label: "Grok Build CLI" },
+      { value: "opencode-local", label: "OpenCode Local CLI" }
     ]);
   });
 
@@ -84,6 +85,20 @@ describe("provider profile helpers", () => {
       kind: "antigravity-local",
       localCommand: "agy",
       model: "",
+      enabled: false
+    });
+  });
+
+  it("creates Grok Build profiles without adding a default provider card", () => {
+    const seedProviders = createSeedProject("/tmp/archicode", { includeProviderTemplates: false }).project.settings.providers;
+    const grok = createProviderProfile(seedProviders, "grok-local", "Grok Build");
+
+    expect(seedProviders).toHaveLength(1);
+    expect(grok).toMatchObject({
+      kind: "grok-local",
+      localCommand: "grok",
+      model: "",
+      ephemeral: true,
       enabled: false
     });
   });

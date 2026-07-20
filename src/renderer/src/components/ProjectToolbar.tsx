@@ -1428,7 +1428,7 @@ export function ProjectToolbar({
     policy: PhaseModelPolicy
   ): string => {
     const phaseCeiling = policy.maxOutputTokens;
-    if (provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local" || provider.kind === "antigravity-local") {
+    if (provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local" || provider.kind === "antigravity-local" || provider.kind === "grok-local") {
       return phaseCeiling
         ? `Advisory ceiling: ${formatTokenCount(phaseCeiling)}. The local CLI controls its effective output limit.`
         : "The local CLI controls its effective output limit.";
@@ -2790,26 +2790,26 @@ export function ProjectToolbar({
                       ) : null}
                       {provider.kind === "offline-manual" ? (
                         <small>This is a non-AI offline mode for using ArchiCode as a living diagram, run ledger, artifact browser, and permissioned command shell. It cannot plan or code with an LLM until another provider is selected.</small>
-                      ) : provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local" || provider.kind === "antigravity-local" ? (
+                      ) : provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local" || provider.kind === "antigravity-local" || provider.kind === "grok-local" ? (
                         <>
-                          {renderProviderModelField(provider, provider.kind === "codex-local" ? "configured Codex default" : provider.kind === "claude-local" ? "configured Claude default" : provider.kind === "opencode-local" ? "provider/model" : "configured agy default")}
+                          {renderProviderModelField(provider, provider.kind === "codex-local" ? "configured Codex default" : provider.kind === "claude-local" ? "configured Claude default" : provider.kind === "opencode-local" ? "provider/model" : provider.kind === "antigravity-local" ? "configured agy default" : "configured Grok Build default")}
                           {provider.kind === "codex-local" ? renderOutputVerbosityField(provider) : null}
                           {renderContextWindowField(provider)}
                           <Field label="Local command">
                             <TextInput
-                              value={provider.localCommand ?? (provider.kind === "codex-local" ? "codex" : provider.kind === "claude-local" ? "claude" : provider.kind === "opencode-local" ? "opencode" : "agy")}
-                              placeholder={provider.kind === "codex-local" ? "codex" : provider.kind === "claude-local" ? "claude" : provider.kind === "opencode-local" ? "opencode" : "agy"}
+                              value={provider.localCommand ?? (provider.kind === "codex-local" ? "codex" : provider.kind === "claude-local" ? "claude" : provider.kind === "opencode-local" ? "opencode" : provider.kind === "antigravity-local" ? "agy" : "grok")}
+                              placeholder={provider.kind === "codex-local" ? "codex" : provider.kind === "claude-local" ? "claude" : provider.kind === "opencode-local" ? "opencode" : provider.kind === "antigravity-local" ? "agy" : "grok"}
                               onChange={(event) => updateProvider(provider.id, { localCommand: event.target.value || undefined })}
                             />
                           </Field>
-                          <Field label={provider.kind === "opencode-local" || provider.kind === "antigravity-local" ? "Agent" : provider.kind === "codex-local" ? "Profile" : "Settings override"}>
+                          <Field label={provider.kind === "opencode-local" || provider.kind === "antigravity-local" || provider.kind === "grok-local" ? "Agent" : provider.kind === "codex-local" ? "Profile" : "Settings override"}>
                             <TextInput
                               value={provider.localProfile ?? ""}
-                              placeholder={provider.kind === "codex-local" ? "optional Codex profile" : provider.kind === "claude-local" ? "optional Claude settings profile" : provider.kind === "opencode-local" ? "optional OpenCode agent" : "optional Antigravity agent"}
+                              placeholder={provider.kind === "codex-local" ? "optional Codex profile" : provider.kind === "claude-local" ? "optional Claude settings profile" : provider.kind === "opencode-local" ? "optional OpenCode agent" : provider.kind === "antigravity-local" ? "optional Antigravity agent" : "optional Grok Build agent"}
                               onChange={(event) => updateProvider(provider.id, { localProfile: event.target.value || undefined })}
                             />
                           </Field>
-                          <Field label={`${provider.kind === "codex-local" ? "Codex" : provider.kind === "claude-local" ? "Claude" : provider.kind === "opencode-local" ? "OpenCode" : "Antigravity"} command access`}>
+                          <Field label={`${provider.kind === "codex-local" ? "Codex" : provider.kind === "claude-local" ? "Claude" : provider.kind === "opencode-local" ? "OpenCode" : provider.kind === "antigravity-local" ? "Antigravity" : "Grok Build"} command access`}>
                             <Select
                               value={provider.localSandbox ?? "read-only"}
                               onValueChange={(value) => updateProvider(provider.id, {
@@ -2824,7 +2824,9 @@ export function ProjectToolbar({
                               ? "Claude Code uses permission modes instead of a true filesystem sandbox. ArchiCode maps these access levels to read-only planning, auto-accepted workspace edits, or full bypass mode."
                               : provider.kind === "opencode-local"
                                 ? "OpenCode runs once per request. Write-capable build phases add --auto; use OpenCode permissions/config for finer-grained tool restrictions."
-                                : "Antigravity uses plan+sandbox for read-only phases, accept-edits+sandbox for workspace writes, and bypasses permissions only in full-access mode."}</small>
+                                : provider.kind === "antigravity-local"
+                                  ? "Antigravity uses plan+sandbox for read-only phases, accept-edits+sandbox for workspace writes, and bypasses permissions only in full-access mode."
+                                  : "Grok Build uses dontAsk plus its read-only sandbox for review phases, and bypassPermissions inside the selected workspace/off sandbox only for write-capable phases."}</small>
                           {provider.kind === "antigravity-local" ? (
                             <small>Antigravity always runs through one-shot <code>agy --print</code> calls; ArchiCode owns conversation continuity.</small>
                           ) : (
@@ -2832,13 +2834,15 @@ export function ProjectToolbar({
                               <Switch
                                 checked={Boolean(provider.ephemeral)}
                                 onCheckedChange={(checked) => updateProvider(provider.id, { ephemeral: checked })}
-                                label={provider.kind === "codex-local" ? "Use throwaway Codex sessions" : provider.kind === "claude-local" ? "Disable Claude session persistence" : "Delete OpenCode sessions after each call"}
+                                label={provider.kind === "codex-local" ? "Use throwaway Codex sessions" : provider.kind === "claude-local" ? "Disable Claude session persistence" : provider.kind === "opencode-local" ? "Delete OpenCode sessions after each call" : "Delete Grok Build sessions after each call"}
                               />
                               <small>{provider.kind === "codex-local"
                                 ? <>Adds <code>--ephemeral</code> for local Codex runs. ArchiCode still saves runs and artifacts, but Codex should not reuse or save its own CLI session state.</>
                                 : provider.kind === "claude-local"
                                   ? <>Adds <code>--no-session-persistence</code> for local Claude runs. ArchiCode still saves runs and artifacts, but Claude should not reuse or save its own CLI session state.</>
-                                  : <>Runs <code>opencode session delete</code> after the one-shot response. ArchiCode still saves its own runs and artifacts.</>}</small>
+                                  : provider.kind === "opencode-local"
+                                    ? <>Runs <code>opencode session delete</code> after the one-shot response. ArchiCode still saves its own runs and artifacts.</>
+                                    : <>Adds <code>--no-memory</code> and runs <code>grok sessions delete</code> after the one-shot response. ArchiCode still saves its own runs and artifacts.</>}</small>
                             </>
                           )}
                         </>

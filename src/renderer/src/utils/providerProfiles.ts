@@ -9,12 +9,13 @@ export type ProviderSettings = ProjectSettings["providers"][number];
 export type ProviderKind = ProviderSettings["kind"];
 
 export const providerKindOptions: Array<{ value: ProviderKind; label: string }> = [
-  { value: "openai-compatible", label: "OpenAI Compatible API" },
-  { value: "codex-local", label: "Codex Local CLI" },
   { value: "anthropic-compatible", label: "Anthropic Compatible API" },
+  { value: "openai-compatible", label: "OpenAI Compatible API" },
   { value: "claude-local", label: "Claude Code CLI" },
-  { value: "opencode-local", label: "OpenCode Local CLI" },
-  { value: "antigravity-local", label: "Google Antigravity CLI" }
+  { value: "codex-local", label: "Codex Local CLI" },
+  { value: "antigravity-local", label: "Google Antigravity CLI" },
+  { value: "grok-local", label: "Grok Build CLI" },
+  { value: "opencode-local", label: "OpenCode Local CLI" }
 ];
 
 export const codexLocalCommandAccessHint =
@@ -47,8 +48,10 @@ export function localProviderUsageUnavailableDetail(provider?: ProviderSettings)
       ? "Claude Code CLI provider"
       : provider?.kind === "opencode-local"
         ? "OpenCode CLI provider"
-        : provider?.kind === "antigravity-local"
-          ? "Antigravity CLI provider"
+      : provider?.kind === "antigravity-local"
+        ? "Antigravity CLI provider"
+        : provider?.kind === "grok-local"
+          ? "Grok Build CLI provider"
       : "Local CLI provider";
   const profile = provider?.label?.trim();
   return `${cliName}${profile ? ` (${profile})` : ""} — token usage is not reported.`;
@@ -148,6 +151,7 @@ export function defaultProviderLabel(kind: ProviderKind): string {
   if (kind === "claude-local") return "Claude Code CLI";
   if (kind === "opencode-local") return "OpenCode Local CLI";
   if (kind === "antigravity-local") return "Google Antigravity CLI";
+  if (kind === "grok-local") return "Grok Build CLI";
   return "Manual / Offline";
 }
 
@@ -294,6 +298,17 @@ function providerDefaultsForKind(kind: ProviderKind): Omit<ProviderSettings, "id
       localSandbox: defaultCodexLocalSandbox()
     };
   }
+  if (kind === "grok-local") {
+    return {
+      ...common,
+      baseUrl: undefined,
+      model: "",
+      openAiEndpointMode: undefined,
+      localCommand: "grok",
+      localSandbox: defaultCodexLocalSandbox(),
+      ephemeral: true
+    };
+  }
   return {
     ...common,
     baseUrl: undefined,
@@ -355,7 +370,7 @@ function providerAutoCheckFingerprint(provider: ProviderSettings): string {
       ephemeral: Boolean(provider.ephemeral)
     });
   }
-  if (provider.kind === "claude-local" || provider.kind === "opencode-local" || provider.kind === "antigravity-local") {
+  if (provider.kind === "claude-local" || provider.kind === "opencode-local" || provider.kind === "antigravity-local" || provider.kind === "grok-local") {
     return JSON.stringify({
       kind: provider.kind,
       model: provider.model ?? "",

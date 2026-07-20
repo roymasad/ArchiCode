@@ -32,6 +32,10 @@ export function isAntigravityLocalProvider(provider: Provider): provider is Prov
   return provider.kind === "antigravity-local";
 }
 
+export function isGrokLocalProvider(provider: Provider): provider is Provider & { kind: "grok-local" } {
+  return provider.kind === "grok-local";
+}
+
 export function localCliCommand(provider: Pick<Provider, "kind" | "localCommand">): string {
   return provider.localCommand?.trim() || (provider.kind === "claude-local"
     ? "claude"
@@ -39,6 +43,8 @@ export function localCliCommand(provider: Pick<Provider, "kind" | "localCommand"
       ? "opencode"
       : provider.kind === "antigravity-local"
         ? "agy"
+        : provider.kind === "grok-local"
+          ? "grok"
         : "codex");
 }
 
@@ -138,7 +144,7 @@ export async function callCodexLocal(provider: Provider, contextText: string, pr
 }
 
 export async function callLocalResearchProvider(
-  transport: "codex-local" | "claude-local" | "opencode-local" | "antigravity-local",
+  transport: "codex-local" | "claude-local" | "opencode-local" | "antigravity-local" | "grok-local",
   provider: Provider,
   userMessage: string,
   options: ResearchProviderOptions,
@@ -155,7 +161,9 @@ export async function callLocalResearchProvider(
       ? "Claude"
       : transport === "opencode-local"
         ? "OpenCode"
-        : "Antigravity";
+        : transport === "antigravity-local"
+          ? "Antigravity"
+          : "Grok Build";
   const askModeNote = (options.mcpTools ?? []).some((tool) => !options.isTerminalTool?.(tool.providerToolName))
     ? "Enabled Ask-mode MCP servers remain visible through the structured tool list. If an Ask-mode tool is requested, ArchiCode will pause for approval and then resume this same turn with the tool result."
     : "";
@@ -205,7 +213,9 @@ export async function callLocalResearchProvider(
                 ? "Web search is enabled for this chat. Use OpenCode's configured web tools only when current external information is needed, and cite sources when web results inform the answer."
                 : transport === "antigravity-local"
                   ? "Web search is enabled for this chat. Use Antigravity's built-in web tools only when current external information is needed, and cite sources when web results inform the answer."
-                  : "Web search is enabled for this chat. Use Codex web search only when current external information is needed, and cite sources when web results inform the answer."
+                  : transport === "grok-local"
+                    ? "Web search is enabled for this chat. Use Grok Build's web tools only when current external information is needed, and cite sources when web results inform the answer."
+                    : "Web search is enabled for this chat. Use Codex web search only when current external information is needed, and cite sources when web results inform the answer."
             : "Web search is disabled by project settings. Use only provided context and local model knowledge.",
           askModeNote,
           localResearchToolLoopInstructions(options),
@@ -691,6 +701,209 @@ export async function callAntigravityLocalResearch(provider: Provider, userMessa
         throw new Error(`Antigravity local research provider failed with exit code ${processResult.exitCode}.\n${processResult.stderr || processResult.stdout}`);
       }
       return processResult.stdout.trim() || "Antigravity local research provider returned no content.";
+    }
+  );
+  emitUnavailableUsage(provider, policy, options.onUsage);
+  return result;
+}
+
+export function buildGrokLocalArgs(provider: Provider, phase: LlmPhase, prompt: string, webSearchEnabled = false): string[] {
+  const writeCapable = provider.localSandbox !== "read-only" && (phase === "coding" || phase === "debugging" || phase === "verifying");
+  const args = [
+    "--output-format", "streaming-json",
+    "--no-memory",
+    "--no-subagents",
+    "--permission-mode", writeCapable ? "bypassPermissions" : "dontAsk",
+    "--sandbox", writeCapable && provider.localSandbox === "danger-full-access" ? "off" : writeCapable ? "workspace" : "read-only"
+  ];
+  const policy = resolvePhaseModelPolicy(provider, phase);
+  const model = policy.modelOverride?.trim() || provider.model?.trim();
+  if (model) args.push("--model", model);
+  if (policy.reasoningMode !== "off") args.push("--reasoning-effort", policy.reasoningMode);
+  if (provider.localProfile?.trim()) args.push("--agent", provider.localProfile.trim());
+  if (!webSearchEnabled) args.push("--disable-web-search");
+  args.push("-p", prompt);
+  return args;
+}
+
+function grokContentText(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (Array.isArray(value)) return value.map(grokContentText).filter(Boolean).join("");
+  if (!value || typeof value !== "object") return "";
+  const record = value as Record<string, unknown>;
+  if (typeof record.text === "string") return record.text;
+  if (typeof record.content === "string") return record.content;
+  return grokContentText(record.content ?? record.parts ?? record.delta);
+}
+
+export function grokJsonEvent(line: string): {
+  text?: { kind: "delta" | "full"; tokenKind: ProviderTokenKind; value: string };
+  sessionId?: string;
+} | null {
+  const trimmed = line.trim();
+  if (!trimmed) return null;
+  let event: Record<string, unknown>;
+  try {
+    event = JSON.parse(trimmed) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+  const session = event.session && typeof event.session === "object" ? event.session as Record<string, unknown> : undefined;
+  const sessionId = [event.session_id, event.sessionId, event.sessionID, session?.id]
+    .find((value): value is string => typeof value === "string" && value.length > 0);
+  const type = typeof event.type === "string" ? event.type.toLowerCase() : "";
+  const message = event.message && typeof event.message === "object" ? event.message as Record<string, unknown> : undefined;
+  const role = typeof event.role === "string"
+    ? event.role.toLowerCase()
+    : typeof message?.role === "string"
+      ? message.role.toLowerCase()
+      : "";
+  const update = event.update && typeof event.update === "object" ? event.update as Record<string, unknown> : undefined;
+  const updateType = typeof update?.sessionUpdate === "string" ? update.sessionUpdate : "";
+  const thinking = type.includes("reason") || type.includes("thinking");
+  let value = "";
+  let kind: "delta" | "full" = "delta";
+  if (type === "result" || type.endsWith("_result")) {
+    value = grokContentText(event.result ?? event.response ?? event.output ?? event.content ?? event.text);
+    kind = "full";
+  } else if (updateType === "agent_message_chunk") {
+    value = grokContentText(update?.content);
+  } else if (role === "assistant" || type.includes("assistant")) {
+    value = grokContentText(message?.content ?? event.content ?? event.delta ?? event.text);
+    kind = type.includes("complete") || type.includes("final") ? "full" : "delta";
+  } else if (type.includes("delta")) {
+    value = grokContentText(event.delta ?? event.content ?? event.text);
+  } else if (type === "message" && !role) {
+    value = grokContentText(event.content ?? event.delta ?? event.text);
+  }
+  return {
+    sessionId,
+    ...(value ? { text: { kind, tokenKind: thinking ? "thinking" : "answer", value } } : {})
+  };
+}
+
+export function createGrokLocalTokenStreamer(onToken?: (text: string, kind?: ProviderTokenKind) => void): {
+  (chunk: string): void;
+  finalText(): string;
+  sessionId(): string | undefined;
+} {
+  let buffer = "";
+  let answer = "";
+  let thinking = "";
+  let currentSessionId: string | undefined;
+  const processLines = (lines: string[]): void => {
+    for (const line of lines) {
+      const event = grokJsonEvent(line);
+      if (!event) continue;
+      if (event.sessionId) currentSessionId = event.sessionId;
+      if (!event.text) continue;
+      if (event.text.tokenKind === "thinking") thinking = emitLocalCliJsonText(event.text, thinking, onToken);
+      else answer = emitLocalCliJsonText(event.text, answer, onToken);
+    }
+  };
+  const push = (chunk: string): void => {
+    buffer += chunk;
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() ?? "";
+    processLines(lines);
+  };
+  const flush = (): void => {
+    if (!buffer.trim()) return;
+    processLines([buffer]);
+    buffer = "";
+  };
+  push.finalText = () => {
+    flush();
+    return (answer || thinking).trim();
+  };
+  push.sessionId = () => {
+    flush();
+    return currentSessionId;
+  };
+  return push;
+}
+
+async function cleanupGrokSession(command: string, sessionId: string | undefined, cwd: string | undefined, enabled: boolean): Promise<void> {
+  if (!enabled || !sessionId) return;
+  try {
+    await runLocalProcess(command, ["sessions", "delete", sessionId], "", cwd, undefined, undefined, { inactivityTimeoutMs: 30_000 });
+  } catch {
+    // Session cleanup is best-effort and must not hide a completed provider response.
+  }
+}
+
+function grokAttachmentReferences(options: Pick<ProviderCallOptions, "imageAttachments" | "textAttachments">): string {
+  const paths = [...new Set([
+    ...(options.imageAttachments ?? []).map((attachment) => attachment.path.trim()),
+    ...(options.textAttachments ?? []).map((attachment) => attachment.path.trim())
+  ].filter(Boolean))];
+  return paths.length ? ["Grok Build attachment references:", ...paths.map((attachmentPath) => `@${attachmentPath}`)].join("\n") : "";
+}
+
+export async function callGrokLocal(provider: Provider, contextText: string, promptSummary: string, options: ProviderCallOptions, policy: PhaseModelPolicy): Promise<string> {
+  const command = localCliCommand(provider);
+  const phase = options.phase ?? "planning";
+  const profile = inferModelCapabilityProfile(provider, policy.modelOverride);
+  const prompt = options.bareExtraction
+    ? [extractionSystemPrompt, "", contextText].join("\n")
+    : [
+        orchestratorSystemPrompt,
+        "",
+        "You are being called as ArchiCode's local Grok Build provider through a one-shot grok process.",
+        ...localCodingPhaseInstructions(provider, phase, "Grok Build"),
+        phasePolicyText(phase, policy, profile),
+        options.selectedSkillsPrompt?.trim() ?? "",
+        imageAttachmentText(options.imageAttachments),
+        await textAttachmentText(options.textAttachments),
+        grokAttachmentReferences(options),
+        options.webSearchEnabled
+          ? "Use Grok Build's web tools only when current external information is needed, and cite sources."
+          : "Web search is disabled. Use the supplied project context and local knowledge.",
+        "",
+        `Prompt summary: ${promptSummary}`,
+        "",
+        "Project JSON context:",
+        contextText
+      ].filter(Boolean).join("\n");
+  const args = buildGrokLocalArgs(provider, phase, prompt, options.webSearchEnabled);
+  const stream = createGrokLocalTokenStreamer(options.onProgress
+    ? (text, kind) => options.onProgress?.({ stream: kind === "thinking" ? "system" : "stdout", text })
+    : undefined);
+  const result = await runLocalProcess(command, args, "", options.projectRoot, (event) => {
+    if (event.stream === "stdout") stream(event.text);
+    else options.onProgress?.(event);
+  }, options.signal);
+  const finalText = stream.finalText();
+  await cleanupGrokSession(command, stream.sessionId(), options.projectRoot, provider.ephemeral !== false);
+  if (result.exitCode !== 0) {
+    throw new Error(`Grok Build local provider failed with exit code ${result.exitCode}.\n${result.stderr || result.stdout}`);
+  }
+  emitUnavailableUsage(provider, policy, options.onUsage);
+  return finalText || result.stdout.trim() || "Grok Build local provider returned no content.";
+}
+
+export async function callGrokLocalResearch(provider: Provider, userMessage: string, options: ResearchProviderOptions, policy: PhaseModelPolicy): Promise<string> {
+  const result = await callLocalResearchProvider(
+    "grok-local",
+    provider,
+    userMessage,
+    options,
+    policy,
+    async (prompt, onToken) => {
+      const command = localCliCommand(provider);
+      const attachmentReferences = grokAttachmentReferences(options);
+      const finalPrompt = attachmentReferences ? `${prompt}\n\n${attachmentReferences}` : prompt;
+      const args = buildGrokLocalArgs(provider, "brainstorming", finalPrompt, options.webSearchEnabled);
+      const stream = createGrokLocalTokenStreamer(onToken);
+      const processResult = await runLocalProcess(command, args, "", options.projectRoot, (event) => {
+        if (event.stream === "stdout") stream(event.text);
+      }, options.signal);
+      const finalText = stream.finalText();
+      await cleanupGrokSession(command, stream.sessionId(), options.projectRoot, provider.ephemeral !== false);
+      if (processResult.exitCode !== 0) {
+        throw new Error(`Grok Build local research provider failed with exit code ${processResult.exitCode}.\n${processResult.stderr || processResult.stdout}`);
+      }
+      return finalText || processResult.stdout.trim() || "Grok Build local research provider returned no content.";
     }
   );
   emitUnavailableUsage(provider, policy, options.onUsage);
@@ -1967,6 +2180,64 @@ export async function checkAntigravityLocal(provider: Provider, checkedAt: strin
         : `Antigravity CLI is installed (${(version.stdout || version.stderr).trim()}) but its model catalog failed or returned no models: ${catalog.stderr || catalog.stdout}`,
       availableModels: availableModels.length ? availableModels : undefined,
       modelListSource: availableModels.length ? "agy models" : undefined
+    };
+  } catch (error) {
+    return {
+      providerId: provider.id,
+      ok: false,
+      status: "failed",
+      checkedAt,
+      message: error instanceof Error ? error.message : String(error)
+    };
+  }
+}
+
+export function parseGrokModels(output: string): string[] {
+  const ansi = /\u001b\[[0-?]*[ -/]*[@-~]/g;
+  const ignored = new Set(["available", "model", "models", "id", "name", "default", "no", "none", "error", "failed"]);
+  return [...new Set(output
+    .replace(ansi, "")
+    .split(/\r?\n/)
+    .map((line) => line.trim().replace(/^[*+>✓✔●○◆◇•-]+\s*/, ""))
+    .map((line) => line.match(/^([A-Za-z0-9][A-Za-z0-9._:/-]*)/)?.[1] ?? "")
+    .filter((model) => model.length > 0 && model.length <= 200 && !ignored.has(model.toLowerCase())))]
+    .sort((a, b) => a.localeCompare(b));
+}
+
+export function grokCatalogLooksUnauthenticated(output: string): boolean {
+  return /not authenticated|no auth credentials|re-authentication required|token expired|run [`']?grok login/i.test(output);
+}
+
+export async function checkGrokLocal(provider: Provider, checkedAt: string): Promise<ProviderHealthResult> {
+  const command = localCliCommand(provider);
+  try {
+    const version = await runLocalProcess(command, ["--version"], "", undefined, undefined, undefined, { inactivityTimeoutMs: 30_000 });
+    if (version.exitCode !== 0) {
+      return {
+        providerId: provider.id,
+        ok: false,
+        status: "failed",
+        checkedAt,
+        message: `Grok Build CLI check failed: ${version.stderr || version.stdout}`
+      };
+    }
+    const catalog = await runLocalProcess(command, ["models"], "", undefined, undefined, undefined, { inactivityTimeoutMs: 60_000 });
+    const availableModels = catalog.exitCode === 0 ? parseGrokModels(catalog.stdout) : [];
+    const catalogOutput = [catalog.stdout, catalog.stderr].filter(Boolean).join("\n");
+    const authenticated = !grokCatalogLooksUnauthenticated(catalogOutput);
+    const ready = catalog.exitCode === 0 && availableModels.length > 0 && authenticated;
+    return {
+      providerId: provider.id,
+      ok: ready,
+      status: ready ? "ready" : "failed",
+      checkedAt,
+      message: ready
+        ? `Grok Build CLI is available (${(version.stdout || version.stderr).trim()}) with ${availableModels.length} model${availableModels.length === 1 ? "" : "s"}. Authentication is managed by Grok Build through its signed-in account or configured API keys.`
+        : !authenticated
+          ? `Grok Build CLI is installed (${(version.stdout || version.stderr).trim()}) but is not authenticated. Run grok login or configure an API key, then check again.`
+          : `Grok Build CLI is installed (${(version.stdout || version.stderr).trim()}) but its model catalog failed or returned no models: ${catalog.stderr || catalog.stdout}`,
+      availableModels: availableModels.length ? availableModels : undefined,
+      modelListSource: availableModels.length ? "grok models" : undefined
     };
   } catch (error) {
     return {

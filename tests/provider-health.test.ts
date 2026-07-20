@@ -6,7 +6,7 @@ import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js"
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { applyOpenRouterSessionId, callProvider, callResearchProvider, checkProviderHealth, createConsecutiveToolCallLoopDetector, createUsageAccumulator, isExplicitDelphiAuditRequest, localResearchToolLoopInstructions, localResearchTurnValidationFeedback, researchHistoryThread, extractModelCapabilitiesFromModels, extractContextWindowFromModels, extractModelIdsFromModels, inferModelCapabilityProfile, researchResponseStyleDirective, researchSystemInstructions, type ResearchProviderContinuation, resolveProviderApiKey, resolvePhaseModelPolicy } from "../src/main/providers";
 import { buildAnthropicCompatibleBody, buildAnthropicResearchBody } from "../src/main/providers/anthropic";
-import { activeLocalProviderProcesses, buildAntigravityLocalArgs, buildClaudeLocalArgs, buildClaudeLocalResearchArgs, buildCodexLocalArgs, buildCodexLocalResearchArgs, buildOpenCodeLocalArgs, openCodeJsonEvent, openCodeProcessEnv, parseAntigravityModels, parseOpenCodeModels, runLocalProcess, windowsBatchCommandLine, windowsExecutableCandidates } from "../src/main/providers/localCli";
+import { activeLocalProviderProcesses, buildAntigravityLocalArgs, buildClaudeLocalArgs, buildClaudeLocalResearchArgs, buildCodexLocalArgs, buildCodexLocalResearchArgs, buildGrokLocalArgs, buildOpenCodeLocalArgs, grokCatalogLooksUnauthenticated, grokJsonEvent, openCodeJsonEvent, openCodeProcessEnv, parseAntigravityModels, parseGrokModels, parseOpenCodeModels, runLocalProcess, windowsBatchCommandLine, windowsExecutableCandidates } from "../src/main/providers/localCli";
 import { buildOpenAICompatibleBody, buildOpenAIResearchChatCompletionsBody, buildOpenAIResponsesBody, buildOpenAIResearchResponsesBody } from "../src/main/providers/openai";
 import { createSeedProject } from "../src/shared/fixtures";
 import { defaultPhaseModelPolicies, defaultSubagentModelPolicies } from "../src/shared/schema";
@@ -310,6 +310,20 @@ describe("provider health checks", () => {
     expect(result.status).toBe("failed");
   });
 
+  it("reports unavailable Grok Build local command", async () => {
+    const provider = {
+      ...createSeedProject("/tmp/archicode").project.settings.providers.find((item) => item.kind === "codex-local")!,
+      id: "grok-local",
+      kind: "grok-local" as const,
+      label: "Grok Build CLI",
+      localCommand: "archicode-missing-grok-command"
+    };
+    const result = await checkProviderHealth(provider);
+
+    expect(result.ok).toBe(false);
+    expect(result.status).toBe("failed");
+  });
+
   it("keeps OpenCode provider/model IDs intact and parses JSON text events", () => {
     expect(parseOpenCodeModels("opencode-go/kimi-k2.5\nanthropic/claude-sonnet-4-5\nnoise\n")).toEqual([
       "anthropic/claude-sonnet-4-5",
@@ -346,6 +360,91 @@ describe("provider health checks", () => {
       "--print", "Build it", "--print-timeout", "5m", "--mode", "accept-edits", "--model", "Gemini 3.5 Flash (High)", "--agent", "reviewer", "--sandbox", "--dangerously-skip-permissions"
     ]);
     expect(buildAntigravityLocalArgs({ ...provider, localSandbox: "danger-full-access" }, "coding", "Build it")).not.toContain("--sandbox");
+  });
+
+  it("parses Grok Build models and streaming events and maps phase access", () => {
+    expect(parseGrokModels("Available models:\n● grok-build-0.1 Grok Build\ncomposer-2.5 Composer\n")).toEqual([
+      "composer-2.5",
+      "grok-build-0.1"
+    ]);
+    expect(grokJsonEvent(JSON.stringify({
+      type: "message",
+      session_id: "grok-session",
+      role: "assistant",
+      content: [{ type: "text", text: "hello" }]
+    }))).toEqual({
+      sessionId: "grok-session",
+      text: { kind: "delta", tokenKind: "answer", value: "hello" }
+    });
+    expect(grokCatalogLooksUnauthenticated("You are not authenticated.\nAvailable models:\n* grok-build")).toBe(true);
+    expect(grokCatalogLooksUnauthenticated("Available models:\n* grok-build")).toBe(false);
+    const provider = {
+      ...createSeedProject("/tmp/archicode").project.settings.providers.find((item) => item.kind === "codex-local")!,
+      id: "grok-local",
+      kind: "grok-local" as const,
+      label: "Grok Build CLI",
+      localCommand: "grok",
+      model: "grok-build-0.1",
+      localProfile: "reviewer"
+    };
+    expect(buildGrokLocalArgs({ ...provider, localSandbox: "read-only" }, "planning", "Plan it", false)).toEqual([
+      "--output-format", "streaming-json", "--no-memory", "--no-subagents",
+      "--permission-mode", "dontAsk", "--sandbox", "read-only",
+      "--model", "grok-build-0.1", "--reasoning-effort", "high", "--agent", "reviewer",
+      "--disable-web-search", "-p", "Plan it"
+    ]);
+    const writeArgs = buildGrokLocalArgs({ ...provider, localSandbox: "workspace-write" }, "coding", "Build it", true);
+    expect(writeArgs).toContain("bypassPermissions");
+    expect(writeArgs).toContain("workspace");
+    expect(writeArgs).not.toContain("--disable-web-search");
+    expect(buildGrokLocalArgs({ ...provider, localSandbox: "danger-full-access" }, "coding", "Build it", true)).toContain("off");
+  });
+
+  it("discovers Grok Build models, parses a one-shot response, and deletes its session", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "archicode-grok-path-"));
+    const binDir = path.join(root, "bin");
+    await mkdir(binDir, { recursive: true });
+    const commandPath = path.join(binDir, "mock-grok");
+    const cleanupMarker = path.join(root, "session-deleted.txt");
+    await writeFile(commandPath, `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args.join(" ") === "--version") process.stdout.write("grok 0.2.103\\n");
+else if (args.join(" ") === "models") process.stdout.write("Available models:\\n● grok-build-0.1 Grok Build\\ncomposer-2.5 Composer\\n");
+else if (args[0] === "sessions" && args[1] === "delete") fs.writeFileSync(${JSON.stringify(cleanupMarker)}, args[2] || "");
+else if (args.includes("-p")) {
+  const prompt = args[args.indexOf("-p") + 1] || "";
+  if (!prompt.includes("Grok test")) process.exitCode = 2;
+  else {
+    process.stdout.write(JSON.stringify({ type: "init", session_id: "grok-session" }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "message", role: "assistant", content: "Grok answer" }) + "\\n");
+    process.stdout.write(JSON.stringify({ type: "result", result: "Grok answer" }) + "\\n");
+  }
+} else process.exitCode = 1;
+`, "utf8");
+    await chmod(commandPath, 0o755);
+    const previousPath = process.env.PATH;
+    process.env.PATH = [binDir, previousPath].filter(Boolean).join(path.delimiter);
+    const provider = {
+      ...createSeedProject(root).project.settings.providers.find((item) => item.kind === "codex-local")!,
+      id: "grok-local",
+      kind: "grok-local" as const,
+      label: "Grok Build CLI",
+      localCommand: "mock-grok",
+      model: "grok-build-0.1",
+      localSandbox: "read-only" as const,
+      ephemeral: true
+    };
+    try {
+      const health = await checkProviderHealth(provider);
+      expect(health.ok).toBe(true);
+      expect(health.availableModels).toEqual(["composer-2.5", "grok-build-0.1"]);
+      expect(health.modelListSource).toBe("grok models");
+      await expect(callProvider(provider, "{}", "Grok test", { projectRoot: root, phase: "planning" })).resolves.toBe("Grok answer");
+      expect(await readFile(cleanupMarker, "utf8")).toBe("grok-session");
+    } finally {
+      process.env.PATH = previousPath;
+    }
   });
 
   it("discovers Antigravity models and runs a plain-text one-shot call", async () => {

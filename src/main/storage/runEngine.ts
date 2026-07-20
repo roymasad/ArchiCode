@@ -1111,7 +1111,7 @@ async function finalizeTerminalRun(projectRoot: string, run: Run, fallbackInstru
 }
 
 function isWriteCapableProvider(provider: ProjectSettings["providers"][number] | undefined): boolean {
-  return (provider?.kind === "codex-local" || provider?.kind === "claude-local" || provider?.kind === "opencode-local" || provider?.kind === "antigravity-local") && provider.localSandbox !== "read-only";
+  return (provider?.kind === "codex-local" || provider?.kind === "claude-local" || provider?.kind === "opencode-local" || provider?.kind === "antigravity-local" || provider?.kind === "grok-local") && provider.localSandbox !== "read-only";
 }
 
 function requiresProviderLaunchApproval(provider: ProjectSettings["providers"][number] | undefined): boolean {
@@ -1133,8 +1133,8 @@ function isCodeCapableProvider(provider: ProjectSettings["providers"][number] | 
 }
 
 function providerCommand(provider: ProjectSettings["providers"][number] | undefined): string | null {
-  if (!provider || (provider.kind !== "codex-local" && provider.kind !== "claude-local" && provider.kind !== "opencode-local" && provider.kind !== "antigravity-local")) return null;
-  return provider.localCommand?.trim() || (provider.kind === "claude-local" ? "claude" : provider.kind === "opencode-local" ? "opencode" : provider.kind === "antigravity-local" ? "agy" : "codex");
+  if (!provider || (provider.kind !== "codex-local" && provider.kind !== "claude-local" && provider.kind !== "opencode-local" && provider.kind !== "antigravity-local" && provider.kind !== "grok-local")) return null;
+  return provider.localCommand?.trim() || (provider.kind === "claude-local" ? "claude" : provider.kind === "opencode-local" ? "opencode" : provider.kind === "antigravity-local" ? "agy" : provider.kind === "grok-local" ? "grok" : "codex");
 }
 
 export async function writeRunPlanArtifact(
@@ -4690,8 +4690,8 @@ function providerUsesArchicodeMcp(provider: ProjectSettings["providers"][number]
     provider?.kind === "claude-local";
 }
 
-function isLocalProviderKind(kind: ProjectSettings["providers"][number]["kind"] | undefined): kind is "codex-local" | "claude-local" | "opencode-local" | "antigravity-local" {
-  return kind === "codex-local" || kind === "claude-local" || kind === "opencode-local" || kind === "antigravity-local";
+function isLocalProviderKind(kind: ProjectSettings["providers"][number]["kind"] | undefined): kind is "codex-local" | "claude-local" | "opencode-local" | "antigravity-local" | "grok-local" {
+  return kind === "codex-local" || kind === "claude-local" || kind === "opencode-local" || kind === "antigravity-local" || kind === "grok-local";
 }
 
 type LocalProviderMcpApprovalRequest = {
@@ -4973,7 +4973,7 @@ async function pauseRunForDelphiSetupApproval(
   runId: string,
   callId: string,
   input: { providerToolName: string; argumentsJson: string },
-  continuation?: { providerKind: "codex-local" | "claude-local" | "opencode-local" | "antigravity-local" | "api"; originalOutput: string }
+  continuation?: { providerKind: "codex-local" | "claude-local" | "opencode-local" | "antigravity-local" | "grok-local" | "api"; originalOutput: string }
 ): Promise<void> {
   const latest = await readRun(projectRoot, runId);
   const setup = runDelphiSetupInputSchema.parse(JSON.parse(input.argumentsJson || "{}"));
@@ -5038,7 +5038,7 @@ async function pauseRunForDelphiAuditApproval(
   callId: string,
   input: { providerToolName: string; argumentsJson: string },
   plan?: NonNullable<Awaited<ReturnType<typeof planDelphiRuntimeLaunch>>>,
-  continuation?: { providerKind: "codex-local" | "claude-local" | "opencode-local" | "antigravity-local" | "api"; originalOutput: string }
+  continuation?: { providerKind: "codex-local" | "claude-local" | "opencode-local" | "antigravity-local" | "grok-local" | "api"; originalOutput: string }
 ): Promise<void> {
   const latest = await readRun(projectRoot, runId);
   const delphiArgs = delphiTestingInputSchema.parse(JSON.parse(input.argumentsJson || "{}"));
@@ -6188,7 +6188,7 @@ async function providerOptionsForRun(projectRoot: string, run: Run, settings: Pr
 }> {
   const selectedSkills = await selectedSkillsPrompt(projectRoot, settings);
   const internalTools = archicodeInternalTools(settings);
-  const localProvider = provider?.kind === "codex-local" || provider?.kind === "claude-local" || provider?.kind === "opencode-local" || provider?.kind === "antigravity-local";
+  const localProvider = provider?.kind === "codex-local" || provider?.kind === "claude-local" || provider?.kind === "opencode-local" || provider?.kind === "antigravity-local" || provider?.kind === "grok-local";
   const structuredSourceHandoff = !localProvider && (run.phase === "coding" || run.phase === "debugging");
   const sourceTools = structuredSourceHandoff ? sourceHandoffTools() : [];
   const subagentTools = localProvider ? [] : runSubagentTools(settings);
@@ -6618,7 +6618,7 @@ async function completeCodingRun(projectRoot: string, run: Run, contextText?: st
       reason: reusablePolicy
         ? `Allowed by reusable policy ${reusablePolicy.id}.`
         : directWrite
-          ? `${provider?.kind === "claude-local" ? "Claude Code CLI" : provider?.kind === "opencode-local" ? "OpenCode CLI" : provider?.kind === "antigravity-local" ? "Antigravity CLI" : "Codex Local CLI"} provider launch allowed by ${codexLocalSandboxDisplayLabel(provider?.localSandbox)}.`
+          ? `${provider?.kind === "claude-local" ? "Claude Code CLI" : provider?.kind === "opencode-local" ? "OpenCode CLI" : provider?.kind === "antigravity-local" ? "Antigravity CLI" : provider?.kind === "grok-local" ? "Grok Build CLI" : "Codex Local CLI"} provider launch allowed by ${codexLocalSandboxDisplayLabel(provider?.localSandbox)}.`
         : "API provider coding is applied through source-file handoffs."
     },
     logs: [...run.logs, { at: iso(), stream: "system", text: providerPhase === "debugging"
