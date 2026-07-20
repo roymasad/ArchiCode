@@ -1,5 +1,5 @@
-import { ChevronDown, ChevronLeft, ChevronRight, GitCommitHorizontal, History, LoaderCircle, X } from "lucide-react";
-import { useEffect, useRef } from "react";
+import { Camera, CheckCircle2, ChevronDown, ChevronLeft, ChevronRight, GitCommitHorizontal, History, LoaderCircle, X } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { useArchicodeStore } from "../store/useArchicodeStore";
 import { Button, IconButton, PopoverContent, PopoverPortal, PopoverRoot, PopoverTrigger, Tooltip } from "./ui";
@@ -49,6 +49,9 @@ export function GraphHistoryBar({ inline = false }: { inline?: boolean }) {
   const currentBundle = historicalInspection?.currentBundle ?? bundle;
   const autoLoadedRepoRef = useRef<string | null>(null);
   const historyEndRef = useRef<HTMLDivElement | null>(null);
+  const captureStatusTimerRef = useRef<number | null>(null);
+  const [captureBusy, setCaptureBusy] = useState(false);
+  const [captureStatus, setCaptureStatus] = useState<{ tone: "success" | "error"; message: string } | null>(null);
   useEffect(() => {
     const repoKey = gitStatus?.repoRoot ?? bundle?.rootPath ?? null;
     if ((inline && entry) || !repoKey || !gitStatus?.isRepo || autoLoadedRepoRef.current === repoKey) return;
@@ -65,6 +68,9 @@ export function GraphHistoryBar({ inline = false }: { inline?: boolean }) {
     observer.observe(target);
     return () => observer.disconnect();
   }, [graphHistoryHasMore, graphHistoryLoading, graphHistoryOpen, loadMoreGraphHistory]);
+  useEffect(() => () => {
+    if (captureStatusTimerRef.current !== null) window.clearTimeout(captureStatusTimerRef.current);
+  }, []);
   if (inline && entry) return null;
   const flatEntries = graphHistory.flatMap((version) => version.commits);
   const activeIndex = entry ? flatEntries.findIndex((item) => item.commit === entry.commit) : -1;
@@ -91,8 +97,41 @@ export function GraphHistoryBar({ inline = false }: { inline?: boolean }) {
   const currentNodeCount = currentBundle?.flows.reduce((count, flow) => count + flow.nodes.length, 0) ?? 0;
   const currentEdgeCount = currentBundle?.flows.reduce((count, flow) => count + flow.edges.length, 0) ?? 0;
   const selectCurrentGraph = () => {
+    if (graphHistoryOpen) toggleGraphHistory();
     if (entry) void exitHistoricalInspection();
-    else if (graphHistoryOpen) toggleGraphHistory();
+  };
+  const selectHistoricalGraph = (commit: string) => {
+    if (graphHistoryOpen) toggleGraphHistory();
+    void inspectHistoricalGraph(commit);
+  };
+  const showCaptureStatus = (status: { tone: "success" | "error"; message: string }) => {
+    setCaptureStatus(status);
+    if (captureStatusTimerRef.current !== null) window.clearTimeout(captureStatusTimerRef.current);
+    captureStatusTimerRef.current = window.setTimeout(() => setCaptureStatus(null), 5000);
+  };
+  const captureCanvasViewport = async () => {
+    const canvas = document.querySelector<HTMLElement>(".canvas-shell");
+    if (!canvas || !window.archicode?.captureCanvasViewport || captureBusy) return;
+    const bounds = canvas.getBoundingClientRect();
+    const projectName = currentBundle?.project.name ?? "project";
+    const versionName = displayedVersionNumber ? `graph-v${displayedVersionNumber}` : "graph-history";
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    setCaptureBusy(true);
+    try {
+      const result = await window.archicode.captureCanvasViewport(
+        { x: bounds.x, y: bounds.y, width: bounds.width, height: bounds.height },
+        `archicode-${projectName}-${versionName}-${entry?.shortCommit ?? "current"}-${timestamp}.png`
+      );
+      showCaptureStatus({ tone: "success", message: `Saved to Downloads · ${result.fileName}` });
+      void window.archicode.showSystemNotification?.({
+        title: "Canvas proof captured",
+        body: `Saved ${result.fileName} to Downloads.`
+      });
+    } catch (error) {
+      showCaptureStatus({ tone: "error", message: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setCaptureBusy(false);
+    }
   };
   const historyPanelContents = (
     <>
@@ -130,7 +169,7 @@ export function GraphHistoryBar({ inline = false }: { inline?: boolean }) {
               type="button"
               key={`${version.graphVersion}:${latest.commit}`}
               className={selected ? "graph-history-item is-selected" : "graph-history-item"}
-              onClick={() => void inspectHistoricalGraph(latest.commit)}
+              onClick={() => selectHistoricalGraph(latest.commit)}
             >
               <span className="graph-history-dot" />
               <span className="graph-history-item-body">
@@ -192,13 +231,20 @@ export function GraphHistoryBar({ inline = false }: { inline?: boolean }) {
       <div className="graph-history-bar">
         {entry ? (
           <>
-            <span className="graph-history-mode"><History size={15} /> Historical inspection</span>
-            <span className="graph-history-context">
-              <b>{entry.shortCommit}</b>
-              <span>{displayedVersionLabel}</span>
-              <span>{new Date(entry.committedAt).toLocaleString()}</span>
-            </span>
+            <div className="graph-history-summary">
+              <span className="graph-history-mode"><History size={15} /> Historical inspection</span>
+              <span className="graph-history-context">
+                <span className="graph-history-context-primary"><b>{entry.shortCommit}</b><span>{displayedVersionLabel}</span></span>
+                <span className="graph-history-context-secondary">
+                  <span className="graph-history-change-key"><i aria-hidden="true" /> {historicalInspection.nodeChanges.length} changed node{historicalInspection.nodeChanges.length === 1 ? "" : "s"}</span>
+                  <span className="graph-history-timestamp">{new Date(entry.committedAt).toLocaleString()}</span>
+                </span>
+              </span>
+            </div>
             <div className="graph-history-actions">
+              <IconButton title="Capture visible canvas to Downloads" disabled={captureBusy} onClick={() => void captureCanvasViewport()}>
+                {captureBusy ? <LoaderCircle className="spin" size={16} /> : <Camera size={16} />}
+              </IconButton>
               <IconButton title="Older graph snapshot" disabled={!older || graphHistoryLoading} onClick={() => older && void inspectHistoricalGraph(older.commit)}>
                 <ChevronLeft size={16} />
               </IconButton>
@@ -215,13 +261,20 @@ export function GraphHistoryBar({ inline = false }: { inline?: boolean }) {
               <Button size="sm" variant="secondary" onClick={toggleGraphHistory}>
                 Timeline <ChevronDown size={14} />
               </Button>
-              <Button size="sm" variant="primary" onClick={() => void exitHistoricalInspection()} disabled={graphHistoryLoading}>
-                <X size={14} /> Return to current
+              <Button className="graph-history-return" size="sm" variant="primary" onClick={() => void exitHistoricalInspection()} disabled={graphHistoryLoading} title="Return to current graph">
+                <X size={14} /> <span>Current</span>
               </Button>
             </div>
           </>
         ) : null}
       </div>
+
+      {captureStatus ? (
+        <div className={`graph-history-capture-status is-${captureStatus.tone}`} role="status">
+          {captureStatus.tone === "success" ? <CheckCircle2 size={15} /> : <X size={15} />}
+          <span>{captureStatus.message}</span>
+        </div>
+      ) : null}
 
       {graphHistoryOpen ? (
         <div className="graph-history-panel" role="dialog" aria-label="Graph history">

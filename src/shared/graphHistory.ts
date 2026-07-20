@@ -34,6 +34,13 @@ export type GraphHistoryPageOptions = {
 export type HistoricalGraphBundle = {
   entry: GraphHistoryEntry;
   bundle: ProjectBundle;
+  nodeChanges: HistoricalGraphNodeChange[];
+};
+
+export type HistoricalGraphNodeChange = {
+  flowId: string;
+  nodeId: string;
+  kind: "introduced" | "modified";
 };
 
 export type GitGraphIdentity = {

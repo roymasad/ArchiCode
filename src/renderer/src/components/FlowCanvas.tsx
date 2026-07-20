@@ -735,6 +735,11 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
   const lastCanvasPointerRef = useRef<{ x: number; y: number } | null>(null);
   const visibleNodes = useMemo(() => flow ? visibleNodesForFlow(flow, activeSubflowId, searchQuery) : [], [flow, activeSubflowId, searchQuery]);
   const visibleNodeIds = useMemo(() => new Set(visibleNodes.map((node) => node.id)), [visibleNodes]);
+  const historicalChangedNodeIds = useMemo(() => new Set(
+    historicalInspection?.nodeChanges
+      .filter((change) => change.flowId === flow?.id)
+      .map((change) => change.nodeId) ?? []
+  ), [flow?.id, historicalInspection]);
   const selectedNodeIdSet = useMemo(() => new Set(selectedNodeIds.length ? selectedNodeIds : selectedNodeId ? [selectedNodeId] : []), [selectedNodeId, selectedNodeIds]);
   const autoFocusSelectedNode = bundle?.project.settings.autoFocusSelectedNode ?? false;
   const canvasStyle = canvasBackgroundStyle(bundle?.project.settings.canvasBackground, theme);
@@ -867,6 +872,7 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
           selectedExternally: selectedNodeIdSet.has(node.id),
           overlapping: overlappingNodeIds.has(node.id),
           busyTests: busyTestNodeIds.includes(node.id),
+          historicalChange: historicalChangedNodeIds.has(node.id),
           onExplainPolicyViolations: () => startViolationExplanation(
             policyViolations.filter((violation) => {
               const target = violation.target;
@@ -879,7 +885,7 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
         }
       };
     });
-  }, [bundle, visibleNodes, selectedNodeIdSet, overlappingNodeIds, busyTestNodeIds, overviewLabelOffsets, flow?.id, policyViolations, startViolationExplanation]);
+  }, [bundle, visibleNodes, selectedNodeIdSet, overlappingNodeIds, busyTestNodeIds, historicalChangedNodeIds, overviewLabelOffsets, flow?.id, policyViolations, startViolationExplanation]);
   const [canvasNodes, setCanvasNodes] = useState<Node[]>(sourceNodes);
   const [minimapVisible, setMinimapVisible] = useState(getInitialMinimapVisible);
   const [minimapRenderVersion, setMinimapRenderVersion] = useState(0);

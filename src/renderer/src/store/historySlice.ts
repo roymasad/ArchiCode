@@ -245,7 +245,7 @@ export const createHistorySlice = (set: StoreSet, get: StoreGet): Pick<Archicode
       const sameCanvasScope = preferredFlowId === activeFlowId && preferredSubflowId === activeSubflowId;
       set({
         bundle: historical.bundle,
-        historicalInspection: { entry: historical.entry, currentBundle },
+        historicalInspection: { entry: historical.entry, currentBundle, nodeChanges: historical.nodeChanges },
         activeFlowId: preferredFlowId,
         activeSubflowId: preferredSubflowId,
         selectedNodeId: null,

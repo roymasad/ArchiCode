@@ -408,6 +408,11 @@ describe("renderer UI system", () => {
 
   it("represents an uncommitted graph version as a selectable current history row", () => {
     const history = readFileSync(resolve(repoRoot, "src/renderer/src/components/GraphHistoryBar.tsx"), "utf8");
+    const canvas = readFileSync(resolve(repoRoot, "src/renderer/src/components/FlowCanvas.tsx"), "utf8");
+    const nodeCard = readFileSync(resolve(repoRoot, "src/renderer/src/components/ArchicodeNodeCard.tsx"), "utf8");
+    const css = readFileSync(resolve(repoRoot, "src/renderer/src/styles/app.css"), "utf8");
+    const preload = readFileSync(resolve(repoRoot, "src/preload/index.ts"), "utf8");
+    const main = readFileSync(resolve(repoRoot, "src/main/index.ts"), "utf8");
 
     expect(history).toContain("hasCurrentUncommittedVersion");
     expect(history).toContain("Current uncommitted graph");
@@ -416,6 +421,18 @@ describe("renderer UI system", () => {
     expect(history).toContain("newestCommittedVersionNumber + 1");
     expect(history).toContain("loadMoreGraphHistory");
     expect(history).toContain("IntersectionObserver");
+    expect(history).toContain("graph-history-change-key");
+    expect(history).toContain("const selectHistoricalGraph = (commit: string)");
+    expect(history).toContain("if (graphHistoryOpen) toggleGraphHistory();");
+    expect(history).toContain("captureCanvasViewport");
+    expect(history).toContain("Capture visible canvas to Downloads");
+    expect(history).toContain("Saved to Downloads");
+    expect(preload).toContain('ipcRenderer.invoke("archicode:capture-canvas-viewport"');
+    expect(main).toContain('app.getPath("downloads")');
+    expect(main).toContain("event.sender.capturePage");
+    expect(canvas).toContain("historicalChangedNodeIds");
+    expect(nodeCard).toContain("is-historical-change");
+    expect(css).toContain(".flow-node.is-historical-change");
   });
 
   it("persists and restores canvas pan and zoom for existing projects", () => {

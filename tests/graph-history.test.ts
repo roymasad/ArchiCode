@@ -54,6 +54,16 @@ describe("Git-backed graph history", () => {
     expect(historical.bundle.flows).toHaveLength(initial.flows.length);
     expect(historical.bundle.flows[0]?.description).toBe(initial.flows[0]?.description);
     expect(historical.entry.graphVersion).toBe(history[1]?.graphVersion);
+    expect(historical.nodeChanges).toEqual(initial.flows.flatMap((flow) =>
+      flow.nodes.map((node) => ({ flowId: flow.id, nodeId: node.id, kind: "introduced" }))
+    ));
+
+    const evolved = await loadHistoricalGraphBundle(root, "HEAD");
+    expect(evolved.nodeChanges).toEqual([{
+      flowId: initial.flows[0]!.id,
+      nodeId: initial.flows[0]!.nodes[0]!.id,
+      kind: "modified"
+    }]);
 
     const historicalSource = await readHistoricalProjectFile(root, initialCommit, "src/example.ts");
     expect(historicalSource.content).toContain("version = 1");

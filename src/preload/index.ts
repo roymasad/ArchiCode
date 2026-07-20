@@ -296,6 +296,11 @@ const api = {
   },
   showSystemNotification: (input: { title: string; body?: string }): Promise<boolean> =>
     ipcRenderer.invoke("archicode:show-system-notification", input),
+  captureCanvasViewport: (
+    bounds: { x: number; y: number; width: number; height: number },
+    suggestedName: string
+  ): Promise<{ filePath: string; fileName: string }> =>
+    ipcRenderer.invoke("archicode:capture-canvas-viewport", bounds, suggestedName),
   pickImageFiles: (): Promise<string[]> => ipcRenderer.invoke("archicode:pick-image-files"),
   pickResearchAttachmentFiles: (includeImages = true): Promise<string[]> => ipcRenderer.invoke("archicode:pick-research-attachment-files", includeImages),
   pickReferenceFiles: (): Promise<string[]> => ipcRenderer.invoke("archicode:pick-reference-files"),

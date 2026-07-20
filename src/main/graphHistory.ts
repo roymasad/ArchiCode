@@ -1,6 +1,6 @@
 import type { ArchicodeNode, Flow, Note, Project, ProjectBundle } from "../shared/schema";
 import { flowSchema, noteSchema, projectBundleSchema, projectSchema } from "../shared/schema";
-import type { GraphHistoryEntry, GraphHistoryPage, GraphHistoryPageOptions, GraphHistoryVersion, GraphNodeHistory, GraphNodeHistoryChange, HistoricalGraphBundle } from "../shared/graphHistory";
+import type { GraphHistoryEntry, GraphHistoryPage, GraphHistoryPageOptions, GraphHistoryVersion, GraphNodeHistory, GraphNodeHistoryChange, HistoricalGraphBundle, HistoricalGraphNodeChange } from "../shared/graphHistory";
 import type { ProjectFileBrowserData, ProjectFileText, ProjectFileTreeNode } from "../shared/projectTools";
 import { flowFromDisk } from "./storage/persistence";
 import { canonicalSemanticNode, computeGraphVersion, semanticNodeChangedFields, semanticNodeValue } from "./storage/graphVersion";
@@ -93,6 +93,48 @@ async function readHistoricalProject(projectRoot: string, commit: string): Promi
   return { project: projectSchema.parse({ ...parsed.data, graphVersion }), flows };
 }
 
+async function precedingDistinctGraph(
+  projectRoot: string,
+  commit: string,
+  graphVersion: string
+): Promise<{ project: Project; flows: Flow[] } | null> {
+  const log = await runGit(projectRoot, [
+    "log",
+    "--first-parent",
+    "--format=%H",
+    `${commit}^`,
+    "--",
+    ".archicode/project.json",
+    ".archicode/flows"
+  ]);
+  if (!log.ok) return null;
+  for (const candidate of log.stdout.split(/\r?\n/).map((item) => item.trim()).filter(Boolean)) {
+    const historical = await readHistoricalProject(projectRoot, candidate);
+    if (historical?.project.graphVersion !== graphVersion) return historical;
+  }
+  return null;
+}
+
+function changedNodesSince(
+  currentFlows: Flow[],
+  previousFlows: Flow[] | null
+): HistoricalGraphNodeChange[] {
+  const previousNodes = new Map(previousFlows?.flatMap((flow) =>
+    flow.nodes.map((node) => [`${flow.id}\u0000${node.id}`, node] as const)
+  ) ?? []);
+  const changes: HistoricalGraphNodeChange[] = [];
+  for (const flow of currentFlows) {
+    for (const node of flow.nodes) {
+      const previous = previousNodes.get(`${flow.id}\u0000${node.id}`);
+      if (!previous) changes.push({ flowId: flow.id, nodeId: node.id, kind: "introduced" });
+      else if (canonicalSemanticNode(previous) !== canonicalSemanticNode(node)) {
+        changes.push({ flowId: flow.id, nodeId: node.id, kind: "modified" });
+      }
+    }
+  }
+  return changes;
+}
+
 export async function loadHistoricalGraphBundle(projectRoot: string, revision: string): Promise<HistoricalGraphBundle> {
   const commit = await requireCommit(projectRoot, revision);
   const historical = await readHistoricalProject(projectRoot, commit);
@@ -107,6 +149,7 @@ export async function loadHistoricalGraphBundle(projectRoot: string, revision: s
     edgeCount: historical.flows.reduce((sum, flow) => sum + flow.edges.length, 0)
   };
   const notes = readHistoricalNotes(await showFile(projectRoot, commit, ".archicode/notes.jsonl"));
+  const previous = await precedingDistinctGraph(projectRoot, commit, graphVersion);
   const bundle: ProjectBundle = projectBundleSchema.parse({
     rootPath: projectRoot,
     project: historical.project,
@@ -120,7 +163,7 @@ export async function loadHistoricalGraphBundle(projectRoot: string, revision: s
     policyEvaluation: null,
     validationErrors: []
   });
-  return { entry, bundle };
+  return { entry, bundle, nodeChanges: changedNodesSince(historical.flows, previous?.flows ?? null) };
 }
 
 async function countStoredGraphVersions(projectRoot: string): Promise<number | null> {

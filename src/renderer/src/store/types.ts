@@ -35,7 +35,7 @@ import type {
   ProjectFileDiff,
   ProjectFileText
 } from "@shared/projectTools";
-import type { GraphHistoryEntry, GraphHistoryVersion } from "@shared/graphHistory";
+import type { GraphHistoryEntry, GraphHistoryVersion, HistoricalGraphNodeChange } from "@shared/graphHistory";
 import type { CodebaseMappingSummary } from "../../../preload";
 import type {
   CreateProjectSkillInput,
@@ -355,7 +355,7 @@ export type ArchicodeState = {
   presentationUndoStack: PresentationHistoryEntry[];
   presentationRedoStack: PresentationHistoryEntry[];
   presentationHistoryBusy: boolean;
-  historicalInspection: { entry: GraphHistoryEntry; currentBundle: ProjectBundle } | null;
+  historicalInspection: { entry: GraphHistoryEntry; currentBundle: ProjectBundle; nodeChanges: HistoricalGraphNodeChange[] } | null;
   fileBrowser: ProjectFileBrowserData | null;
   selectedFilePath: string | null;
   filePreviewRequest: FilePreviewRequest | null;

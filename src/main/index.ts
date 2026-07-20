@@ -2116,6 +2116,27 @@ function registerIpc(): void {
   ipcMain.handle("archicode:show-system-notification", async (_event, input: { title: string; body?: string }) => {
     return showSystemNotification(input, "renderer request");
   });
+  ipcMain.handle("archicode:capture-canvas-viewport", async (
+    event,
+    bounds: { x: number; y: number; width: number; height: number },
+    suggestedName: string
+  ): Promise<{ filePath: string; fileName: string }> => {
+    const x = Math.max(0, Math.round(bounds.x));
+    const y = Math.max(0, Math.round(bounds.y));
+    const width = Math.min(16_384, Math.round(bounds.width));
+    const height = Math.min(16_384, Math.round(bounds.height));
+    if (width < 1 || height < 1) throw new Error("The canvas viewport is not visible enough to capture.");
+    const safeStem = path.basename(suggestedName, path.extname(suggestedName))
+      .replace(/[^a-z0-9._-]+/gi, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 140) || "archicode-graph-proof";
+    const fileName = `${safeStem}.png`;
+    const filePath = path.join(app.getPath("downloads"), fileName);
+    const image = await event.sender.capturePage({ x, y, width, height });
+    if (image.isEmpty()) throw new Error("ArchiCode could not capture the visible canvas.");
+    await writeFile(filePath, image.toPNG());
+    return { filePath, fileName };
+  });
   ipcMain.handle("archicode:pick-image-files", async () => {
     const win = BrowserWindow.getFocusedWindow();
     const options: OpenDialogOptions = {
