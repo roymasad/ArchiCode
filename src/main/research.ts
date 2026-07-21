@@ -191,6 +191,7 @@ import {
   checkpointResearchGoal,
   reviewResearchChangeSetTodo,
   startResearchGoal,
+  supersedePriorUnreviewedChangeSets,
   trackResearchChangeSetTodo
 } from "./research/memoryFold";
 import { fetchResearchWebPages } from "./research/webFetch";
@@ -341,6 +342,10 @@ class ResearchMcpApprovalRequired extends Error {
 // Persisted provider state can be large; above this it is dropped so the turn
 // replays (cheaply, thanks to prompt caching) instead of bloating the store.
 const MAX_PROVIDER_CONTINUATION_CHARS = 200_000;
+// Hard backstop on Picasso graph-design passes within a single research turn. One pass
+// normally suffices; a second covers a legitimate retry after a failed pass. Beyond that
+// the model is looping, so refuse further spawns and force it to finalize.
+const MAX_PICASSO_PASSES_PER_TURN = 2;
 
 function extractProviderContinuation(error: ResearchMcpApprovalRequired): ResearchProviderContinuation | undefined {
   const continuation = (error as { providerContinuation?: ResearchProviderContinuation }).providerContinuation;
@@ -1075,8 +1080,13 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
   };
   // Structured output captured from the native sink-tool calls (API providers).
   let capturedChangeSet: unknown;
+  // Picasso passes already started this turn. Weak models otherwise re-spawn the graph
+  // architect over and over after it has already produced a valid card; this bounds it.
+  let picassoPassCount = 0;
   let capturedCanvasAction: ResearchCanvasAction | undefined;
   let capturedMemoryDelta: unknown;
+  // Host-counted work tally for this turn (see turnDiagnostics on the message schema).
+  let capturedTurnDiagnostics: { rounds: number; rerolls: number; transientRetries: number } | undefined;
   let capturedOrchestration = nextSession.orchestration;
   let hostGoalCheckpointed = false;
   let approvedRuleMutationConsumed = false;
@@ -1096,6 +1106,21 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
     if (!graphReconciliationToolEnabled) {
       return "Picasso is disabled by project settings.";
     }
+    // Once a Picasso pass has produced a valid change set, or after the per-turn cap,
+    // stop re-spawning: the review card is already prepared and further passes only
+    // waste provider calls and confuse the trajectory. Tell the model to finalize.
+    const alreadyHaveCard = Boolean(
+      capturedChangeSet &&
+      typeof capturedChangeSet === "object" &&
+      Array.isArray((capturedChangeSet as { operations?: unknown }).operations) &&
+      (capturedChangeSet as { operations: unknown[] }).operations.length > 0
+    );
+    if (alreadyHaveCard || picassoPassCount >= MAX_PICASSO_PASSES_PER_TURN) {
+      return alreadyHaveCard
+        ? "A graph review card is already prepared from the earlier Picasso pass this turn. Do not spawn Picasso again — finalize your answer to the user now."
+        : "Picasso has already run the maximum passes for this turn. Do not spawn it again — finalize your answer, or report honestly if no valid card was produced.";
+    }
+    picassoPassCount += 1;
     const runId = id("subagent-run");
     const runCreatedAt = iso();
     try {
@@ -1334,6 +1359,30 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
     budgetNotes: budgetedPrompt.budgetNotes
   });
   const graphLockRunsAtTurnStart = activeResearchGraphLockRuns(bundle);
+  // Surface the newest still-unreviewed proposal so the model can tell a proposed-but-
+  // unapplied node/edge apart from live graph truth. Without this, asking to "move the
+  // contact page node" (a pending node the graph-read tools can't see) makes weak models
+  // thrash — re-reading the empty live graph and re-spawning Picasso in a loop.
+  const pendingProposedChangeSet = [...nextSession.messages].reverse()
+    .find((message) => message.changeSet && !message.changeSet.reviewedAt)?.changeSet;
+  const pendingProposedGraphDirective = pendingProposedChangeSet ? [
+    "PENDING PROPOSED GRAPH (not yet applied):",
+    JSON.stringify({
+      summary: pendingProposedChangeSet.summary,
+      proposedNodes: pendingProposedChangeSet.operations.flatMap((operation) =>
+        operation.kind === "create-node"
+          ? [{ id: operation.node.id, title: operation.node.title, flowId: operation.flowId, position: operation.node.position }]
+          : []),
+      proposedEdges: pendingProposedChangeSet.operations.flatMap((operation) =>
+        operation.kind === "create-edge"
+          ? [{ id: operation.edge.id, source: operation.edge.source, target: operation.edge.target, label: operation.edge.label }]
+          : []),
+      otherOperations: pendingProposedChangeSet.operations
+        .filter((operation) => operation.kind !== "create-node" && operation.kind !== "create-edge")
+        .map((operation) => operation.kind)
+    }),
+    "These nodes and edges are PROPOSED but NOT in the live graph — they exist only in the pending review card. archicode_read_graph_layout and picasso_read_graph return APPLIED graph state only and will NOT show them; their absence is expected, not a conflict or a missing node to recreate. If the user asks to adjust a pending proposed item (move it, rename it, re-route an edge), edit THIS proposal directly with archicode_propose_graph_change_set: re-declare the affected create-node/create-edge reusing the same ids with the change applied. Do NOT spawn Picasso to reconcile the live graph for this. Your new card automatically supersedes the pending one."
+  ].join("\n") : "";
   const currentTurnDirective = turnKind === "outcome-finalization" ? [
     "SUBAGENT OUTCOME:",
     "The host message contains the persisted result of the delegated work. Treat it as authoritative evidence for what ran and what did not.",
@@ -1348,6 +1397,7 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
     }),
     "This is transient UI state, not graph scope or permission. If and only if the user explicitly asks to select/focus graph items, switch the visible flow/detail flow, pan, center, or zoom, you must use archicode_control_canvas (or canvasAction on the local JSON path) in this turn. Prose cannot move the canvas, so never say the action is happening or will happen unless the same response contains the action. Canvas actions are reversible UI-only actions and do not need a graph review card.",
     "Own the investigation and tool trajectory for this user request. Continue while useful work is available; finish only with a supported answer, a visible approval pause, or a concrete blocker.",
+    "QUIET, EFFICIENT TOOL USE: Gather the context you need in as few steps as possible — request everything you need together rather than one item per turn. While calling tools, produce NO user-facing prose: do not greet, re-introduce yourself, describe what you are about to inspect, or comment between tool calls. The user watches these intermediate steps stream live, so any narration you write mid-investigation flashes on screen and then gets discarded. Write exactly one visible response — your real answer — after the tools are done.",
     delphiTestingToolEnabled
       ? `DELPHI MODEL PREFLIGHT: ${delphiVisionPreflightText(delphiModelPreflight)} When the user names a specific page, route, screen, or flow, preserve that exact target in spawn_delphi's objective and acceptance criteria instead of broadening it to a generic project audit.`
       : "",
@@ -1361,10 +1411,11 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
     graphLockRunsAtTurnStart.length
       ? `2. GRAPH PERSISTENCE LOCK: Active run${graphLockRunsAtTurnStart.length === 1 ? "" : "s"} ${graphLockRunsAtTurnStart.map((run) => `${run.id} (${run.status})`).join(", ")} currently own project graph truth. You may discuss, clarify, design, call Picasso, and prepare a pending review card normally, but the card cannot be auto-approved or applied until the lock clears. Never claim a graph edit was persisted during this run.`
       : graphReconciliationToolEnabled
-        ? "2. GRAPH: Decide semantic complexity from the complete request and history. Direct graph operations are allowed only for a simple quick bounded edit with obvious operations and no design synthesis. Any substantial task—especially specification/attachment decomposition, several nodes or flows, populated subflows, coordinated relationships or acceptance criteria, broad refinement, architecture, or reconciliation—requires Picasso. If the preceding conversation proposed such a scope and you understand the current reply as confirmation, call archicode_spawn_picasso now with that exact scope. Do not submit the complex change set directly and do not merely say it is queued. Graph edges cannot cross top-level flows: never instruct Picasso to create or prefer cross-flow edges. Preserve those dependencies as descriptions, acceptance criteria, or node-scoped notes, while allowing Picasso to connect every generated node with meaningful intra-flow topology."
-        : "2. GRAPH: Picasso is unavailable. Direct graph operations remain limited to simple quick bounded edits; do not bypass the missing graph architect for substantial work.",
+        ? "2. GRAPH: Judge the work and match the tool to it. For simple, well-understood graph changes you are confident you can do correctly and quickly, do them yourself: call archicode_propose_graph_change_set directly and do NOT spawn Picasso. For complex, deep, or delicate graph work that benefits from careful design, delegate to Picasso, the graph specialist: call archicode_spawn_picasso once with the exact scope. Picasso exists for genuinely substantial design — decomposing a specification or attachment, laying out many interrelated nodes/flows/subflows, populated subflows, broad refinement, architecture, or reconciliation — not for edits you already understand. When unsure, prefer doing the simple work yourself. Never call archicode_spawn_picasso more than once per turn: after Picasso returns a change set the review card is already prepared, so finalize your answer instead of spawning it again. Graph edges cannot cross top-level flows: never create or instruct Picasso to prefer cross-flow edges. Preserve those dependencies as descriptions, acceptance criteria, or node-scoped notes, while connecting every node with meaningful intra-flow topology."
+        : "2. GRAPH: Picasso is unavailable. Propose bounded edits directly with archicode_propose_graph_change_set; do not attempt substantial design synthesis without the missing graph architect.",
+    pendingProposedGraphDirective,
     "TRUTHFUL COMPLETION: Never promise a future tool action. Statements that work is queued, being prepared, or ready require the corresponding successful tool call in this same turn."
-  ].join("\n");
+  ].filter(Boolean).join("\n");
   try {
     let output = await callResearchProvider(await hydrateProviderForUse(provider), content, {
       projectRoot: input.projectRoot,
@@ -1389,6 +1440,9 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
       delphiTestingSubagentEnabled: budgetedPrompt.tools.some((tool) => isResearchSpawnDelphiTool(tool.providerToolName)),
       onUsage: (usage) => {
         capturedUsage = attachResearchContextLedger(usage, contextLedger);
+      },
+      onTurnDiagnostics: (diagnostics) => {
+        capturedTurnDiagnostics = diagnostics;
       },
       onToken: (text, kind) => {
         if (kind !== "thinking") streamedAnswerSoFar += text;
@@ -1964,6 +2018,7 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
       mcpToolCalls,
       subagentRuns,
       usage: capturedUsage,
+      turnDiagnostics: capturedTurnDiagnostics,
       canvasAction,
       changeSet
     };
@@ -1973,14 +2028,40 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
       : approvalSubagent
         ? researchGoalAwaitingApproval(capturedOrchestration, { id: approvalSubagent.id, label: approvalSubagent.title }, assistantCreatedAt)
         : capturedOrchestration;
+    // A new proposal retires any earlier still-unreviewed cards in this session so two
+    // competing "Apply" buttons (often re-creating the same node IDs) can't both fire.
+    let priorMessages = nextSession.messages;
+    let orchestrationForSession = turnOrchestration;
+    const supersedeMessages: ResearchChatMessage[] = [];
+    if (changeSet) {
+      const superseded = supersedePriorUnreviewedChangeSets(
+        { ...nextSession, orchestration: turnOrchestration },
+        changeSet.id,
+        assistantCreatedAt
+      );
+      priorMessages = superseded.messages;
+      orchestrationForSession = superseded.orchestration;
+      if (superseded.supersededCount) {
+        supersedeMessages.push({
+          id: id("msg"),
+          role: "system",
+          content: `Superseded ${superseded.supersededCount} earlier graph proposal${superseded.supersededCount === 1 ? "" : "s"} in this chat. Only the latest review card can be applied.`,
+          createdAt: assistantCreatedAt,
+          attachmentIds: [],
+          webUsed: false,
+          mcpToolCalls: [],
+          subagentRuns: []
+        });
+      }
+    }
     nextSession = researchChatSessionSchema.parse({
       ...nextSession,
       summary: compactSummary(nextSession.summary, failedPicasso && !changeSet ? undefined : parsed?.summary, assistantMessage.content),
       memory: nextSession.memory,
       orchestration: changeSet
-        ? trackResearchChangeSetTodo(turnOrchestration, changeSet, assistantMessage.id, assistantCreatedAt)
-        : turnOrchestration,
-      messages: [...nextSession.messages, assistantMessage],
+        ? trackResearchChangeSetTodo(orchestrationForSession, changeSet, assistantMessage.id, assistantCreatedAt)
+        : orchestrationForSession,
+      messages: [...priorMessages, ...supersedeMessages, assistantMessage],
       updatedAt: iso()
     });
     nextSession = applyResearchTurnMemory(nextSession, capturedMemoryDelta, {

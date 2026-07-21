@@ -20,6 +20,7 @@ import type {
   ResearchCanvasViewportAction,
   ResearchGraphChangeDecision,
   ResearchGraphChangeResult,
+  ResearchGraphOperation,
   RunGuidance,
   RunEffort,
   RunScope,
@@ -258,6 +259,10 @@ export type PresentationHistoryEntry = {
 
 export type ResearchStreamState = {
   kind: "answer" | "thinking";
+  // True in the gap between a tool-round finishing and the next round streaming, so
+  // the UI can show a "used a tool, continuing…" hint instead of the preview appearing
+  // to reset. The last round's text stays frozen on screen while this is set.
+  usedTool?: boolean;
 };
 
 // Ephemeral, in-flight view of a subagent run while respondToSubagentRun is
@@ -356,6 +361,10 @@ export type ArchicodeState = {
   presentationRedoStack: PresentationHistoryEntry[];
   presentationHistoryBusy: boolean;
   historicalInspection: { entry: GraphHistoryEntry; currentBundle: ProjectBundle; nodeChanges: HistoricalGraphNodeChange[] } | null;
+  // Ghost/highlight overlay on the canvas for a pending changeSet card the user has
+  // toggled "Preview" on. Global (not per-flow) so it follows the user across flow tabs;
+  // exclusive (one active at a time) and cleared on Apply/Reject or chat session switch.
+  graphPreview: { sessionId: string; messageId: string; changeSetId: string; operations: ResearchGraphOperation[] } | null;
   fileBrowser: ProjectFileBrowserData | null;
   selectedFilePath: string | null;
   filePreviewRequest: FilePreviewRequest | null;
@@ -399,6 +408,8 @@ export type ArchicodeState = {
   setCanvasViewportCenter: (position: { x: number; y: number } | null) => void;
   navigateToGraphTarget: (target: GraphNavigationTarget) => void;
   applyResearchCanvasAction: (action: ResearchCanvasAction) => void;
+  showGraphChangeSetPreview: (sessionId: string, messageId: string, changeSetId: string, operations: ResearchGraphOperation[]) => void;
+  hideGraphChangeSetPreview: () => void;
   clearGraphNavigationRequest: (requestId: number) => void;
   setWorkbenchView: (view: WorkbenchView) => void;
   refreshGitStatus: () => Promise<void>;
@@ -476,6 +487,7 @@ export type ArchicodeState = {
   startScopedResearchChat: (scope: ResearchChatScope, message: string) => Promise<void>;
   selectResearchChat: (sessionId: string | null) => void;
   archiveResearchChat: (sessionId: string) => Promise<void>;
+  renameResearchChat: (sessionId: string, title: string) => Promise<void>;
   updateResearchChatAutoApproval: (autoApproveGraphChanges: ResearchChatSession["autoApproveGraphChanges"]) => Promise<void>;
   sendResearchMessage: (
     content: string,

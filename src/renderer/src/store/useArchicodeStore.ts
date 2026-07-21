@@ -148,6 +148,7 @@ export const useArchicodeStore = create<ArchicodeState>((set, get) => {
   presentationRedoStack: [],
   presentationHistoryBusy: false,
   historicalInspection: null,
+  graphPreview: null,
   fileBrowser: null,
   selectedFilePath: null,
   filePreviewRequest: null,

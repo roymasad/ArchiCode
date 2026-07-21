@@ -2117,7 +2117,11 @@ export const researchGraphChangeSetSchema = z.object({
   summary: z.string(),
   operations: z.array(researchGraphOperationSchema).default([]),
   createdAt: z.string(),
-  reviewedAt: z.string().optional()
+  reviewedAt: z.string().optional(),
+  // Set when a newer proposal in the same session replaced this still-unreviewed
+  // card. Implies reviewedAt (the card is no longer actionable) but distinguishes
+  // "auto-retired because superseded" from an explicit Apply/Reject.
+  supersededAt: z.string().optional()
 });
 
 const researchMemoryTextRecordSchema = z.object({
@@ -2477,6 +2481,14 @@ export const researchChatMessageSchema = z.object({
   // Aggregated LLM cost/usage for this assistant turn, including its inner tool
   // loop. Subagent costs are carried on each subagentRun.usage, not here.
   usage: llmUsageSchema.optional(),
+  // Host-counted work tally for this turn (model generations, host-forced answer
+  // re-rolls, transport retries). Diagnostics only: persisted for chat exports and
+  // debugging, never rendered in the chat UI. Independent of provider token usage.
+  turnDiagnostics: z.object({
+    rounds: z.number().int().nonnegative(),
+    rerolls: z.number().int().nonnegative(),
+    transientRetries: z.number().int().nonnegative()
+  }).optional(),
   error: z.string().optional()
 });
 

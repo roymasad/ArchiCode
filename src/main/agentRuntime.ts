@@ -41,6 +41,19 @@ export type AgentLoopCompletion = {
   requireVisibleAnswer?: boolean;
 };
 
+/**
+ * Host-counted, provider-agnostic tally of the work one agent turn actually cost.
+ * `rounds` is the number of model generations (a turn with N tool rounds generates
+ * N+1 times); `rerolls` counts final answers the host rejected and forced regenerated;
+ * `transientRetries` counts transport-only retries. These are for diagnostics/exports,
+ * not billing — they do not depend on provider-reported token usage.
+ */
+export type AgentTurnDiagnostics = {
+  rounds: number;
+  rerolls: number;
+  transientRetries: number;
+};
+
 export type AgentLoopOptions<RawTurn = unknown> = {
   adapter: AgentLoopAdapter<RawTurn>;
   executeTool?: (toolCall: AgentToolCall) => Promise<string>;
@@ -61,6 +74,8 @@ export type AgentLoopOptions<RawTurn = unknown> = {
   maxTransientRetries?: number;
   isTransientError?: (error: unknown) => boolean;
   onTransientRetry?: (error: unknown) => void;
+  /** Reports the final work tally once, when the loop exits (via return or throw). */
+  onTurnDiagnostics?: (diagnostics: AgentTurnDiagnostics) => void;
 };
 
 const TRANSIENT_AGENT_ERROR_PATTERNS = [
@@ -148,8 +163,13 @@ export async function runAgentLoop<RawTurn = unknown>(options: AgentLoopOptions<
   let previousValidationFingerprint: string | undefined;
   let consecutiveValidationFailureCount = 0;
   let round = 0;
+  // Diagnostics tallies (see AgentTurnDiagnostics). Reported once in the finally below.
+  let generationCount = 0;
+  let rerollCount = 0;
+  let transientRetryCount = 0;
 
   const rejectFinalAnswer = async (turn: AgentProviderTurn<RawTurn>, answer: string, feedback: string): Promise<void> => {
+    rerollCount += 1;
     const normalizedAnswer = answer.trim();
     if (normalizedAnswer === previousRejectedAnswer) consecutiveRejectedAnswerCount += 1;
     else {
@@ -178,6 +198,7 @@ export async function runAgentLoop<RawTurn = unknown>(options: AgentLoopOptions<
     await options.adapter.commitInvalidAnswer(turn, visibleFeedback);
   };
 
+  try {
   while (true) {
     if (options.signal?.aborted) throw new Error("Provider call was cancelled.");
     if (round > 0) options.adapter.onLaterRound?.();
@@ -186,12 +207,14 @@ export async function runAgentLoop<RawTurn = unknown>(options: AgentLoopOptions<
     while (true) {
       try {
         turn = await options.adapter.nextTurn();
+        generationCount += 1;
         break;
       } catch (error) {
         const retryLimit = options.maxTransientRetries ?? 1;
         const transient = (options.isTransientError ?? isTransientAgentTransportError)(error);
         if (options.signal?.aborted || !transient || transientAttempt >= retryLimit) throw error;
         transientAttempt += 1;
+        transientRetryCount += 1;
         options.onTransientRetry?.(error);
       }
     }
@@ -252,6 +275,7 @@ export async function runAgentLoop<RawTurn = unknown>(options: AgentLoopOptions<
       if (!completion.requireVisibleAnswer) {
         const feedback = await options.validateFinalAnswer?.(terminalAnswer);
         if (!feedback) return terminalAnswer;
+        rerollCount += 1;
         await options.adapter.commitToolResults(turn, completedResults);
         if (!options.adapter.commitFeedback) throw new Error(`Agent final answer failed validation: ${feedback}`);
         await options.adapter.commitFeedback(feedback);
@@ -261,6 +285,7 @@ export async function runAgentLoop<RawTurn = unknown>(options: AgentLoopOptions<
       if (turn.text.trim()) {
         const feedback = await options.validateFinalAnswer?.(turn.text.trim());
         if (!feedback) return turn.text.trim();
+        rerollCount += 1;
         await options.adapter.commitToolResults(turn, completedResults);
         if (!options.adapter.commitFeedback) throw new Error(`Agent final answer failed validation: ${feedback}`);
         await options.adapter.commitFeedback(feedback);
@@ -276,5 +301,8 @@ export async function runAgentLoop<RawTurn = unknown>(options: AgentLoopOptions<
 
     await options.adapter.commitToolResults(turn, completedResults);
     round += 1;
+  }
+  } finally {
+    options.onTurnDiagnostics?.({ rounds: generationCount, rerolls: rerollCount, transientRetries: transientRetryCount });
   }
 }

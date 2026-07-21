@@ -1,4 +1,4 @@
-import { AlertCircle, AlertTriangle, Archive, Box, Brain, Check, CheckCircle2, ChevronDown, ChevronUp, Circle, Clock3, Copy, Download, ExternalLink, Eye, FileJson, FileText, FolderKanban, History, Layers3, ListTodo, Loader2, Maximize2, MessageSquare, Mic, Minimize2, PanelLeftClose, PanelLeftOpen, Paperclip, Play, Plus, RefreshCw, Send, ShieldCheck, Sparkles, Split, Square, Volume2, Workflow, X } from "lucide-react";
+import { AlertCircle, AlertTriangle, Archive, Box, Brain, Check, CheckCircle2, ChevronDown, ChevronUp, Circle, Clock3, Copy, Download, ExternalLink, Eye, EyeOff, FileJson, FileText, FolderKanban, History, Layers3, ListTodo, Loader2, Maximize2, MessageSquare, Mic, Minimize2, PanelLeftClose, PanelLeftOpen, Paperclip, Play, Plus, RefreshCw, Send, ShieldCheck, Sparkles, Split, Square, Volume2, Workflow, X } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps, ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -16,7 +16,7 @@ import { composerDraftText, serializeComposerDraft, composerHasContent } from ".
 import { canRetryResearchMessage } from "../utils/researchRetry";
 import { localProviderUsageUnavailableDetail } from "../utils/providerProfiles";
 import { ContextSizeIndicator } from "./ContextSizeIndicator";
-import { Badge, Button, DialogContent, DialogRoot, EmptyState, IconButton, MenuContent, MenuItem, MenuLabel, MenuRoot, MenuSeparator, MenuTrigger, PopoverContent, PopoverRoot, PopoverTrigger, ScrollArea, Select, Switch, TextArea, Tooltip } from "./ui";
+import { Badge, Button, DialogContent, DialogRoot, EmptyState, IconButton, MenuContent, MenuItem, MenuLabel, MenuRoot, MenuSeparator, MenuTrigger, PopoverContent, PopoverRoot, PopoverTrigger, ScrollArea, Select, Switch, TextArea, TextInput, Tooltip } from "./ui";
 import {
   attachmentFileName,
   displayResearchContent,
@@ -711,34 +711,6 @@ function operationFields(operation: ResearchOperationView): string {
   return "";
 }
 
-function operationFlowId(operation: ResearchOperationView): string | null {
-  if (operation.kind === "create-flow") return operation.flow.id;
-  if (
-    operation.kind === "update-flow" ||
-    operation.kind === "update-node" ||
-    operation.kind === "update-edge" ||
-    operation.kind === "create-node" ||
-    operation.kind === "create-edge" ||
-    operation.kind === "create-subflow" ||
-    operation.kind === "create-group" ||
-    operation.kind === "update-group" ||
-    operation.kind === "update-subflow" ||
-    operation.kind === "link-node-subflow" ||
-    operation.kind === "start-agent-run" ||
-    operation.kind === "start-run-profile" ||
-    operation.kind === "start-runtime-debug-run" ||
-    operation.kind === "delete-node" ||
-    operation.kind === "delete-edge" ||
-    operation.kind === "delete-subflow" ||
-    operation.kind === "delete-group" ||
-    operation.kind === "author-acceptance-tests" ||
-    operation.kind === "run-acceptance-checks"
-  ) return operation.flowId;
-  if (operation.kind === "start-incident-debug-run") return operation.flowId ?? null;
-  if (operation.kind === "add-note") return operation.note.flowId;
-  return null;
-}
-
 function isDestructiveOperation(operation: ResearchOperationView): boolean {
   return operation.kind === "delete-note" || operation.kind === "delete-node" || operation.kind === "delete-edge" || operation.kind === "delete-subflow" || operation.kind === "delete-group" || operation.kind === "stop-runtime-service";
 }
@@ -835,6 +807,7 @@ export const ResearchPanel = memo(function ResearchPanel({
     refreshResearchChats,
     selectResearchChat,
     archiveResearchChat,
+    renameResearchChat,
     updateResearchChatAutoApproval,
     sendResearchMessage,
     retryResearchMessage,
@@ -848,7 +821,10 @@ export const ResearchPanel = memo(function ResearchPanel({
     globalSpeechSettings,
     globalTtsSettings,
     clearResearchDraft,
-    appendResearchDraftText
+    appendResearchDraftText,
+    graphPreview,
+    showGraphChangeSetPreview,
+    hideGraphChangeSetPreview
   } = useArchicodeStore(useShallow((state) => ({
     bundle: state.bundle,
     rootPath: state.rootPath,
@@ -870,6 +846,7 @@ export const ResearchPanel = memo(function ResearchPanel({
     refreshResearchChats: state.refreshResearchChats,
     selectResearchChat: state.selectResearchChat,
     archiveResearchChat: state.archiveResearchChat,
+    renameResearchChat: state.renameResearchChat,
     updateResearchChatAutoApproval: state.updateResearchChatAutoApproval,
     sendResearchMessage: state.sendResearchMessage,
     retryResearchMessage: state.retryResearchMessage,
@@ -883,8 +860,21 @@ export const ResearchPanel = memo(function ResearchPanel({
     globalSpeechSettings: state.globalSpeechSettings,
     globalTtsSettings: state.globalTtsSettings,
     clearResearchDraft: state.clearResearchDraft,
-    appendResearchDraftText: state.appendResearchDraftText
+    appendResearchDraftText: state.appendResearchDraftText,
+    graphPreview: state.graphPreview,
+    showGraphChangeSetPreview: state.showGraphChangeSetPreview,
+    hideGraphChangeSetPreview: state.hideGraphChangeSetPreview
   })));
+  // Only one chat session's changeSet can preview on the canvas at a time — switching
+  // sessions (click, fork, auto-fallback after archiving, etc.) turns it off so a stale
+  // preview from a different session's card never clashes with the next one.
+  const previousResearchSessionIdRef = useRef(selectedResearchSessionId);
+  useEffect(() => {
+    if (previousResearchSessionIdRef.current !== selectedResearchSessionId) {
+      previousResearchSessionIdRef.current = selectedResearchSessionId;
+      hideGraphChangeSetPreview();
+    }
+  }, [selectedResearchSessionId, hideGraphChangeSetPreview]);
   const [attachmentPaths, setAttachmentPaths] = useState<string[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [focusHistoryOpen, setFocusHistoryOpen] = useState(() => window.innerWidth > 900);
@@ -898,6 +888,9 @@ export const ResearchPanel = memo(function ResearchPanel({
   const [historyFilter, setHistoryFilter] = useState<"all" | "scope">("all");
   const [archiveConfirmationSessionId, setArchiveConfirmationSessionId] = useState<string | null>(null);
   const [archiveBusy, setArchiveBusy] = useState(false);
+  const [renameSessionId, setRenameSessionId] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState("");
+  const [renameBusy, setRenameBusy] = useState(false);
   const [rememberMcpByMessage, setRememberMcpByMessage] = useState<Record<string, boolean>>({});
   const [subagentStrategyDrafts, setSubagentStrategyDrafts] = useState<Record<string, string>>({});
   const [delphiRuntimeTargetSelections, setDelphiRuntimeTargetSelections] = useState<Record<string, Set<string>>>({});
@@ -968,6 +961,38 @@ export const ResearchPanel = memo(function ResearchPanel({
       : { lastVisibleMessageIndex: -1, reviewSummaryByChangeSetIndex: new Map<number, ResearchChangeSetReviewSummary>() },
     [selected]
   );
+  // Defaults the newest unreviewed changeSet card into "previewing" so the ghost
+  // overlay shows up without the user having to click the toggle. Tracked in a ref
+  // (not state) so a manual toggle-off isn't immediately re-forced back on by this
+  // same effect re-running on the next render.
+  const autoPreviewedChangeSetIdsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!selected) return;
+    let lastChangeSetIndex = -1;
+    for (let index = selected.messages.length - 1; index >= 0; index -= 1) {
+      if (selected.messages[index]!.changeSet) {
+        lastChangeSetIndex = index;
+        break;
+      }
+    }
+    if (lastChangeSetIndex < 0) return;
+    const lastChangeSetMessage = selected.messages[lastChangeSetIndex]!;
+    const changeSet = lastChangeSetMessage.changeSet!;
+    const reviewSummary = transcriptAnalysis.reviewSummaryByChangeSetIndex.get(lastChangeSetIndex) ?? null;
+    const reviewed = Boolean(changeSet.reviewedAt) || Boolean(reviewSummary);
+    if (reviewed || autoPreviewedChangeSetIdsRef.current.has(changeSet.id)) return;
+    autoPreviewedChangeSetIdsRef.current.add(changeSet.id);
+    showGraphChangeSetPreview(selected.id, lastChangeSetMessage.id, changeSet.id, changeSet.operations);
+  }, [selected, transcriptAnalysis, showGraphChangeSetPreview]);
+  // Drop a lingering preview whose card was retired (applied, rejected, or superseded
+  // by a newer proposal) so the canvas never ghosts a change the user can no longer act on.
+  useEffect(() => {
+    if (!graphPreview) return;
+    const previewedChangeSet = selected?.messages.find((message) => message.changeSet?.id === graphPreview.changeSetId)?.changeSet;
+    if (previewedChangeSet && (previewedChangeSet.reviewedAt || previewedChangeSet.supersededAt)) {
+      hideGraphChangeSetPreview();
+    }
+  }, [graphPreview, selected, hideGraphChangeSetPreview]);
   const activeGraphLockRun = bundle?.runs.find(isRunBlockingNewChange) ?? null;
   const researchBusy = selected ? researchBusySessionIds.includes(selected.id) : false;
   const latestTaskUserMessage = [...(selected?.messages ?? [])].reverse().find((message) => message.role === "user");
@@ -2246,6 +2271,9 @@ export const ResearchPanel = memo(function ResearchPanel({
   const archiveConfirmationSession = archiveConfirmationSessionId
     ? researchSessions.find((session) => session.id === archiveConfirmationSessionId) ?? null
     : null;
+  const renameSession = renameSessionId
+    ? researchSessions.find((session) => session.id === renameSessionId) ?? null
+    : null;
   const lastResearchMessage = selected?.messages[selected.messages.length - 1];
   // Only real transcript growth should advertise "New activity". Subagent
   // status, spinner, progress-line, and evidence-gallery mutations happen
@@ -2688,6 +2716,22 @@ export const ResearchPanel = memo(function ResearchPanel({
       setArchiveBusy(false);
     }
   };
+  const requestResearchChatRename = (sessionId: string) => {
+    const session = researchSessions.find((item) => item.id === sessionId);
+    setRenameDraft(session?.title ?? "");
+    setRenameSessionId(sessionId);
+  };
+  const confirmResearchChatRename = async () => {
+    const trimmed = renameDraft.trim();
+    if (!renameSessionId || !trimmed || renameBusy) return;
+    setRenameBusy(true);
+    try {
+      await renameResearchChat(renameSessionId, trimmed);
+      setRenameSessionId(null);
+    } finally {
+      setRenameBusy(false);
+    }
+  };
   const historyContent = (
     <>
       <div className="research-history-filter" role="group" aria-label="Chat history filter">
@@ -2714,6 +2758,7 @@ export const ResearchPanel = memo(function ResearchPanel({
           selectedId={selected?.id ?? null}
           onSelect={selectHistorySession}
           onArchive={requestResearchChatArchive}
+          onRename={requestResearchChatRename}
         />
       ) : (
         <EmptyState icon={<History size={24} />} title={historyFilter === "scope" ? "No chats for this scope" : "No chat history"}>
@@ -2859,6 +2904,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                   const isStreamingMessage = researchBusy && message.id.startsWith("research-waiting");
                   const streamKind = researchStreamStates[message.id]?.kind;
                   const isThinkingDraft = isStreamingMessage && streamKind === "thinking";
+                  const isToolContinuation = isStreamingMessage && Boolean(researchStreamStates[message.id]?.usedTool);
                   const liveSubagentRuns = researchSubagentActivity[message.id] ?? [];
                   const hasSubagentCards = Boolean(message.subagentRuns?.length || liveSubagentRuns.length);
                   const liveParentActivity = researchChatActivity[message.id];
@@ -3039,6 +3085,12 @@ export const ResearchPanel = memo(function ResearchPanel({
                           onProjectPathLink={openProjectPathLink}
                         />
                       )}
+                      {isToolContinuation ? (
+                        <span className="research-tool-continuation" role="status">
+                          <Workflow size={12} aria-hidden="true" />
+                          <span>Used a tool — continuing…</span>
+                        </span>
+                      ) : null}
                       {isStreamingMessage ? (
                         <span className="research-thinking" aria-label={isThinkingDraft ? "Research is thinking" : "Research is writing"}>
                           <span />
@@ -3461,29 +3513,54 @@ export const ResearchPanel = memo(function ResearchPanel({
                       const reviewPending = pendingChangeSetKeys.has(reviewKey);
                       const reviewSummary = transcriptAnalysis.reviewSummaryByChangeSetIndex.get(messageIndex) ?? null;
                       const reviewPresentation = reviewStatusPresentation(reviewSummary, changeSetCategory);
+                      const superseded = Boolean(changeSet.supersededAt);
                       const reviewed = Boolean(changeSet.reviewedAt) || Boolean(reviewSummary);
                       const canRetryFailedReview = Boolean(reviewSummary && reviewSummary.applied === 0 && reviewSummary.rejected === 0 && reviewSummary.failed === changeSet.operations.length);
                       const waitingForRun = Boolean(activeGraphLockRun && (!reviewed || canRetryFailedReview));
-                      const primaryActionLabel = waitingForRun
-                        ? queueSubmission ? "Queue after run" : "Apply after run"
-                        : reviewPending
-                          ? canRetryFailedReview ? "Retrying" : queueSubmission ? "Queueing" : "Applying"
-                          : canRetryFailedReview
-                            ? queueSubmission ? "Retry Queue" : "Repair & Apply"
-                            : reviewed
-                              ? reviewPresentation?.actionLabel ?? (queueSubmission ? "Queued" : "Applied")
-                              : queueSubmission ? "Queue Selected" : "Apply Selected";
+                      const previewingThisChangeSet = graphPreview?.changeSetId === changeSet.id;
+                      // A superseded card was retired by a newer proposal — it was never
+                      // applied, so its buttons must not read "Applied"/"Reviewed".
+                      const supersededOnly = superseded && !reviewSummary;
+                      const primaryActionLabel = supersededOnly
+                        ? "Superseded"
+                        : waitingForRun
+                          ? queueSubmission ? "Queue after run" : "Apply after run"
+                          : reviewPending
+                            ? canRetryFailedReview ? "Retrying" : queueSubmission ? "Queueing" : "Applying"
+                            : canRetryFailedReview
+                              ? queueSubmission ? "Retry Queue" : "Repair & Apply"
+                              : reviewed
+                                ? reviewPresentation?.actionLabel ?? (queueSubmission ? "Queued" : "Applied")
+                                : queueSubmission ? "Queue Selected" : "Apply Selected";
                       return (
                         <div className="research-change-set">
                           <div className="research-change-set-head">
                             <strong>{changeSet.summary}</strong>
-                            {reviewPresentation
-                              ? <Badge tone={reviewPresentation.badgeTone}>{reviewPresentation.badgeLabel}</Badge>
-                              : reviewed
-                                ? <Badge tone="success">{queueSubmission ? "Queued" : "Reviewed"}</Badge>
-                                : waitingForRun
-                                  ? <Badge tone="warning">Waiting for run</Badge>
-                                : null}
+                            <IconButton
+                              type="button"
+                              className={previewingThisChangeSet ? "is-active" : ""}
+                              title={supersededOnly
+                                ? "Superseded by a newer proposal — preview unavailable"
+                                : reviewed
+                                  ? "Nothing to preview — this card was already reviewed"
+                                  : previewingThisChangeSet ? "Hide canvas preview" : "Preview on canvas"}
+                              aria-pressed={previewingThisChangeSet}
+                              disabled={reviewed || superseded}
+                              onClick={() => previewingThisChangeSet
+                                ? hideGraphChangeSetPreview()
+                                : showGraphChangeSetPreview(selected.id, message.id, changeSet.id, changeSet.operations)}
+                            >
+                              {previewingThisChangeSet ? <EyeOff size={14} /> : <Eye size={14} />}
+                            </IconButton>
+                            {superseded && !reviewSummary
+                              ? <Badge tone="neutral">Superseded</Badge>
+                              : reviewPresentation
+                                ? <Badge tone={reviewPresentation.badgeTone}>{reviewPresentation.badgeLabel}</Badge>
+                                : reviewed
+                                  ? <Badge tone="success">{queueSubmission ? "Queued" : "Reviewed"}</Badge>
+                                  : waitingForRun
+                                    ? <Badge tone="warning">Waiting for run</Badge>
+                                  : null}
                           </div>
                           {reviewPresentation ? <small>{reviewPresentation.summaryLabel}</small> : null}
                           {waitingForRun && activeGraphLockRun ? (
@@ -3535,6 +3612,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                                   : undefined}
                               disabled={waitingForRun || reviewPending || (reviewed && !canRetryFailedReview)}
                               onClick={() => {
+                                if (previewingThisChangeSet) hideGraphChangeSetPreview();
                                 const accepted = acceptedByChangeSet[changeSet.id] ?? new Set(changeSet.operations.map((_, index) => index));
                                 submitResearchChangeSet(
                                   message.id,
@@ -3555,14 +3633,17 @@ export const ResearchPanel = memo(function ResearchPanel({
                               size="sm"
                               variant="danger"
                               disabled={reviewPending || reviewed}
-                              onClick={() => submitResearchChangeSet(
-                                message.id,
-                                changeSet,
-                                changeSet.operations.map((_, operationIndex) => ({ operationIndex, decision: "rejected" as const }))
-                              )}
+                              onClick={() => {
+                                if (previewingThisChangeSet) hideGraphChangeSetPreview();
+                                submitResearchChangeSet(
+                                  message.id,
+                                  changeSet,
+                                  changeSet.operations.map((_, operationIndex) => ({ operationIndex, decision: "rejected" as const }))
+                                );
+                              }}
                             >
                               <X size={15} />
-                              <span>{reviewPending ? (queueSubmission ? "Queueing" : "Applying") : reviewed ? "Reviewed" : "Reject"}</span>
+                              <span>{reviewPending ? (queueSubmission ? "Queueing" : "Applying") : supersededOnly ? "Superseded" : reviewed ? "Reviewed" : "Reject"}</span>
                             </Button>
                           </div>
                         </div>
@@ -3820,6 +3901,42 @@ export const ResearchPanel = memo(function ResearchPanel({
                 <span>Archive chat</span>
               </Button>
               <Button type="button" disabled={archiveBusy} onClick={() => setArchiveConfirmationSessionId(null)}>Cancel</Button>
+            </div>
+          </DialogContent>
+        ) : null}
+      </DialogRoot>
+      <DialogRoot open={Boolean(renameSession)} onOpenChange={(open) => {
+        if (!open && !renameBusy) setRenameSessionId(null);
+      }}>
+        {renameSession ? (
+          <DialogContent
+            title="Rename chat"
+            description="Give this chat a clearer title."
+          >
+            <TextInput
+              autoFocus
+              value={renameDraft}
+              maxLength={200}
+              placeholder="Chat title"
+              onChange={(event) => setRenameDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && renameDraft.trim() && !renameBusy) {
+                  event.preventDefault();
+                  void confirmResearchChatRename();
+                }
+              }}
+            />
+            <div className="dialog-actions">
+              <Button
+                type="button"
+                variant="primary"
+                disabled={renameBusy || !renameDraft.trim()}
+                onClick={() => void confirmResearchChatRename()}
+              >
+                {renameBusy ? <Loader2 size={15} className="is-spinning" /> : <Check size={15} />}
+                <span>Save</span>
+              </Button>
+              <Button type="button" disabled={renameBusy} onClick={() => setRenameSessionId(null)}>Cancel</Button>
             </div>
           </DialogContent>
         ) : null}

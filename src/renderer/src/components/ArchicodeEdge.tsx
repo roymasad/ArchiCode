@@ -10,6 +10,7 @@ type ArchicodeEdgeData = {
   policyAlert?: boolean;
   policyViolationId?: string;
   labelTooltip?: string;
+  previewState?: "added" | "modified" | "removed";
   onSelect?: () => void;
 };
 
@@ -52,7 +53,7 @@ function offsetEndpoint(x: number, y: number, position: Position, amount = 0) {
 /** Smoothstep/bezier approach node sides axis-aligned, so arrows rotate per side. */
 const ARROW_ROTATION: Record<string, number> = { top: 180, bottom: 0, left: 90, right: 270 };
 
-function ArrowHead({ tip, position, color, selected, policyAlert }: { tip: { x: number; y: number }; position: Position; color: string; selected?: boolean; policyAlert?: boolean }) {
+function ArrowHead({ tip, position, color, selected, policyAlert, previewState }: { tip: { x: number; y: number }; position: Position; color: string; selected?: boolean; policyAlert?: boolean; previewState?: "added" | "modified" | "removed" }) {
   // The triangle points up at rotation 0 (tip at top-center); position its tip on the
   // endpoint (advanced toward the node) by shifting the center half a length back.
   const arrowLength = policyAlert ? ARROW_LENGTH + 4 : ARROW_LENGTH;
@@ -60,7 +61,7 @@ function ArrowHead({ tip, position, color, selected, policyAlert }: { tip: { x: 
   const center = insetEndpointTowardNode(tip.x, tip.y, position, ARROW_TIP_ADVANCE - arrowLength / 2);
   return (
     <div
-      className={`archicode-edge-arrowhead${selected ? " is-selected" : ""}${policyAlert ? " is-policy-alert" : ""}`}
+      className={`archicode-edge-arrowhead${selected ? " is-selected" : ""}${policyAlert ? " is-policy-alert" : ""}${previewState ? ` is-preview-${previewState}` : ""}`}
       style={{
         transform: `translate(-50%, -50%) translate(${center.x}px, ${center.y}px) rotate(${ARROW_ROTATION[position] ?? 0}deg)`,
         borderLeftWidth: arrowWidth / 2,
@@ -143,13 +144,13 @@ export function ArchicodeEdge({
         id={id}
         path={path}
         interactionWidth={interactionWidth}
-        className={`archicode-edge${selected ? " is-selected" : ""}${animated ? " is-animated" : ""}${data?.policyAlert ? " is-policy-alert" : ""}`}
+        className={`archicode-edge${selected ? " is-selected" : ""}${animated ? " is-animated" : ""}${data?.policyAlert ? " is-policy-alert" : ""}${data?.previewState ? ` is-preview-${data.previewState}` : ""}`}
         style={style}
       />
       <EdgeLabelRenderer>
         {/* HTML arrowheads and labels always paint above every SVG edge path. */}
-        <ArrowHead tip={targetPoint} position={targetPosition} color={arrowColor} selected={selected} policyAlert={data?.policyAlert} />
-        {bidirectional ? <ArrowHead tip={sourcePoint} position={sourcePosition} color={arrowColor} selected={selected} policyAlert={data?.policyAlert} /> : null}
+        <ArrowHead tip={targetPoint} position={targetPosition} color={arrowColor} selected={selected} policyAlert={data?.policyAlert} previewState={data?.previewState} />
+        {bidirectional ? <ArrowHead tip={sourcePoint} position={sourcePosition} color={arrowColor} selected={selected} policyAlert={data?.policyAlert} previewState={data?.previewState} /> : null}
         {labelChip && data?.labelTooltip ? <Tooltip content={data.labelTooltip}>{labelChip}</Tooltip> : labelChip}
       </EdgeLabelRenderer>
     </>

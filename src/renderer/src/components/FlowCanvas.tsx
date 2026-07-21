@@ -37,6 +37,7 @@ import {
   CircleDot,
   ClipboardList,
   Copy,
+  Eye,
   EyeOff,
   FileCode2,
   FilePenLine,
@@ -68,6 +69,7 @@ import { CodeKnowledgeMapView } from "./CodeKnowledgeMapView";
 import { CodeDetailKnowledgeMapView } from "./CodeDetailKnowledgeMapView";
 import { getActiveFlow, useArchicodeStore } from "../store/useArchicodeStore";
 import { getNodeSignalCounts } from "../utils/nodeSignals";
+import { buildFlowGraphPreview } from "../utils/graphChangePreview";
 import { builtInNodeTypes } from "../utils/nodeTypes";
 import { canvasBackgroundStyle } from "../utils/canvasBackgrounds";
 import { matches as chordMatches, type KeyChord } from "../utils/keybindings";
@@ -643,6 +645,8 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
     selectedNodeId,
     selectedNodeIds,
     selectedEdgeId,
+    graphPreview,
+    hideGraphChangeSetPreview,
     selectNode,
     selectNodes,
     toggleNodeSelection,
@@ -726,9 +730,15 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
     navigateToGraphTarget: state.navigateToGraphTarget,
     keybindings: state.keybindings,
     reload: state.reload,
-    historicalInspection: state.historicalInspection
+    historicalInspection: state.historicalInspection,
+    graphPreview: state.graphPreview,
+    hideGraphChangeSetPreview: state.hideGraphChangeSetPreview
   })));
   const flow = getActiveFlow(bundle, activeFlowId);
+  const graphChangePreview = useMemo(
+    () => graphPreview && flow && !historicalInspection ? buildFlowGraphPreview(flow, graphPreview.operations) : null,
+    [graphPreview, flow, historicalInspection]
+  );
   const canvasRef = useRef<HTMLElement | null>(null);
   const reactFlowRef = useRef<ReactFlowInstance<Node, Edge> | null>(null);
   const suppressNodeClickRef = useRef<string | null>(null);
@@ -857,7 +867,7 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
   }, [bundle, flow, startScopedResearchChat]);
 
   const sourceNodes = useMemo<Node[]>(() => {
-    return visibleNodes.map((node) => {
+    const realNodes = visibleNodes.map((node) => {
       const size = nodeSizeFor(node);
       return {
         id: node.id,
@@ -873,6 +883,7 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
           overlapping: overlappingNodeIds.has(node.id),
           busyTests: busyTestNodeIds.includes(node.id),
           historicalChange: historicalChangedNodeIds.has(node.id),
+          previewState: graphChangePreview?.nodeStates.get(node.id),
           onExplainPolicyViolations: () => startViolationExplanation(
             policyViolations.filter((violation) => {
               const target = violation.target;
@@ -885,7 +896,34 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
         }
       };
     });
-  }, [bundle, visibleNodes, selectedNodeIdSet, overlappingNodeIds, busyTestNodeIds, historicalChangedNodeIds, overviewLabelOffsets, flow?.id, policyViolations, startViolationExplanation]);
+    const phantomNodes = (graphChangePreview?.phantomNodes ?? []).map((node) => {
+      const size = nodeSizeFor(node);
+      const isSelected = selectedNodeIdSet.has(node.id);
+      return {
+        id: node.id,
+        type: "archicode",
+        position: node.position,
+        measured: size,
+        style: size,
+        selected: isSelected,
+        draggable: false,
+        selectable: true,
+        connectable: false,
+        deletable: false,
+        data: {
+          node,
+          signals: undefined,
+          selectedExternally: isSelected,
+          overlapping: false,
+          busyTests: false,
+          historicalChange: false,
+          previewState: "added" as const,
+          overviewLabelOffset: { x: 0, y: 0 }
+        }
+      };
+    });
+    return [...realNodes, ...phantomNodes];
+  }, [bundle, visibleNodes, selectedNodeIdSet, overlappingNodeIds, busyTestNodeIds, historicalChangedNodeIds, overviewLabelOffsets, flow?.id, policyViolations, startViolationExplanation, graphChangePreview]);
   const [canvasNodes, setCanvasNodes] = useState<Node[]>(sourceNodes);
   const [minimapVisible, setMinimapVisible] = useState(getInitialMinimapVisible);
   const [minimapRenderVersion, setMinimapRenderVersion] = useState(0);
@@ -1199,7 +1237,7 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
     if (!flow) return [];
 
     const visibleEdges = visibleEdgesForNodes(flow, visibleNodeIds);
-    const nodesById = new globalThis.Map(visibleNodes.map((node) => [node.id, node]));
+    const nodesById = new globalThis.Map([...visibleNodes, ...(graphChangePreview?.phantomNodes ?? [])].map((node) => [node.id, node]));
     const policyGroupsByNodePair = new globalThis.Map<string, ArchitecturePolicyViolation[]>();
     for (const violation of mappedPolicyViolations) {
       const source = violation.source.nodeId!;
@@ -1278,6 +1316,7 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
           targetOffset: endpointOffsets.get(`${edge.id}:target`) ?? 0,
           arrowColor,
           bidirectional: edge.bidirectional ?? false,
+          previewState: graphChangePreview?.edgeStates.get(edge.id),
           onSelect: () => selectEdge(edge.id)
         }
       };
@@ -1338,8 +1377,37 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
         }
       };
     });
-    return [...persistedEdges, ...policyEdges];
-  }, [edgeType, flow, mappedPolicyViolations, openPolicyViolationSource, selectEdge, selectedEdgeId, visibleNodeIds, visibleNodes]);
+    const phantomEdges: Edge[] = (graphChangePreview?.phantomEdges ?? []).map((edge) => {
+      const handles = inferEdgeHandleSides(nodesById.get(edge.source), nodesById.get(edge.target), edge);
+      return {
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        sourceHandle: handles.sourceHandle,
+        targetHandle: handles.targetHandle,
+        label: edge.label,
+        type: edgeType,
+        animated: false,
+        selectable: false,
+        deletable: false,
+        style: {
+          "--edge-stroke": "var(--preview-added)",
+          stroke: "var(--edge-stroke)",
+          strokeWidth: 2.35,
+          strokeDasharray: "10 6"
+        } as CSSProperties,
+        data: {
+          pathKind: edgeType === "archicodeCurved" ? "bezier" : "smoothstep",
+          sourceOffset: 0,
+          targetOffset: 0,
+          arrowColor: "var(--preview-added)",
+          bidirectional: edge.bidirectional ?? false,
+          previewState: "added" as const
+        }
+      };
+    });
+    return [...persistedEdges, ...policyEdges, ...phantomEdges];
+  }, [edgeType, flow, graphChangePreview, mappedPolicyViolations, openPolicyViolationSource, selectEdge, selectedEdgeId, visibleNodeIds, visibleNodes]);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -1950,6 +2018,25 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
             );
           })}
         </nav>
+      ) : null}
+      {graphPreview ? (
+        <div className="graph-preview-badge" role="status">
+          <Eye size={14} aria-hidden="true" />
+          <span>Preview</span>
+          {graphChangePreview ? (
+            <span className="graph-preview-badge-stats">
+              {graphChangePreview.stats.added ? <span className="is-added">+{graphChangePreview.stats.added}</span> : null}
+              {graphChangePreview.stats.modified ? <span className="is-modified">~{graphChangePreview.stats.modified}</span> : null}
+              {graphChangePreview.stats.removed ? <span className="is-removed">−{graphChangePreview.stats.removed}</span> : null}
+              {!graphChangePreview.stats.added && !graphChangePreview.stats.modified && !graphChangePreview.stats.removed
+                ? <span className="graph-preview-badge-empty">no changes here</span>
+                : null}
+            </span>
+          ) : null}
+          <button type="button" className="graph-preview-badge-close" title="Exit preview" aria-label="Exit preview" onClick={hideGraphChangeSetPreview}>
+            <X size={13} />
+          </button>
+        </div>
       ) : null}
       <button
         type="button"

@@ -765,6 +765,9 @@ describe("research chat workflow", () => {
     const assistant = answered.messages.find((message) => message.role === "assistant");
 
     expect(assistant?.changeSet?.operations).toHaveLength(1);
+    // Host-counted turn diagnostics are attached for exports/debugging (>=1 generation).
+    expect(assistant?.turnDiagnostics?.rounds).toBeGreaterThanOrEqual(1);
+    expect(assistant?.turnDiagnostics?.rerolls).toBeGreaterThanOrEqual(0);
     expect((await loadProject(projectRoot)).flows[0]?.nodes.some((node) => node.id === "node-research-added")).toBe(false);
 
     const result = await applyResearchGraphChangeSet({
@@ -4563,11 +4566,12 @@ describe("research chat workflow", () => {
     expect(prompt).not.toContain("CURRENT TURN COMPLETION CHECKLIST");
     expect(prompt).not.toContain("archicode_leave_memory_unchanged");
     expect(prompt).not.toContain("Never omit both tools");
-    expect(prompt).toContain("Direct graph operations are allowed only for a simple quick bounded edit");
-    expect(prompt).toContain("specification/attachment decomposition");
-    expect(prompt).toContain("call archicode_spawn_picasso now with that exact scope");
+    expect(prompt).toContain("call archicode_propose_graph_change_set directly and do NOT spawn Picasso");
+    expect(prompt).toContain("decomposing a specification or attachment");
+    expect(prompt).toContain("delegate to Picasso, the graph specialist");
+    expect(prompt).toContain("Never call archicode_spawn_picasso more than once per turn");
     expect(prompt).toContain("Graph edges cannot cross top-level flows");
-    expect(prompt).toContain("never instruct Picasso to create or prefer cross-flow edges");
+    expect(prompt).toContain("never create or instruct Picasso to prefer cross-flow edges");
     expect(prompt).toContain("Never promise a future tool action");
     expect(prompt).not.toContain("src/App.vue");
    expect(prompt).not.toContain("<template><main>Hello</main></template>");

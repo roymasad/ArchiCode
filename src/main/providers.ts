@@ -11,6 +11,8 @@ import { estimateTextTokens } from "../shared/contextBudget";
 import { gaiaAgent, pandoraAgent } from "../shared/agentIdentities";
 import { computeUsageCostDetails, mergeReasoningReplayStates } from "../shared/llmPricing";
 export { createConsecutiveToolCallLoopDetector } from "./agentRuntime";
+import type { AgentTurnDiagnostics } from "./agentRuntime";
+export type { AgentTurnDiagnostics } from "./agentRuntime";
 import { heuristicImageInputSupportStatus, providerModelOutputTokenLimit, providerSupportsImageInput } from "../shared/providerCapabilities";
 import type { GlobalResearchVerbosity } from "../shared/researchPersonality";
 import { extractTextDocument } from "./documentText";
@@ -253,6 +255,8 @@ export type ResearchProviderOptions = {
   validateFinalAnswer?: (text: string) => string | undefined | Promise<string | undefined>;
   /** Reports a shared-runtime retry of the current provider turn after a transport-only failure. */
   onTransientRetry?: (error: unknown) => void;
+  /** Reports host-counted turn work (rounds/rerolls/transient retries) once, for diagnostics/exports. */
+  onTurnDiagnostics?: (diagnostics: AgentTurnDiagnostics) => void;
   /**
    * "Sink" tools (e.g. propose_graph_change_set / update_memory) whose only job
    * is to hand structured output back to the caller. When a model turn calls
@@ -503,7 +507,8 @@ export function researchResponseStyleDirective(verbosity: GlobalResearchVerbosit
     "Provide a detailed, conversational, and warm explanation.",
     "Expand on your reasoning and give examples for each point.",
     "This requirement overrides any general instruction to be concise.",
-    "Never collapse a response into one or two sentences. Provide several developed paragraphs or a clearly structured explanation without padding it with empty filler."
+    "Never collapse a response into one or two sentences. Provide several developed paragraphs or a clearly structured explanation without padding it with empty filler.",
+    "This chatty style applies ONLY to your single final answer to the user. While you are still calling tools to gather context, stay silent: do not greet, re-introduce yourself, narrate what you are about to do, or emit any prose between tool calls. Save all of your voice and verbosity for the one final response after the tools are done."
   ].join(" ");
 }
 

@@ -582,6 +582,7 @@ export async function callAnthropicResearch(
         : undefined,
       isApprovalError: options.isApprovalError,
       onTransientRetry: options.onTransientRetry,
+      onTurnDiagnostics: options.onTurnDiagnostics,
       isTerminalTool: options.isTerminalTool,
       terminalToolCompletesTurn: options.terminalToolCompletesTurn,
       adapter: {
@@ -639,7 +640,8 @@ export async function callAnthropicResearch(
           });
           delete body.tools;
           delete body.tool_choice;
-        }
+        },
+        onLaterRound: () => options.onTokenReset?.()
       },
       validateFinalAnswer: options.validateFinalAnswer
     });

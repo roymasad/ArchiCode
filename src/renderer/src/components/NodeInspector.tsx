@@ -9,6 +9,7 @@ import {
   Loader2,
   PlayCircle,
   Copy,
+  Eye,
   FileArchive,
   FileCode2,
   FileText,
@@ -50,6 +51,7 @@ import type { GraphNodeHistory } from "@shared/graphHistory";
 import { gaiaAgent } from "@shared/agentIdentities";
 import { subflowDepth } from "@shared/graph";
 import { getActiveFlow, getSelectedEdge, getSelectedNode, useArchicodeStore } from "../store/useArchicodeStore";
+import { buildFlowGraphPreview } from "../utils/graphChangePreview";
 import { builtInNodeTypes } from "../utils/nodeTypes";
 import { explainEdgePrompt } from "../utils/explainPrompts";
 import { getNodeSignalCounts, nodePolicyViolationTooltip } from "../utils/nodeSignals";
@@ -405,7 +407,8 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
     error,
     rootPath,
     gitStatus,
-    historicalInspection
+    historicalInspection,
+    graphPreview
   } = useArchicodeStore(useShallow((state) => ({
     bundle: state.bundle,
     activeFlowId: state.activeFlowId,
@@ -444,7 +447,8 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
     error: state.error,
     rootPath: state.rootPath,
     gitStatus: state.gitStatus,
-    historicalInspection: state.historicalInspection
+    historicalInspection: state.historicalInspection,
+    graphPreview: state.graphPreview
   })));
   const [isGeneratingChecks, setIsGeneratingChecks] = useState(false);
   const [isRunningChecks, setIsRunningChecks] = useState(false);
@@ -460,8 +464,21 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
     draft: string;
   } | null>(null);
   const flow = getActiveFlow(bundle, activeFlowId);
-  const node = getSelectedNode(bundle, activeFlowId, selectedNodeId);
+  const realNode = getSelectedNode(bundle, activeFlowId, selectedNodeId);
   const edge = getSelectedEdge(bundle, activeFlowId, selectedEdgeId);
+  // Nodes proposed by a pending changeSet ("added") don't exist in the bundle yet, so the
+  // normal lookup above misses them — fall back to the same ghost data the canvas overlay
+  // renders from, and treat any selected node flagged by the active preview as read-only.
+  const graphChangePreview = useMemo(
+    () => graphPreview && flow ? buildFlowGraphPreview(flow, graphPreview.operations) : null,
+    [graphPreview, flow]
+  );
+  const previewPhantomNode = !realNode && selectedNodeId
+    ? graphChangePreview?.phantomNodes.find((candidate) => candidate.id === selectedNodeId) ?? null
+    : null;
+  const node = realNode ?? previewPhantomNode;
+  const previewNodeState = selectedNodeId ? graphChangePreview?.nodeStates.get(selectedNodeId) : undefined;
+  const isPreviewReadOnly = Boolean(previewPhantomNode) || Boolean(previewNodeState);
   const nodePolicyViolationCount = node && flow
     ? getNodeSignalCounts(bundle, node.id, flow.id).policyViolations
     : 0;
@@ -1959,6 +1976,22 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
         }
       />
 
+      {isPreviewReadOnly ? (
+        <div className="inspector-preview-banner" role="status">
+          <Eye size={15} aria-hidden="true" />
+          <div>
+            <strong>Read-only preview</strong>
+            <span>
+              {previewNodeState === "removed"
+                ? "Proposed for removal by a pending graph edit — not yet applied."
+                : previewPhantomNode
+                  ? "Proposed new node from a pending graph edit — not yet created."
+                  : "Proposed changes from a pending graph edit — not yet applied."}
+            </span>
+          </div>
+        </div>
+      ) : null}
+
       {error ? (
         <div className="alert-line">
           <AlertTriangle size={16} />
@@ -2073,6 +2106,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
           </button>
         </TabsList>
 
+        <fieldset disabled={isPreviewReadOnly} className="inspector-fieldset">
         <TabsContent value="details" className="inspector-tab">
           <ScrollArea
             className="inspector-scroll"
@@ -3742,6 +3776,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
             </section>
           </ScrollArea>
         </TabsContent>
+        </fieldset>
       </TabsRoot>
     </aside>
   );

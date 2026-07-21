@@ -1,10 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { researchMemoryDeltaSchema, researchMemorySchema, researchOrchestrationSchema } from "../src/shared/schema";
+import { researchChatSessionSchema, researchMemoryDeltaSchema, researchMemorySchema, researchOrchestrationSchema } from "../src/shared/schema";
 import {
   applyResearchMemoryDelta,
   checkpointResearchGoal,
   formatResearchOrchestrationForPrompt,
   startResearchGoal,
+  supersedePriorUnreviewedChangeSets,
   trackResearchChangeSetTodo
 } from "../src/main/research/memoryFold";
 import {
@@ -93,5 +94,82 @@ describe("durable research goals", () => {
 
     expect(updated.facts).toHaveLength(1);
     expect(updated.facts[0]?.text).toContain("dynamically selected port");
+  });
+
+  it("retires prior unreviewed change-set cards when a newer proposal arrives", () => {
+    const message = (msgId: string, changeSetId: string, reviewedAt?: string) => ({
+      id: msgId,
+      role: "assistant" as const,
+      content: "proposal",
+      createdAt: "2026-07-21T00:00:00.000Z",
+      attachmentIds: [],
+      webUsed: false,
+      mcpToolCalls: [],
+      subagentRuns: [],
+      changeSet: {
+        id: changeSetId,
+        summary: `Change ${changeSetId}`,
+        operations: [],
+        createdAt: "2026-07-21T00:00:00.000Z",
+        ...(reviewedAt ? { reviewedAt } : {})
+      }
+    });
+    const session = researchChatSessionSchema.parse({
+      id: "session-1",
+      projectRoot: "/tmp/project",
+      scope: { type: "project", projectId: "project-1" },
+      title: "chat",
+      memory: researchMemorySchema.parse({}),
+      orchestration: trackResearchChangeSetTodo(
+        trackResearchChangeSetTodo(researchOrchestrationSchema.parse({}), {
+          id: "change-old", summary: "Old", operations: [], createdAt: "2026-07-21T00:00:00.000Z"
+        }, "msg-old", "2026-07-21T00:00:00.000Z"),
+        { id: "change-new", summary: "New", operations: [], createdAt: "2026-07-21T00:01:00.000Z" },
+        "msg-new", "2026-07-21T00:01:00.000Z"
+      ),
+      autoApproveGraphChanges: { enabled: false, includeDestructive: false },
+      messages: [
+        message("msg-reviewed", "change-reviewed", "2026-07-21T00:00:30.000Z"),
+        message("msg-old", "change-old"),
+        message("msg-new", "change-new")
+      ],
+      createdAt: "2026-07-21T00:00:00.000Z",
+      updatedAt: "2026-07-21T00:01:00.000Z"
+    });
+
+    const result = supersedePriorUnreviewedChangeSets(session, "change-new", "2026-07-21T00:02:00.000Z");
+    expect(result.supersededCount).toBe(1);
+    const byChangeSet = Object.fromEntries(result.messages.map((item) => [item.changeSet?.id, item.changeSet]));
+    // The prior unreviewed card is retired...
+    expect(byChangeSet["change-old"]?.supersededAt).toBe("2026-07-21T00:02:00.000Z");
+    expect(byChangeSet["change-old"]?.reviewedAt).toBe("2026-07-21T00:02:00.000Z");
+    // ...the kept card and an already-reviewed card are untouched.
+    expect(byChangeSet["change-new"]?.supersededAt).toBeUndefined();
+    expect(byChangeSet["change-reviewed"]?.supersededAt).toBeUndefined();
+    expect(byChangeSet["change-reviewed"]?.reviewedAt).toBe("2026-07-21T00:00:30.000Z");
+    // The retired card's orchestration todo is cancelled; the kept card's stays live.
+    const oldTodo = result.orchestration.todos.find((todo) => todo.changeSetId === "change-old");
+    const newTodo = result.orchestration.todos.find((todo) => todo.changeSetId === "change-new");
+    expect(oldTodo?.status).toBe("cancelled");
+    expect(newTodo?.status).toBe("awaiting-approval");
+  });
+
+  it("no-ops when there is no prior unreviewed card to supersede", () => {
+    const session = researchChatSessionSchema.parse({
+      id: "session-2",
+      projectRoot: "/tmp/project",
+      scope: { type: "project", projectId: "project-1" },
+      title: "chat",
+      memory: researchMemorySchema.parse({}),
+      orchestration: researchOrchestrationSchema.parse({}),
+      autoApproveGraphChanges: { enabled: false, includeDestructive: false },
+      messages: [],
+      createdAt: "2026-07-21T00:00:00.000Z",
+      updatedAt: "2026-07-21T00:00:00.000Z"
+    });
+    const result = supersedePriorUnreviewedChangeSets(session, "change-new", "2026-07-21T00:02:00.000Z");
+    expect(result.supersededCount).toBe(0);
+    expect(result.messages).toBe(session.messages);
+    expect(result.orchestration).toBe(session.orchestration);
   });
 });

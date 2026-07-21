@@ -158,7 +158,7 @@ function mergeLiveSubagentProgress(
   });
 }
 
-export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<ArchicodeState, "openResearchPanel" | "closeResearchPanel" | "setResearchScope" | "setResearchDraft" | "appendResearchDraftMention" | "appendResearchDraftText" | "clearResearchDraft" | "requestResearchComposerFocus" | "handleResearchChatSessionUpdated" | "refreshResearchChats" | "createResearchChat" | "forkResearchMessage" | "startScopedResearchChat" | "selectResearchChat" | "archiveResearchChat" | "updateResearchChatAutoApproval" | "sendResearchMessage" | "stopResearchMessage" | "dequeueResearchMessage" | "reorderQueuedResearchMessage" | "retryResearchMessage" | "summarizeResearchChat" | "applyResearchGraphChangeSet" | "respondToSubagentRun"> => ({
+export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<ArchicodeState, "openResearchPanel" | "closeResearchPanel" | "setResearchScope" | "setResearchDraft" | "appendResearchDraftMention" | "appendResearchDraftText" | "clearResearchDraft" | "requestResearchComposerFocus" | "handleResearchChatSessionUpdated" | "refreshResearchChats" | "createResearchChat" | "forkResearchMessage" | "startScopedResearchChat" | "selectResearchChat" | "archiveResearchChat" | "renameResearchChat" | "updateResearchChatAutoApproval" | "sendResearchMessage" | "stopResearchMessage" | "dequeueResearchMessage" | "reorderQueuedResearchMessage" | "retryResearchMessage" | "summarizeResearchChat" | "applyResearchGraphChangeSet" | "respondToSubagentRun"> => ({
   openResearchPanel: async (scope) => {
     const { rootPath, bundle } = get();
     const defaultScope = bundle ? defaultResearchScope(bundle, get().activeFlowId, get().activeSubflowId, get().selectedNodeId) : null;
@@ -264,6 +264,14 @@ export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
     const { rootPath } = get();
     if (!rootPath || !window.archicode) return;
     await window.archicode.archiveResearchChat(rootPath, sessionId);
+    await get().refreshResearchChats();
+  },
+
+  renameResearchChat: async (sessionId, title) => {
+    const { rootPath } = get();
+    const trimmed = title.trim();
+    if (!rootPath || !trimmed || !window.archicode) return;
+    await window.archicode.renameResearchChat(rootPath, sessionId, trimmed);
     await get().refreshResearchChats();
   },
 
@@ -373,21 +381,31 @@ export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
     try {
       let streamedAnswerText = "";
       let streamedThinkingText = "";
+      // The last non-empty text shown, kept across tool rounds so the preview never drops
+      // back to the random placeholder once anything real has streamed. A tool-round
+      // boundary just freezes it (with a "used a tool" hint) until the next round streams.
+      let lastVisibleText = "";
+      let awaitingRoundResume = false;
       disposeTokenStream = window.archicode.onResearchChatToken?.((payload) => {
         if (payload.projectRoot !== rootPath || payload.sessionId !== sessionId) return;
         if (payload.reset) {
           streamedAnswerText = "";
           streamedThinkingText = "";
+          awaitingRoundResume = true;
+        } else {
+          const kind = payload.kind === "thinking" ? "thinking" : "answer";
+          if (kind === "answer") streamedAnswerText += payload.text;
+          else streamedThinkingText += payload.text;
+          awaitingRoundResume = false;
         }
-        const kind = payload.kind === "thinking" ? "thinking" : "answer";
-        if (!payload.reset && kind === "answer") streamedAnswerText += payload.text;
-        else if (!payload.reset) streamedThinkingText += payload.text;
-        const visibleStreamText = streamedAnswerText || streamedThinkingText || (payload.reset ? "Archi is continuing with the collected evidence…" : thinkingPlaceholder);
+        const roundText = streamedAnswerText || streamedThinkingText;
+        if (roundText) lastVisibleText = roundText;
+        const visibleStreamText = roundText || lastVisibleText || thinkingPlaceholder;
         const visibleKind = streamedAnswerText ? "answer" : "thinking";
         streamUpdates.scheduleLatest("token", (state) => ({
           researchStreamStates: {
             ...state.researchStreamStates,
-            [optimisticAssistantId]: { kind: visibleKind }
+            [optimisticAssistantId]: { kind: visibleKind, usedTool: awaitingRoundResume }
           },
           researchSessions: state.researchSessions.map((session) => {
             if (session.id !== sessionId) return session;
@@ -626,21 +644,28 @@ export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
     try {
       let streamedAnswerText = "";
       let streamedThinkingText = "";
+      let lastVisibleText = "";
+      let awaitingRoundResume = false;
       disposeTokenStream = window.archicode.onResearchChatToken?.((payload) => {
         if (payload.projectRoot !== rootPath || payload.sessionId !== selectedResearchSessionId) return;
         if (payload.reset) {
           streamedAnswerText = "";
           streamedThinkingText = "";
+          awaitingRoundResume = true;
+        } else {
+          const kind = payload.kind === "thinking" ? "thinking" : "answer";
+          if (kind === "answer") streamedAnswerText += payload.text;
+          else streamedThinkingText += payload.text;
+          awaitingRoundResume = false;
         }
-        const kind = payload.kind === "thinking" ? "thinking" : "answer";
-        if (!payload.reset && kind === "answer") streamedAnswerText += payload.text;
-        else if (!payload.reset) streamedThinkingText += payload.text;
-        const visibleStreamText = streamedAnswerText || streamedThinkingText || (payload.reset ? "Archi is continuing with the collected evidence…" : thinkingPlaceholder);
+        const roundText = streamedAnswerText || streamedThinkingText;
+        if (roundText) lastVisibleText = roundText;
+        const visibleStreamText = roundText || lastVisibleText || thinkingPlaceholder;
         const visibleKind = streamedAnswerText ? "answer" : "thinking";
         streamUpdates.scheduleLatest("token", (state) => ({
           researchStreamStates: {
             ...state.researchStreamStates,
-            [optimisticAssistantId]: { kind: visibleKind }
+            [optimisticAssistantId]: { kind: visibleKind, usedTool: awaitingRoundResume }
           },
           researchSessions: state.researchSessions.map((item) => {
             if (item.id !== selectedResearchSessionId) return item;

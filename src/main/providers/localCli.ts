@@ -316,6 +316,7 @@ export async function callLocalResearchProvider(
       : undefined,
     isApprovalError: options.isApprovalError,
     onTransientRetry: options.onTransientRetry,
+    onTurnDiagnostics: options.onTurnDiagnostics,
     isTerminalTool: options.isTerminalTool,
     terminalToolCompletesTurn: options.terminalToolCompletesTurn,
     validateFinalAnswer: async (answer) => {

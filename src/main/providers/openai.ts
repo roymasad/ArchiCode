@@ -491,6 +491,7 @@ export async function callOpenAIResearchChatCompatible(
         : undefined,
       isApprovalError: options.isApprovalError,
       onTransientRetry: options.onTransientRetry,
+      onTurnDiagnostics: options.onTurnDiagnostics,
       isTerminalTool: options.isTerminalTool,
       terminalToolCompletesTurn: options.terminalToolCompletesTurn,
       adapter: {
@@ -548,7 +549,8 @@ export async function callOpenAIResearchChatCompatible(
           });
           delete body.tools;
           body.tool_choice = "none";
-        }
+        },
+        onLaterRound: () => options.onTokenReset?.()
       },
       validateFinalAnswer: options.validateFinalAnswer
     });
@@ -637,7 +639,7 @@ export async function callOpenAIResponsesToolLoop(
   apiKey: string,
   body: Record<string, unknown>,
   label: string,
-  options: { callMcpTool?: (input: { providerToolName: string; argumentsJson: string }) => Promise<string>; onToken?: (text: string) => void; signal?: AbortSignal; stream?: boolean; isTerminalTool?: (providerToolName: string) => boolean; terminalToolCompletesTurn?: (providerToolName: string) => boolean; prepareToolBatch?: ProviderCallOptions["prepareToolBatch"]; shouldCompleteToolBatch?: ProviderCallOptions["shouldCompleteToolBatch"]; isApprovalError?: (error: unknown) => boolean; validateFinalAnswer?: ResearchProviderOptions["validateFinalAnswer"]; onTransientRetry?: ResearchProviderOptions["onTransientRetry"]; onUsage?: (raw: RawLlmUsage) => void }
+  options: { callMcpTool?: (input: { providerToolName: string; argumentsJson: string }) => Promise<string>; onToken?: (text: string) => void; onTokenReset?: ResearchProviderOptions["onTokenReset"]; signal?: AbortSignal; stream?: boolean; isTerminalTool?: (providerToolName: string) => boolean; terminalToolCompletesTurn?: (providerToolName: string) => boolean; prepareToolBatch?: ProviderCallOptions["prepareToolBatch"]; shouldCompleteToolBatch?: ProviderCallOptions["shouldCompleteToolBatch"]; isApprovalError?: (error: unknown) => boolean; validateFinalAnswer?: ResearchProviderOptions["validateFinalAnswer"]; onTransientRetry?: ResearchProviderOptions["onTransientRetry"]; onTurnDiagnostics?: ResearchProviderOptions["onTurnDiagnostics"]; onUsage?: (raw: RawLlmUsage) => void }
 ): Promise<string> {
   const initialInput = Array.isArray(body.input)
     ? [...body.input]
@@ -666,6 +668,7 @@ export async function callOpenAIResponsesToolLoop(
     isTransientError: isRetryableOpenAIResponsesAgentError,
     isApprovalError: options.isApprovalError,
     onTransientRetry: options.onTransientRetry,
+    onTurnDiagnostics: options.onTurnDiagnostics,
     isTerminalTool: options.isTerminalTool,
     terminalToolCompletesTurn: options.terminalToolCompletesTurn,
     adapter: {
@@ -751,7 +754,8 @@ export async function callOpenAIResponsesToolLoop(
         delete body.previous_response_id;
         delete body.tools;
         body.tool_choice = "none";
-      }
+      },
+      onLaterRound: () => options.onTokenReset?.()
     },
     completionAfterTools({ results }) {
       const executedToolCalls = results.map(({ toolCall, rawResult }) => ({

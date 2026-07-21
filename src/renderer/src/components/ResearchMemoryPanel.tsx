@@ -1,4 +1,4 @@
-import { AlertCircle, Archive, BookMarked, Brain, Check, CheckCircle2, ChevronDown, ChevronUp, Circle, Copy, Download, FileJson, Files, FileText, History, ListTodo, Loader2, MessageSquare, Mic, Paperclip, Pin, PinOff, Play, Plus, RefreshCw, Send, ShieldCheck, Sparkles, Split, Square, Volume2, X } from "lucide-react";
+import { AlertCircle, Archive, BookMarked, Brain, Check, CheckCircle2, ChevronDown, ChevronUp, Circle, Copy, Download, FileJson, Files, FileText, History, ListTodo, Loader2, MessageSquare, Mic, Paperclip, Pencil, Pin, PinOff, Play, Plus, RefreshCw, Send, ShieldCheck, Sparkles, Split, Square, Volume2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import type { Artifact, LlmUsage, ProjectBundle, ProjectMemoryNote, ProjectSettings, ResearchChatScope, ResearchChatSession } from "@shared/schema";
@@ -337,12 +337,14 @@ export function ResearchHistoryList({
   sessions,
   selectedId,
   onSelect,
-  onArchive
+  onArchive,
+  onRename
 }: {
   sessions: ResearchChatSession[];
   selectedId: string | null;
   onSelect: (sessionId: string | null) => void;
   onArchive: (sessionId: string) => void;
+  onRename: (sessionId: string) => void;
 }) {
   return (
     <div className="research-history-list">
@@ -352,6 +354,9 @@ export function ResearchHistoryList({
             <strong>{session.title}</strong>
             <small>{new Date(session.updatedAt).toLocaleString()}</small>
           </button>
+          <IconButton title="Rename chat" onClick={() => onRename(session.id)}>
+            <Pencil size={13} />
+          </IconButton>
           <IconButton title="Archive chat" onClick={() => onArchive(session.id)}>
             <Archive size={13} />
           </IconButton>

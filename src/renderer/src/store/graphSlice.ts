@@ -67,7 +67,7 @@ import type { ComposerMention, ComposerSegment, QueuedResearchMessage, ShellProm
 import { uid, uniqueNodeIds, selectedNodeIdsFor, appendEdgeLabelHistory, directUndoNotice, offerGitAttributesSetup, now, runInputKey, runProfileKey, isSameRunRequest, isSameRunProfileRequest, runArtifactIds, runHasQuestionRefreshSignal, shouldRefreshQuestionsForRun, hasActiveRun, editingLockedMessage, notifyJobFinished, notifyReviewRequired, createOptimisticRun, createOptimisticRunProfile, defaultNodeHalfSize, getInitialTheme, getInitialUiScale, projectUiKey, projectScopedUiKey, readStoredWorkbenchView, readProjectFileBrowserState, isFiniteNumber, readStoredViewport, isVisualQaPreview, createFallbackBundle, projectScopedResetState, clearProjectStateForBranchChange, reloadProjectStateAfterBranchChange, isBuildLikeAgentRun, getActiveFlow, getSelectedNode, getSelectedEdge, defaultResearchScope, normalizeComposerSegments, addResearchBusySession, removeResearchBusySession, selectedResearchSessionOrFallback, nextGraphNavigationRequestId, nextFilePreviewRequestId } from "./helpers";
 import { storeGraphLocation } from "./graphLocation";
 
-export const createGraphSlice = (set: StoreSet, get: StoreGet): Pick<ArchicodeState, "selectNode" | "selectNodes" | "toggleNodeSelection" | "selectEdge" | "setActiveFlow" | "setActiveSubflow" | "setSearchQuery" | "saveFlow" | "createFlow" | "createSubflow" | "renameSubflow" | "toggleSubflowIgnored" | "reparentSubflow" | "deleteSubflow" | "setNodeLinkedSubflow" | "setCanvasViewport" | "setCanvasViewportCenter" | "navigateToGraphTarget" | "applyResearchCanvasAction" | "clearGraphNavigationRequest" | "addNode" | "copySelectedNode" | "cutSelectedNode" | "pasteNode" | "duplicateSelectedNode" | "deleteSelectedNode" | "addEdge" | "rememberEdgeLabel" | "updateSelectedEdge" | "updateSelectedEdgePatch" | "deleteSelectedEdge" | "autoLayout" | "updateNode"> => ({
+export const createGraphSlice = (set: StoreSet, get: StoreGet): Pick<ArchicodeState, "selectNode" | "selectNodes" | "toggleNodeSelection" | "selectEdge" | "setActiveFlow" | "setActiveSubflow" | "setSearchQuery" | "saveFlow" | "createFlow" | "createSubflow" | "renameSubflow" | "toggleSubflowIgnored" | "reparentSubflow" | "deleteSubflow" | "setNodeLinkedSubflow" | "setCanvasViewport" | "setCanvasViewportCenter" | "navigateToGraphTarget" | "applyResearchCanvasAction" | "clearGraphNavigationRequest" | "addNode" | "copySelectedNode" | "cutSelectedNode" | "pasteNode" | "duplicateSelectedNode" | "deleteSelectedNode" | "addEdge" | "rememberEdgeLabel" | "updateSelectedEdge" | "updateSelectedEdgePatch" | "deleteSelectedEdge" | "autoLayout" | "updateNode" | "showGraphChangeSetPreview" | "hideGraphChangeSetPreview"> => ({
   selectNode: (nodeId) => set((state) => state.selectedNodeId === nodeId && state.selectedEdgeId === null && state.selectedNodeIds.length === (nodeId ? 1 : 0) && (!nodeId || state.selectedNodeIds[0] === nodeId)
     ? state
     : { selectedNodeId: nodeId, selectedNodeIds: nodeId ? [nodeId] : [], selectedEdgeId: null }),
@@ -746,5 +746,10 @@ export const createGraphSlice = (set: StoreSet, get: StoreGet): Pick<ArchicodeSt
       set({ error: error instanceof Error ? error.message : String(error) });
     }
   },
+
+  showGraphChangeSetPreview: (sessionId, messageId, changeSetId, operations) => {
+    set({ graphPreview: { sessionId, messageId, changeSetId, operations } });
+  },
+  hideGraphChangeSetPreview: () => set({ graphPreview: null })
 
 });

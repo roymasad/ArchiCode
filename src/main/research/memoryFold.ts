@@ -504,6 +504,39 @@ export function reviewResearchChangeSetTodo(
   };
 }
 
+/**
+ * Retires every still-unreviewed change-set card in the session except the one being
+ * kept, stamping them superseded so only a single card stays actionable. Prevents two
+ * live proposals — often re-creating the same node IDs — from both being appliable.
+ * Returns the updated messages, an orchestration with the retired todos cancelled, and
+ * how many cards were superseded.
+ */
+export function supersedePriorUnreviewedChangeSets(
+  session: ResearchChatSession,
+  keepChangeSetId: string,
+  at: string
+): { messages: ResearchChatMessage[]; orchestration: ResearchOrchestration; supersededCount: number } {
+  const supersededChangeSetIds = new Set<string>();
+  const messages = session.messages.map((message) => {
+    const changeSet = message.changeSet;
+    if (!changeSet || changeSet.reviewedAt || changeSet.id === keepChangeSetId) return message;
+    supersededChangeSetIds.add(changeSet.id);
+    return { ...message, changeSet: { ...changeSet, reviewedAt: at, supersededAt: at } };
+  });
+  if (!supersededChangeSetIds.size) {
+    return { messages: session.messages, orchestration: session.orchestration, supersededCount: 0 };
+  }
+  const orchestration: ResearchOrchestration = {
+    ...session.orchestration,
+    todos: session.orchestration.todos.map((todo) =>
+      todo.changeSetId && supersededChangeSetIds.has(todo.changeSetId) && todo.status === "awaiting-approval"
+        ? { ...todo, status: "cancelled" as const, notes: "Superseded by a newer proposal.", updatedAt: at }
+        : todo),
+    updatedAt: at
+  };
+  return { messages, orchestration, supersededCount: supersededChangeSetIds.size };
+}
+
 export function applyResearchMemoryDelta(
   memory: ResearchMemory,
   delta: ResearchMemoryDelta,

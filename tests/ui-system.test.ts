@@ -1118,7 +1118,10 @@ describe("renderer UI system", () => {
     expect(store.match(/mergeLiveSubagentProgress\(/g)).toHaveLength(4);
     expect(store).toContain('payload.observationAnalysis?.status === "completed"');
     expect(store).toContain("visuallyAnalyzedArtifactIds");
-    expect(store).toContain("Archi is continuing with the collected evidence");
+    // A tool-round boundary keeps the last streamed text on screen (never the placeholder)
+    // and flags a tool continuation instead of wiping the preview.
+    expect(store).toContain("lastVisibleText");
+    expect(store).toContain("usedTool: awaitingRoundResume");
     expect(main).toContain("onSubagentProgress: ({ runId, kind, title, message, status })");
     expect(main).toContain("onActivity: (message, status) => publishResearchChatActivity");
     expect(panel).toContain("Archi — Parent investigation");
