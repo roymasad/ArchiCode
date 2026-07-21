@@ -873,6 +873,7 @@ describe("renderer UI system", () => {
     const artifacts = readFileSync(resolve(repoRoot, "src/renderer/src/components/ArtifactBrowser.tsx"), "utf8");
     const store = readStoreSource();
     const runStages = readFileSync(resolve(repoRoot, "src/renderer/src/utils/runStages.ts"), "utf8");
+    const storage = readFileSync(resolve(repoRoot, "src/main/storage/runEngine.ts"), "utf8");
     const css = readFileSync(resolve(repoRoot, "src/renderer/src/styles/app.css"), "utf8");
 
     expect(trace).toContain('placeholder="Search trace"');
@@ -909,6 +910,13 @@ describe("renderer UI system", () => {
     expect(consolePanel).toContain("Implementation history");
     expect(consolePanel).toContain("historical batch/task snapshot");
     expect(consolePanel).toContain('batch${visibleBatch === 1 ? "" : "es"} used');
+    expect(consolePanel).toContain("function implementationFallbackReason");
+    expect(consolePanel).toContain("function implementationFallbackSummary");
+    expect(consolePanel).toContain("run.implementation?.fallbackReason");
+    expect(consolePanel).toContain("Completed with planning fallback");
+    expect(consolePanel).toContain('planningFallback ? "fallback"');
+    expect(consolePanel).toContain("Planning produced no explicit task split after refinement");
+    expect(storage).toContain("Planning produced no explicit task split after refinement");
     expect(runStages).toContain('run.status === "running"');
     expect(consolePanel).toContain("runElapsedLabel");
     expect(consolePanel).toContain("run-queue-duration");
@@ -1309,7 +1317,7 @@ describe("renderer UI system", () => {
     const panel = readFileSync(resolve(repoRoot, "src/renderer/src/components/ResearchPanel.tsx"), "utf8");
     const css = readFileSync(resolve(repoRoot, "src/renderer/src/styles/app.css"), "utf8");
 
-    expect(app).toContain('className={chatFocusActive ? "app-shell chat-focus-mode" : "app-shell"}');
+    expect(app).toContain('className={["app-shell", chatFocusActive ? "chat-focus-mode" : ""');
     expect(app).toContain("chatFocusMode={chatFocusActive}");
     expect(panel).toContain('title={focusMode ? "Exit chat focus mode" : "Enter chat focus mode"}');
     expect(panel).toContain("focusMode ? <Minimize2 size={15} /> : <Maximize2 size={15} />");

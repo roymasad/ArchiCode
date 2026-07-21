@@ -42,12 +42,13 @@ async function waitForBundle(root: string, predicate: (bundle: ProjectBundle) =>
   throw new Error(`Timed out waiting for project state. Runs: ${bundle.runs.map((run) => `${run.id}:${run.status}`).join(", ")}`);
 }
 
-async function createFakeCodex(root: string, options: { failedVerification?: boolean } = {}): Promise<string> {
+async function createFakeCodex(root: string, options: { failedVerification?: boolean; planningMessage?: string } = {}): Promise<string> {
   const commandPath = path.join(root, "fake-codex.cjs");
   await writeFile(commandPath, `#!/usr/bin/env node
 const fs = require("fs");
 const path = require("path");
 const failedVerification = ${JSON.stringify(Boolean(options.failedVerification))};
+const planningMessage = ${JSON.stringify(options.planningMessage ?? "Planning complete. Files: app.txt. Tests: npm test.")};
 let stdin = "";
 process.stdin.on("data", (chunk) => { stdin += chunk; });
 process.stdin.on("end", () => {
@@ -72,7 +73,7 @@ process.stdin.on("end", () => {
       }));
     }
   }
-  const message = coding ? "Coding changed app.txt" : "Planning complete. Files: app.txt. Tests: npm test.";
+  const message = coding ? "Coding changed app.txt" : planningMessage;
   if (outputPath) fs.writeFileSync(outputPath, message, "utf8");
   process.exit(0);
 });
@@ -489,6 +490,128 @@ process.stdin.on("end", () => {
     expect(run.reviewDecisions.some((decision) => decision.kind === "planning")).toBe(false);
     await expect(readFile(path.join(root, "app.txt"), "utf8")).resolves.toContain("generated from node plan");
   }, 10000);
+
+  it("refines a thin high-effort plan in-phase, capped, and still proceeds", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "archicode-plan-refine-"));
+    const command = await createFakeCodex(root);
+    const bundle = await ensureFixtureProject(root);
+    await updateProjectSettings(root, {
+      ...bundle.project.settings,
+      providers: bundle.project.settings.providers.map((provider) => provider.id === "codex-local"
+        ? { ...provider, enabled: true, localCommand: command }
+        : { ...provider, enabled: false }),
+      stopOnUnansweredQuestions: false
+    });
+    const { runId } = await startAgentRun({
+      projectRoot: root,
+      flowId: "flow-main",
+      providerId: "codex-local",
+      effort: "high",
+      promptSummary: "Plan a tiny change"
+    });
+    const { run } = await waitForRun(root, runId, (item) => item.status === "succeeded");
+
+    // The static fake plan never satisfies the validator, so refinement runs up
+    // to PLAN_REFINE_CAP (2) passes and then proceeds with the best draft.
+    const refineLogs = run.logs.filter((line) => /Planning refine pass/.test(line.text));
+    expect(refineLogs).toHaveLength(2);
+    expect(run.logs.some((line) => /Planning refine pass 1\/2/.test(line.text))).toBe(true);
+  }, 15000);
+
+  it("keeps fast-effort planning one-shot with no refine passes", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "archicode-plan-fast-oneshot-"));
+    const command = await createFakeCodex(root);
+    const bundle = await ensureFixtureProject(root);
+    await updateProjectSettings(root, {
+      ...bundle.project.settings,
+      providers: bundle.project.settings.providers.map((provider) => provider.id === "codex-local"
+        ? { ...provider, enabled: true, localCommand: command }
+        : { ...provider, enabled: false }),
+      stopOnUnansweredQuestions: false
+    });
+    const { runId } = await startAgentRun({
+      projectRoot: root,
+      flowId: "flow-main",
+      providerId: "codex-local",
+      effort: "fast",
+      promptSummary: "Plan a tiny change"
+    });
+    const { run } = await waitForRun(root, runId, (item) => item.status === "succeeded");
+
+    expect(run.logs.some((line) => /Planning refine pass/.test(line.text))).toBe(false);
+  }, 15000);
+
+  it("does not refine a well-formed high-effort plan", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "archicode-plan-clean-"));
+    const planningMessage = [
+      "Decision: proceed",
+      "Goal: Add a generated app text file.",
+      "Approach: Create app.txt from the node plan.",
+      "Verification: npm test.",
+      "```json",
+      JSON.stringify({
+        archicodePatch: {
+          schemaVersion: 1,
+          runId: "run",
+          summary: "Add app.txt",
+          runSummary: {
+            goal: "Add app.txt",
+            approach: "Create it from the node plan",
+            verificationPlan: "npm test",
+            implementationTasks: [
+              { id: "task-1", title: "Create app.txt", summary: "Write generated content to app.txt" }
+            ]
+          },
+          operations: []
+        }
+      }),
+      "```"
+    ].join("\n");
+    const command = await createFakeCodex(root, { planningMessage });
+    const bundle = await ensureFixtureProject(root);
+    await updateProjectSettings(root, {
+      ...bundle.project.settings,
+      providers: bundle.project.settings.providers.map((provider) => provider.id === "codex-local"
+        ? { ...provider, enabled: true, localCommand: command }
+        : { ...provider, enabled: false }),
+      stopOnUnansweredQuestions: false
+    });
+    const { runId } = await startAgentRun({
+      projectRoot: root,
+      flowId: "flow-main",
+      providerId: "codex-local",
+      effort: "high",
+      promptSummary: "Add a generated app text file"
+    });
+    const { run } = await waitForRun(root, runId, (item) => item.status === "succeeded");
+
+    expect(run.logs.some((line) => /Planning refine pass/.test(line.text))).toBe(false);
+  }, 15000);
+
+  it("does not refine when high-effort planning asks questions", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "archicode-plan-ask-norefine-"));
+    const command = await createFakeCodex(root, {
+      planningMessage: "Decision: ask_questions\nWhich platform should this target first?"
+    });
+    const bundle = await ensureFixtureProject(root);
+    await updateProjectSettings(root, {
+      ...bundle.project.settings,
+      providers: bundle.project.settings.providers.map((provider) => provider.id === "codex-local"
+        ? { ...provider, enabled: true, localCommand: command }
+        : { ...provider, enabled: false }),
+      stopOnUnansweredQuestions: false
+    });
+    const { runId } = await startAgentRun({
+      projectRoot: root,
+      flowId: "flow-main",
+      providerId: "codex-local",
+      effort: "high",
+      promptSummary: "Plan a tiny change"
+    });
+    const { run } = await waitForRun(root, runId, (item) => item.status === "succeeded");
+
+    expect(run.logs.some((line) => /Planning refine pass/.test(line.text))).toBe(false);
+  }, 15000);
 
   it("keeps a run cancelled when planning provider output arrives later", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-cancel-inflight-planning-"));

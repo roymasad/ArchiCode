@@ -7,7 +7,7 @@ import { homedir, tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { defaultPhaseModelPolicies, researchGraphOperationKinds, type LlmPhase, type LlmUsage, type McpServer, type ModelCapabilityProfile, type PhaseModelPolicy, type ProjectSettings, type ResearchChatMessage } from "../shared/schema";
-import { estimateTextTokens } from "../shared/contextBudget";
+import { estimateTextTokens, knownContextWindowFloorTokensForModel } from "../shared/contextBudget";
 import { gaiaAgent, pandoraAgent } from "../shared/agentIdentities";
 import { computeUsageCostDetails, mergeReasoningReplayStates } from "../shared/llmPricing";
 export { createConsecutiveToolCallLoopDetector } from "./agentRuntime";
@@ -813,7 +813,13 @@ export const planningQuestionGateInstructions = [
   "Choose batchBudget per task from your expected implementation complexity, confidence, and slice size. For fast effort use 1-2 batches per task and keep the total small; for high effort use 1-6 batches per task when the work is broad, risky, multi-system, or long-horizon.",
   "Use lightVerificationCommand for cheap finite checks between tasks, such as typecheck, lint, focused tests, or a typecheck-only prefix of a build. Use verificationCommand for the full final verification when known.",
   "If the run asks for automatic implementation effort, choose archicodePatch.runSummary.implementationEffort as either \"fast\" for quick small/low-risk work or \"high\" for broader/riskier/long-horizon work.",
-  "Implementation tasks should be ordered, self-contained source slices that coding can execute one at a time; planning owns this split."
+  "Implementation tasks should be ordered, self-contained source slices that coding can execute one at a time; planning owns this split.",
+  "Inspect the target node's and flow's actual source with read_file before finalizing the task split; do not author the plan from graph metadata alone.",
+  "For large or multi-node scope, keep the planning context lean: when a research subagent (Sherlock) is available, delegate breadth-first codebase inspection to it with a bounded objective and the relevant codePaths, then build the task split from its compact evidence dossier instead of reading every file inline.",
+  "Reserve inline read_file for the specific files you must confirm yourself, and do not delegate for small or single-node scope where direct inspection is cheaper.",
+  "Coverage: every in-scope node should be covered by at least one implementation task; name the node it implements in that task's summary.",
+  "Order tasks by dependency and never place a test-authoring task before the implementation it verifies.",
+  "The user-facing plan sections (Goal, Approach, Key Assumptions, Implementation Steps, Verification, Risks) must be concrete and project-specific, not generic boilerplate."
 ].join(" ");
 
 export const planningPatchJsonContract = [
@@ -1827,9 +1833,7 @@ export function extractContextWindowFromModels(payload: unknown, modelId?: strin
 }
 
 function knownContextWindowFloorForModel(modelId?: string): number | undefined {
-  const model = modelId?.toLowerCase().trim() ?? "";
-  if (model.includes("gpt-5.6")) return 1050000;
-  return undefined;
+  return knownContextWindowFloorTokensForModel(modelId);
 }
 
 function modelRecords(payload: unknown): ModelMetadata[] {

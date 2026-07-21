@@ -173,4 +173,92 @@ describe("context budget planning", () => {
     expect(plan.source).toBe("known-model");
     expect(plan.modelContextTokens).toBe(1050000);
   });
+
+  it("uses the Gemini context window for Antigravity CLI models without model cards", () => {
+    const seed = createSeedProject("/tmp/archicode").project.settings;
+    const localTemplate = seed.providers.find((provider) => provider.id === "codex-local")!;
+    const settings = {
+      ...seed,
+      providers: [
+        ...seed.providers.map((provider) => ({ ...provider, enabled: false })),
+        {
+          ...localTemplate,
+          id: "antigravity-local",
+          kind: "antigravity-local" as const,
+          label: "Gemini",
+          localCommand: "agy",
+          model: "gemini-3.6-flash-medium",
+          enabled: true
+        }
+      ]
+    };
+
+    const plan = deriveContextBudgetPlan(settings);
+
+    expect(plan.source).toBe("known-model");
+    expect(plan.modelContextTokens).toBe(1000000);
+    expect(plan.usableContextTokens).toBe(800000);
+  });
+
+  it("overrides stale detected context windows for Gemini CLI models", () => {
+    const seed = createSeedProject("/tmp/archicode").project.settings;
+    const localTemplate = seed.providers.find((provider) => provider.id === "codex-local")!;
+    const settings = {
+      ...seed,
+      providers: [
+        ...seed.providers.map((provider) => ({ ...provider, enabled: false })),
+        {
+          ...localTemplate,
+          id: "antigravity-local",
+          kind: "antigravity-local" as const,
+          label: "Gemini",
+          localCommand: "agy",
+          model: "gemini-3.6-flash-tiered",
+          detectedContextWindowTokens: 64000,
+          enabled: true
+        }
+      ]
+    };
+
+    const plan = deriveContextBudgetPlan(settings);
+
+    expect(plan.source).toBe("known-model");
+    expect(plan.modelContextTokens).toBe(1000000);
+  });
+
+  it("uses known context windows for other CLI provider model families", () => {
+    const seed = createSeedProject("/tmp/archicode").project.settings;
+    const localTemplate = seed.providers.find((provider) => provider.id === "codex-local")!;
+    const cases = [
+      { kind: "grok-local" as const, model: "grok-4.5", tokens: 500000 },
+      { kind: "grok-local" as const, model: "grok-build-0.1", tokens: 256000 },
+      { kind: "kimi-local" as const, model: "kimi-k3", tokens: 1000000 },
+      { kind: "kimi-local" as const, model: "kimi-k2.7-code", tokens: 262144 },
+      { kind: "opencode-local" as const, model: "opencode-go/kimi-k2.5", tokens: 262144 },
+      { kind: "opencode-local" as const, model: "qwen/qwen3.7-plus", tokens: 1000000 },
+      { kind: "opencode-local" as const, model: "minimax/minimax-m3", tokens: 1000000 }
+    ];
+
+    for (const item of cases) {
+      const settings = {
+        ...seed,
+        providers: [
+          ...seed.providers.map((provider) => ({ ...provider, enabled: false })),
+          {
+            ...localTemplate,
+            id: `${item.kind}-${item.model}`,
+            kind: item.kind,
+            label: item.kind,
+            model: item.model,
+            enabled: true
+          }
+        ]
+      };
+
+      const plan = deriveContextBudgetPlan(settings);
+
+      expect(plan.source).toBe("known-model");
+      expect(plan.modelContextTokens).toBe(item.tokens);
+    }
+  });
 });

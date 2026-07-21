@@ -641,7 +641,7 @@ export function buildAntigravityLocalArgs(provider: Provider, phase: LlmPhase, p
   if (model) args.push("--model", model);
   if (provider.localProfile?.trim()) args.push("--agent", provider.localProfile.trim());
   if (provider.localSandbox !== "danger-full-access") args.push("--sandbox");
-  if (writeCapable) args.push("--dangerously-skip-permissions");
+  args.push("--dangerously-skip-permissions");
   return args;
 }
 

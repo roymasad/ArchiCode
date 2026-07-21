@@ -1,6 +1,6 @@
 {
   "name": "archicode",
-  "version": "0.3.4",
+  "version": "0.3.5",
   "description": "A local visual-first Electron harness for designing and evolving apps with node-based LLM workflows.",
   "author": "Roy Massaad",
   "license": "AGPL-3.0-only",

@@ -302,6 +302,10 @@ const HIGH_IMPLEMENTATION_TOTAL_BATCH_LIMIT = 24;
 const FAST_IMPLEMENTATION_MAX_BATCHES_PER_TASK = 2;
 const FAST_IMPLEMENTATION_TOTAL_BATCH_LIMIT = 2;
 const FAST_IMPLEMENTATION_DYNAMIC_TOTAL_BATCH_LIMIT = 4;
+// Bounded self-refinement passes for high-effort planning. Fast effort stays
+// one-shot by design; each pass re-plans in the same phase with deterministic
+// findings appended, and the run always proceeds with the best draft.
+const PLAN_REFINE_CAP = 2;
 const ACTIVE_RUN_STATUSES = new Set<Run["status"]>([
   "preparing",
   "queued",
@@ -1291,6 +1295,7 @@ function implementationStateForRun(run: Run): RunImplementationState {
     maxBatches: run.implementation?.maxBatches ?? implementationBatchBudget(tasks, concreteRunEffort(run)),
     currentTaskId: run.implementation?.currentTaskId,
     tasks,
+    fallbackReason: run.implementation?.fallbackReason,
     needsMoreWork: run.implementation?.needsMoreWork,
     needsReplan: run.implementation?.needsReplan,
     summary: run.implementation?.summary,
@@ -1521,6 +1526,118 @@ function defaultImplementationTasks(run: Run): RunImplementationTask[] {
   }];
 }
 
+const IMPLEMENTATION_TASK_FALLBACK_REASON = "Planning produced no explicit task split after refinement; coding is using one generic task derived from the run request.";
+
+const PLAN_ASK_QUESTIONS_PATTERN = /^\s*Decision:\s*ask[_\s-]?questions/im;
+const PLAN_REQUIRED_SECTIONS = ["goal", "approach", "verification"] as const;
+
+function planTextHasSection(output: string, section: string): boolean {
+  return new RegExp(`(^|\\n)\\s*#{0,3}\\s*${section}\\b`, "i").test(output) ||
+    new RegExp(`\\b${section}\\b\\s*:`, "i").test(output);
+}
+
+// Deterministic, no-LLM plan quality check. Returns concrete findings that
+// drive an in-phase refine turn; empty findings means the plan is good enough
+// to proceed. A deliberate question-gate stop is always treated as clean.
+function validatePlanQuality(input: {
+  run: Run;
+  output: string;
+  proposal: PersistedPatchProposal | null;
+  scopeNodeTitles: string[];
+  hasVerifiableScripts: boolean;
+  mcpToolCalls: Run["mcpToolCalls"];
+  isApiProvider: boolean;
+}): { clean: boolean; findings: string[] } {
+  const { run, output, proposal, scopeNodeTitles, hasVerifiableScripts, mcpToolCalls, isApiProvider } = input;
+  if (PLAN_ASK_QUESTIONS_PATTERN.test(output)) return { clean: true, findings: [] };
+
+  const findings: string[] = [];
+  const tasks = proposal?.implementationTasks ?? [];
+  const prompt = run.promptSummary.trim();
+
+  // Orchestration: a real task split, not the effective generic single-task fallback.
+  const onlyGenericTask = tasks.length === 0 ||
+    (tasks.length === 1 && (!tasks[0].summary?.trim() || tasks[0].summary.trim() === prompt));
+  if (onlyGenericTask) {
+    findings.push("No real implementation task split: return ordered, self-contained implementationTasks, each with a concrete summary distinct from the run request.");
+  }
+
+  // Each task in a multi-task plan needs a real, distinct summary.
+  const shallowTasks = tasks.filter((task) => {
+    const summary = task.summary?.trim() ?? "";
+    return !summary || summary === prompt;
+  });
+  if (tasks.length > 1 && shallowTasks.length) {
+    findings.push(`${shallowTasks.length} task(s) lack a concrete summary distinct from the run request; describe what each task changes.`);
+  }
+
+  // Ordering: a test-authoring task must not precede the implementation it verifies.
+  const isTestTask = (task: { title: string; summary?: string }) => /\b(test|spec)\b/i.test(`${task.title} ${task.summary ?? ""}`);
+  const firstTestIndex = tasks.findIndex(isTestTask);
+  const firstNonTestIndex = tasks.findIndex((task) => !isTestTask(task));
+  if (firstTestIndex >= 0 && firstNonTestIndex >= 0 && firstTestIndex < firstNonTestIndex) {
+    findings.push("Task ordering inversion: a test-authoring task is scheduled before the implementation it verifies; reorder so implementation precedes its tests.");
+  }
+
+  // Coverage (soft heuristic): a multi-node scope should be reflected in task text.
+  if (scopeNodeTitles.length > 1 && tasks.length) {
+    const haystack = tasks.map((task) => `${task.title} ${task.summary ?? ""}`).join(" \n ").toLowerCase();
+    const uncovered = scopeNodeTitles.filter((title) => title.trim() && !haystack.includes(title.trim().toLowerCase()));
+    if (uncovered.length && (uncovered.length > scopeNodeTitles.length / 2 || tasks.length < Math.ceil(scopeNodeTitles.length / 2))) {
+      findings.push(`Plan may not cover all in-scope nodes (${uncovered.slice(0, 6).join(", ")}); ensure every in-scope node maps to at least one task.`);
+    }
+  }
+
+  // Verification: name a finite check when the project clearly supports one.
+  const hasTaskVerification = tasks.some((task) => task.verificationCommand?.trim() || task.lightVerificationCommand?.trim());
+  const proseHasVerification = planTextHasSection(output, "verification") || /verification\s*(plan|command)/i.test(output);
+  if (hasVerifiableScripts && !hasTaskVerification && !proseHasVerification) {
+    findings.push("No verification named: add a task verificationCommand/lightVerificationCommand or a Verification section describing the finite check to run.");
+  }
+
+  // Inspection (API providers only): local CLI providers inspect in their own
+  // harness, invisible to our tool transcript, so this is advisory there.
+  if (isApiProvider) {
+    const inspected = mcpToolCalls.some((call) =>
+      /read_file/i.test(call.toolName) ||
+      /manage_rules/i.test(call.toolName) ||
+      /list_violations/i.test(call.argumentsJson ?? ""));
+    if (!inspected) {
+      findings.push("Plan authored without inspecting project source: call read_file on the target files (and list_violations) before finalizing the task split.");
+    }
+  }
+
+  // Presentation: the user-facing plan must read as a concrete implementation plan.
+  const missingSections = PLAN_REQUIRED_SECTIONS.filter((section) => !planTextHasSection(output, section));
+  if (missingSections.length) {
+    findings.push(`User-facing plan is missing section(s): ${missingSections.join(", ")}. Write a concrete Goal / Approach / Verification (and Risks / Key Assumptions) plan for the user.`);
+  }
+
+  return { clean: findings.length === 0, findings };
+}
+
+// Best-effort detection of a finite verification command the plan could name.
+// Conservative and stack-aware: only JS/TS projects expose package scripts, so
+// non-JS stacks return false and never trigger a spurious verification finding.
+async function projectHasVerifiableScripts(projectRoot: string): Promise<boolean> {
+  const packageJson = await readJson<{ scripts?: Record<string, string> } | null>(path.join(projectRoot, "package.json"), null);
+  const scripts = packageJson?.scripts ?? {};
+  return ["test", "typecheck", "check", "lint", "build"].some((name) => Boolean(scripts[name]?.trim()));
+}
+
+function inScopeNodeTitles(bundle: ProjectBundle, run: Run): string[] {
+  const nodeIds = run.scope?.kind === "nodes" ? run.scope.nodeIds : [];
+  if (!nodeIds.length) return [];
+  const wanted = new Set(nodeIds);
+  const titles: string[] = [];
+  for (const flow of bundle.flows) {
+    for (const node of flow.nodes) {
+      if (wanted.has(node.id) && node.title.trim()) titles.push(node.title.trim());
+    }
+  }
+  return titles;
+}
+
 function initializeImplementationState(run: Run, patchProposal: PersistedPatchProposal | null): RunImplementationState {
   if (isNoScopeRun(run)) return noScopeImplementationState(run);
   const existing = run.implementation;
@@ -1533,6 +1650,7 @@ function initializeImplementationState(run: Run, patchProposal: PersistedPatchPr
     maxBatches: implementationBatchBudget(plannedTasks, effort),
     currentTaskId: existing?.currentTaskId,
     tasks: plannedTasks,
+    fallbackReason: existing?.fallbackReason ?? (tasks.length ? undefined : IMPLEMENTATION_TASK_FALLBACK_REASON),
     needsMoreWork: existing?.needsMoreWork,
     needsReplan: existing?.needsReplan,
     summary: existing?.summary,
@@ -1638,6 +1756,15 @@ const emptyHandoffRetryGuidance = [
   "2. If the current task is already fully implemented, return an archicodePatch with runSummary.implementationStatus set to \"complete\" and an empty operations array; ArchiCode performs authoritative verification afterward.",
   "Do not return prose or explanation without one of these two structured outputs."
 ].join(" ");
+
+function planRefineGuidance(findings: string[]): string {
+  return [
+    "PLAN REFINEMENT: your previous draft plan has quality gaps. Address every point below, then return an improved archicodePatch that keeps the same planning JSON contract.",
+    ...findings.map((finding, index) => `${index + 1}. ${finding}`),
+    "Inspect any target files you have not yet read (read_file) and check policy findings (list_violations) before finalizing.",
+    "Keep the user-facing plan concrete and project-specific, and return ordered, self-contained implementationTasks with real per-task summaries."
+  ].join(" ");
+}
 
 function sourceAttributionRetryGuidance(error: string): string {
   return [
@@ -6431,7 +6558,7 @@ async function completePlanningRun(projectRoot: string, run: Run, contextText?: 
   try {
     if (await runWasCancelled(projectRoot, run.id)) return;
     let planningUsage: LlmUsage | undefined;
-    const output = await callProviderForRun(projectRoot, run.id, runnableProvider, context, planningPromptSummaryForRun(run), {
+    let output = await callProviderForRun(projectRoot, run.id, runnableProvider, context, planningPromptSummaryForRun(run), {
       projectRoot,
       webSearchEnabled: nativeWebSearchEnabled(bundle.project.settings),
       phase: "planning",
@@ -6446,10 +6573,57 @@ async function completePlanningRun(projectRoot: string, run: Run, contextText?: 
     if (await maybePauseForLocalProviderMcpApproval(projectRoot, run.id, provider, bundle.project.settings, output)) return;
     await writeProviderPlanOutput(projectRoot, run, output);
     if (await runWasCancelled(projectRoot, run.id)) return;
-    const patchProposal = await persistAndMaybeApplyPatchProposal(projectRoot, run.id, output, {
+    let patchProposal = await persistAndMaybeApplyPatchProposal(projectRoot, run.id, output, {
       allowSourceFileAutoApply: false,
       phase: "planning"
     });
+    if (await runWasCancelled(projectRoot, run.id)) return;
+
+    // In-phase self-refinement (high effort only; fast stays one-shot). Gaia
+    // re-plans in the same phase against deterministic findings. The run always
+    // proceeds with the best draft — a plan never fails here.
+    const refineEffort = resolveAutoImplementationEffort(await readRun(projectRoot, run.id).catch(() => run), patchProposal);
+    if (refineEffort === "high") {
+      const isApiProvider = !isLocalProviderKind(provider.kind);
+      const hasVerifiableScripts = await projectHasVerifiableScripts(projectRoot);
+      for (let pass = 1; pass <= PLAN_REFINE_CAP; pass += 1) {
+        if (await runWasCancelled(projectRoot, run.id)) return;
+        const refineBundle = await loadProject(projectRoot);
+        const currentRun = await readRun(projectRoot, run.id).catch(() => run);
+        const report = validatePlanQuality({
+          run: currentRun,
+          output,
+          proposal: patchProposal,
+          scopeNodeTitles: inScopeNodeTitles(refineBundle, currentRun),
+          hasVerifiableScripts,
+          mcpToolCalls: currentRun.mcpToolCalls,
+          isApiProvider
+        });
+        if (report.clean) break;
+        queueRunLogAppend(projectRoot, run.id, "system", `Planning refine pass ${pass}/${PLAN_REFINE_CAP}: ${report.findings.length} plan gap(s) found; ${gaiaAgent.name} is improving the plan. ${report.findings.join(" ")}`);
+        const refineContext = [context, "", planRefineGuidance(report.findings)].join("\n");
+        let refineUsage: LlmUsage | undefined;
+        output = await callProviderForRun(projectRoot, run.id, runnableProvider, refineContext, planningPromptSummaryForRun(run), {
+          projectRoot,
+          webSearchEnabled: nativeWebSearchEnabled(bundle.project.settings),
+          phase: "planning",
+          signal: abortController.signal,
+          onProgress: createProviderProgressLogger(projectRoot, run.id),
+          onUsage: (usage) => { refineUsage = usage; },
+          ...providerCapabilities
+        });
+        await flushRunLogAppends(run.id);
+        if (refineUsage) await persistRunUsage(projectRoot, run.id, "planning", [refineUsage]);
+        if (await runWasCancelled(projectRoot, run.id)) return;
+        if (await maybePauseForLocalProviderMcpApproval(projectRoot, run.id, provider, bundle.project.settings, output)) return;
+        await writeProviderPlanOutput(projectRoot, run, output);
+        if (await runWasCancelled(projectRoot, run.id)) return;
+        patchProposal = await persistAndMaybeApplyPatchProposal(projectRoot, run.id, output, {
+          allowSourceFileAutoApply: false,
+          phase: "planning"
+        });
+      }
+    }
     if (await runWasCancelled(projectRoot, run.id)) return;
     const nextBundle = await loadProject(projectRoot);
     const openQuestions = scopeOpenQuestions(nextBundle, run.flowId, run.nodeId);
@@ -6521,6 +6695,11 @@ async function completePlanningRun(projectRoot: string, run: Run, contextText?: 
           : []),
         ...(!canCode && !mustReviewPlan
           ? [{ at: iso(), stream: "system" as const, text: "Provider is planning/proposal only; no coding phase was started." }]
+          : []),
+        // Surface the generic-fallback case instead of silently pretending a
+        // task split existed: coding still proceeds, just from one broad task.
+        ...(canCode && !isNoScopeRun(latestPlanningRun) && implementation?.fallbackReason
+          ? [{ at: iso(), stream: "system" as const, text: implementation.fallbackReason }]
           : [])
       ],
       contextArtifacts: mcpArtifact ? [...latestPlanningRun.contextArtifacts, mcpArtifact.id] : latestPlanningRun.contextArtifacts,

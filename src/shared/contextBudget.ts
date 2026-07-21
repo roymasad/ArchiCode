@@ -105,25 +105,74 @@ export function inferModelContextTokens(provider?: Provider): { tokens: number; 
     ? { tokens: 200000, source: "known-model" }
     : { tokens: 128000, source: "fallback" };
   if (knownFloor) return { tokens: knownFloor, source: "known-model" };
-  if (model.includes("gpt-5.5") || model.includes("gpt-5.4")) return { tokens: model.includes("mini") || model.includes("nano") ? 400000 : 1000000, source: "known-model" };
-  if (model.includes("claude-fable-5") || model.includes("claude-opus-4-8") || model.includes("claude-sonnet-4-6")) return { tokens: 1000000, source: "known-model" };
-  if (model.includes("claude-haiku-4-5")) return { tokens: 200000, source: "known-model" };
-  if (model.includes("claude")) return { tokens: 200000, source: "known-model" };
-  if (model.includes("gpt-5")) return { tokens: 400000, source: "known-model" };
-  if (model.includes("gpt-4.1") || model.includes("gpt-4o") || model.includes("o3") || model.includes("o4")) return { tokens: 128000, source: "known-model" };
-  if (model.includes("qwen") || model.includes("llama")) return { tokens: 128000, source: "known-model" };
-  if (model.includes("deepseek")) return { tokens: 64000, source: "known-model" };
+  const knownModelTokens = knownContextWindowTokensForModel(model);
+  if (knownModelTokens) return { tokens: knownModelTokens, source: "known-model" };
   if (model.includes("mini") || model.includes("haiku")) return { tokens: 64000, source: "known-model" };
   if (model.includes("local") || model.includes("manual")) return { tokens: 32000, source: "fallback" };
   return { tokens: 64000, source: "fallback" };
 }
 
 function knownContextWindowFloorForProvider(provider: Provider): number | undefined {
-  const model = (provider.kind === "codex-local"
+  const model = provider.kind === "codex-local"
     ? provider.model?.trim() || codexLocalDefaultModel
-    : provider.model?.trim() ?? "").toLowerCase();
+    : provider.model?.trim();
+  if (!model) return undefined;
+  if (provider.kind === "codex-local" && !model.toLowerCase().includes("gpt-5.6")) return undefined;
+  return knownContextWindowFloorTokensForModel(model);
+}
+
+export function knownContextWindowTokensForModel(modelId?: string): number | undefined {
+  const model = modelId?.toLowerCase().trim() ?? "";
+  if (!model) return undefined;
   if (model.includes("gpt-5.6")) return 1050000;
+  if (model.includes("gemini")) return knownGeminiContextWindow(model);
+  if (model.includes("grok-build") || model.includes("grok-code-fast")) return 256000;
+  if (model.includes("grok-4.5") || model.includes("grok-4-5")) return 500000;
+  if (model.includes("grok")) return 1000000;
+  if (model.includes("kimi") || model.includes("moonshot")) return knownKimiContextWindow(model);
+  if (model.includes("minimax-m3") || model.includes("minimax")) return 1000000;
+  if (model.includes("qwen-long")) return 10000000;
+  if (model.includes("qwen3.8") || model.includes("qwen3.7") || model.includes("qwen3.6")) return 1000000;
+  if (model.includes("qwen3-max")) return 256000;
+  if (model.includes("qwen")) return 128000;
+  if (model.includes("deepseek-v4")) return 1000000;
+  if (model.includes("deepseek")) return 64000;
+  if (model.includes("gpt-5.5") || model.includes("gpt-5.4")) return model.includes("mini") || model.includes("nano") ? 400000 : 1000000;
+  if (model.includes("claude-fable-5") || model.includes("claude-opus-4-8") || model.includes("claude-sonnet-4-6")) return 1000000;
+  if (model.includes("claude-haiku-4-5")) return 200000;
+  if (model.includes("claude")) return 200000;
+  if (model.includes("gpt-5")) return 400000;
+  if (model.includes("gpt-4.1") || model.includes("gpt-4o") || model.includes("o3") || model.includes("o4")) return 128000;
+  if (model.includes("llama")) return 128000;
   return undefined;
+}
+
+export function knownContextWindowFloorTokensForModel(modelId?: string): number | undefined {
+  const model = modelId?.toLowerCase().trim() ?? "";
+  if (!model) return undefined;
+  if (model.includes("gpt-5.6")) return 1050000;
+  if (model.includes("gemini")) return knownGeminiContextWindow(model);
+  if (model.includes("grok-build") || model.includes("grok-code-fast")) return 256000;
+  if (model.includes("grok-4.5") || model.includes("grok-4-5")) return 500000;
+  if (model.includes("grok")) return 1000000;
+  if (model.includes("kimi") || model.includes("moonshot")) return knownKimiContextWindow(model);
+  if (model.includes("minimax-m3") || model.includes("minimax")) return 1000000;
+  if (model.includes("qwen-long")) return 10000000;
+  if (model.includes("qwen3.8") || model.includes("qwen3.7") || model.includes("qwen3.6")) return 1000000;
+  if (model.includes("deepseek-v4")) return 1000000;
+  return undefined;
+}
+
+function knownGeminiContextWindow(model: string): number {
+  if (model.includes("1.5-pro") || model.includes("2.0-pro")) return 2000000;
+  return 1000000;
+}
+
+function knownKimiContextWindow(model: string): number {
+  if (model.includes("k3")) return 1000000;
+  const moonshotWindow = model.match(/moonshot-v1-(8|32|128)k/);
+  if (moonshotWindow?.[1]) return Number(moonshotWindow[1]) * 1000;
+  return 262144;
 }
 
 export function deriveResearchChatContextPlan(settings: ProjectSettings): ResearchChatContextPlan {

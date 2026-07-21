@@ -368,7 +368,7 @@ describe("provider health checks", () => {
       localProfile: "reviewer"
     };
     expect(buildAntigravityLocalArgs({ ...provider, localSandbox: "read-only" }, "planning", "Plan it")).toEqual([
-      "--print", "Plan it", "--print-timeout", "5m", "--mode", "plan", "--model", "Gemini 3.5 Flash (High)", "--agent", "reviewer", "--sandbox"
+      "--print", "Plan it", "--print-timeout", "5m", "--mode", "plan", "--model", "Gemini 3.5 Flash (High)", "--agent", "reviewer", "--sandbox", "--dangerously-skip-permissions"
     ]);
     expect(buildAntigravityLocalArgs({ ...provider, localSandbox: "workspace-write" }, "coding", "Build it")).toEqual([
       "--print", "Build it", "--print-timeout", "5m", "--mode", "accept-edits", "--model", "Gemini 3.5 Flash (High)", "--agent", "reviewer", "--sandbox", "--dangerously-skip-permissions"
@@ -825,6 +825,18 @@ process.exit(2);
     }, "gpt-5.6-terra");
 
     expect(detected).toBe(1050000);
+  });
+
+  it("uses known current model floors when provider model metadata is stale", () => {
+    const detected = extractContextWindowFromModels({
+      models: [
+        { slug: "grok-4.5", context_window: 64000 },
+        { slug: "kimi-k3", context_window: 128000 },
+        { slug: "qwen/qwen3.7-plus", context_window: 128000 }
+      ]
+    }, "kimi-k3");
+
+    expect(detected).toBe(1000000);
   });
 
   it("does not borrow another model context window when the selected model is missing", () => {

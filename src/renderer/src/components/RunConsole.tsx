@@ -121,10 +121,25 @@ function statusLabel(status: Run["status"]): string {
   return status;
 }
 
+function implementationFallbackReason(run: Run): string | null {
+  if (run.implementation?.fallbackReason) return run.implementation.fallbackReason;
+  return run.logs.find((line) => /Planning produced no explicit task split after refinement/i.test(line.text))?.text ?? null;
+}
+
+function implementationFallbackSummary(run: Run): string | null {
+  const fallbackReason = implementationFallbackReason(run);
+  if (!fallbackReason) return null;
+  if ((run.status === "succeeded" || run.status === "failed" || run.status === "cancelled") && run.runInstructions) {
+    return `${fallbackReason} Final status: ${run.runInstructions}`;
+  }
+  return fallbackReason;
+}
+
 function runHeadline(run: Run, openQuestionCount = 0, runs: Run[] = []): string {
   if (isRunErrorResolved(run, runs)) return "Run error resolved";
   const failure = runFailureDetails(run, runs);
   if (failure) return failure.title;
+  if (implementationFallbackReason(run) && run.status === "succeeded") return "Completed with planning fallback";
   if (hasProblemNoSourceChanges(run)) return "Run produced no code changes";
   if (run.status === "preparing") return "Preparing the run";
   if (run.status === "needs-permission") return run.sourceReview ? "Deletion needs your approval" : "Waiting for your approval";
@@ -178,6 +193,8 @@ function runSummary(run: Run, runs: Run[] = []): string {
       : "No source-change artifact was recorded for this manual code review. Reject with guidance or cancel this run.";
   }
   if (run.status === "needs-replan") return run.runInstructions ?? "Coding found a planning gap. Retry to replan from the captured blocker context.";
+  const fallbackSummary = implementationFallbackSummary(run);
+  if (fallbackSummary && (run.status === "coding" || run.status === "debugging" || run.status === "verifying" || run.status === "succeeded" || run.status === "failed" || run.status === "cancelled")) return fallbackSummary;
   if ((run.status === "succeeded" || run.status === "cancelled") && run.runInstructions) return run.runInstructions;
   const latestProgress = runProgressItems(run, 1)[0];
   if (latestProgress) return latestProgress.detail ? `${latestProgress.label}: ${latestProgress.detail}` : latestProgress.label;
@@ -375,6 +392,7 @@ function workflowTitle(run: Run, openQuestionCount = 0, runs: Run[] = []): strin
   if (run.status === "needs-permission") return run.sourceReview ? "Approve source deletion" : pendingMcpToolCall(run) ? "Approve MCP tool" : `Approve ${run.phase}`;
   if (run.status === "preparing") return "Preparing";
   if (run.status === "planning") return "Planning";
+  if (implementationFallbackReason(run) && run.status === "succeeded") return "Completed with planning fallback";
   if (run.status === "coding") return "Coding";
   if (run.status === "debugging") return "Debugging";
   if (run.status === "needs-replan") return "Needs replan";
@@ -407,6 +425,8 @@ function workflowSummary(run: Run, openQuestionCount = 0, runs: Run[] = []): str
   }
   if (run.status === "preparing") return "ArchiCode is collecting context and preparing the run artifact.";
   if (run.status === "planning") return "The provider is preparing the implementation plan. Open Trace for full text.";
+  const fallbackSummary = implementationFallbackSummary(run);
+  if (fallbackSummary && (run.status === "coding" || run.status === "debugging" || run.status === "verifying" || run.status === "succeeded" || run.status === "failed" || run.status === "cancelled")) return fallbackSummary;
   if (run.status === "coding" || run.status === "debugging") return "The provider is editing files. Progress appears here; full output is in Trace.";
   if (run.status === "needs-replan") return "Coding found that the plan is incomplete or wrong. Retry to send the blocker back through planning, or cancel this run.";
   if (run.status === "verifying") return "Verification is running against the generated change.";
@@ -433,6 +453,7 @@ function workflowTone(run: Run, runs: Run[] = []): RunStageTone {
   if (isRunErrorResolved(run, runs)) return "neutral";
   const failure = runFailureDetails(run, runs);
   if (failure) return runFailureTone(failure.classification);
+  if (implementationFallbackReason(run)) return "warning";
   if (run.status === "failed" || run.status === "cancelled" || hasProblemNoSourceChanges(run)) return "danger";
   if (run.status === "needs-permission" || run.status === "awaiting-plan-review" || run.status === "awaiting-code-review") return "warning";
   if (run.status === "succeeded") return "success";
@@ -782,6 +803,7 @@ export function RunConsole() {
               const noSourceChanges = hasProblemNoSourceChanges(run);
               const errorResolved = isRunErrorResolved(run, runs);
               const failure = runFailureDetails(run, runs);
+              const planningFallback = Boolean(implementationFallbackReason(run));
               const elapsed = runElapsedLabel(run, nowMs);
               return (
                 <button
@@ -803,8 +825,8 @@ export function RunConsole() {
                       <span className="run-queue-live-pulse run-queue-live-pulse-left" />
                     </span>
                   ) : null}
-                  <StatusPill tone={errorResolved ? "neutral" : failure ? runFailureTone(failure.classification) : noSourceChanges ? "danger" : statusTone(run.status)}>
-                    {errorResolved ? "resolved" : failure ? runFailureStatusLabel(failure.classification) : noSourceChanges ? "no changes" : statusLabel(run.status)}
+                  <StatusPill tone={errorResolved ? "neutral" : failure ? runFailureTone(failure.classification) : noSourceChanges ? "danger" : planningFallback ? "warning" : statusTone(run.status)}>
+                    {errorResolved ? "resolved" : failure ? runFailureStatusLabel(failure.classification) : noSourceChanges ? "no changes" : planningFallback ? "fallback" : statusLabel(run.status)}
                   </StatusPill>
                   <small>{queueSummary}</small>
                   <span className="run-queue-duration" title={isActive(run) ? "Elapsed run time" : "Final run time"}>{elapsed}</span>

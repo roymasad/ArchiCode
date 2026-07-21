@@ -980,6 +980,7 @@ export const runImplementationStateSchema = z.object({
   maxBatches: z.number().int().positive().default(6),
   currentTaskId: z.string().optional(),
   tasks: z.array(runImplementationTaskSchema).default([]),
+  fallbackReason: z.string().optional(),
   needsMoreWork: z.boolean().optional(),
   needsReplan: z.object({
     reason: z.string(),
