@@ -111,6 +111,10 @@ import {
 
 import { RuntimeUrlLinks, contextBudgetSourceLabel, contextLabel, defaultSpeechSettings, defaultTtsSettings, encodeWav, formatBytes, formatTokenCount, isMacRuntime, mcpRegistryCategoryLabel, mcpRegistryCategoryOptions, mcpRegistryInitials, mcpRegistrySortOptions, modelHint, modelOptionLabel, modelOptionsForProvider, normalizeSpeechLanguage, openAiEndpointHint, openAiEndpointLabel, openRuntimeUrl, projectSettingsTabs, providerCheckHint, providerDescription, providerSupportsImages, renderRuntimeInsightDetail, renderRuntimeTextWithLinks, runtimeCwdLabel, runtimeUrls, selectedModelImageHint, speechLanguageOptions, mergeAudioChunks } from "./projectToolbarShared";
 
+const ARCHICODE_RELEASES_URL = "https://github.com/roymasad/ArchiCode/releases";
+
+type AppUpdateStatus = Awaited<ReturnType<Window["archicode"]["checkForUpdates"]>>;
+
 const subagentProfiles: SubagentModelProfile[] = ["picasso", "sherlock", "solomon", "delphi"];
 const subagentProfileLabels: Record<SubagentModelProfile, string> = {
   picasso: "Picasso — Graph design",
@@ -318,7 +322,9 @@ export function ProjectToolbar({
   const [selectedExportFlowIds, setSelectedExportFlowIds] = useState<string[]>([]);
   const [exportDocumentBusy, setExportDocumentBusy] = useState(false);
   const [resyncCodebaseOpen, setResyncCodebaseOpen] = useState(false);
-  const [updateNotice, setUpdateNotice] = useState<string | null>(null);
+  const [updateDialogOpen, setUpdateDialogOpen] = useState(false);
+  const [updateCheckBusy, setUpdateCheckBusy] = useState(false);
+  const [updateStatus, setUpdateStatus] = useState<AppUpdateStatus | null>(null);
   const [runtimePanelOpen, setRuntimePanelOpen] = useState(true);
   const [selectedRuntimeLogId, setSelectedRuntimeLogId] = useState<string | null>(null);
   const [runtimeDebugGuidance, setRuntimeDebugGuidance] = useState("");
@@ -1348,12 +1354,44 @@ export function ProjectToolbar({
   }, [checkProvider, draft, pendingModelCheckIds, rootPath, settingsOpen]);
 
   const checkForUpdates = async () => {
+    setUpdateDialogOpen(true);
+    setUpdateStatus(null);
     if (!window.archicode?.checkForUpdates) {
-      setUpdateNotice("Update checks are available in the packaged Electron app.");
+      setUpdateStatus({
+        status: "failed",
+        currentVersion: "unknown",
+        releaseUrl: ARCHICODE_RELEASES_URL,
+        updateChannel: "github",
+        message: "Update checks are available in the packaged Electron app."
+      });
       return;
     }
-    const result = await window.archicode.checkForUpdates();
-    setUpdateNotice(result.message);
+    setUpdateCheckBusy(true);
+    try {
+      const result = await window.archicode.checkForUpdates();
+      setUpdateStatus(result);
+    } catch (error) {
+      setUpdateStatus({
+        status: "failed",
+        currentVersion: "unknown",
+        releaseUrl: ARCHICODE_RELEASES_URL,
+        updateChannel: "github",
+        message: error instanceof Error ? error.message : String(error)
+      });
+    } finally {
+      setUpdateCheckBusy(false);
+    }
+  };
+
+  const openUpdateReleasesPage = async () => {
+    await window.archicode.openExternalUrl(ARCHICODE_RELEASES_URL);
+  };
+
+  const openMicrosoftStoreUpdates = async () => {
+    const opened = await window.archicode.openMicrosoftStoreUpdates?.();
+    if (!opened) {
+      await openUpdateReleasesPage();
+    }
   };
 
   const openProjectDocumentExport = (format: "pdf" | "html") => {
@@ -1714,6 +1752,37 @@ export function ProjectToolbar({
       }
     });
   };
+  const updateDialogTitle = updateCheckBusy
+    ? "Checking for updates"
+    : updateStatus?.status === "available"
+      ? "Update available"
+      : updateStatus?.status === "up-to-date"
+        ? "ArchiCode is current"
+        : "Update check";
+  const updateDialogDescription = updateCheckBusy
+    ? "Checking GitHub Releases for the latest ArchiCode version."
+    : updateStatus?.updateChannel === "windows-store"
+      ? "This installation receives updates through Microsoft Store."
+      : "GitHub Releases are used for public desktop downloads.";
+  const updateStatusTone = updateStatus?.status === "available"
+    ? "accent"
+    : updateStatus?.status === "up-to-date"
+      ? "success"
+      : updateStatus?.status === "failed" || updateStatus?.status === "not-configured"
+        ? "warning"
+        : "neutral";
+  const updateStatusLabel = updateCheckBusy
+    ? "Checking"
+    : updateStatus?.status === "available"
+      ? "New version"
+      : updateStatus?.status === "up-to-date"
+        ? "Latest"
+        : updateStatus?.status === "failed"
+          ? "Unable to check"
+          : updateStatus?.status === "not-configured"
+            ? "Not configured"
+            : "Ready";
+  const updateIsWindowsStore = updateStatus?.updateChannel === "windows-store";
 
   return (
     <>
@@ -2053,7 +2122,7 @@ export function ProjectToolbar({
                   <LayoutGrid size={15} /> Reset layout
                 </MenuItem>
                 <MenuItem
-                  tooltip="Prepared for future GitHub release checks. Currently reports whether update metadata is configured."
+                  tooltip="Check GitHub Releases before opening the download page."
                   onSelect={() => void checkForUpdates()}
                 >
                   <UploadCloud size={15} /> Check for updates
@@ -2074,12 +2143,74 @@ export function ProjectToolbar({
         ) : null}
       </header>
 
-      {updateNotice ? (
-        <div className="toolbar-notice" role="status">
-          <span>{updateNotice}</span>
-          <button type="button" onClick={() => setUpdateNotice(null)}>Dismiss</button>
-        </div>
-      ) : null}
+      <DialogRoot open={updateDialogOpen} onOpenChange={setUpdateDialogOpen}>
+        <DialogContent
+          className="app-update-dialog"
+          title={updateDialogTitle}
+          description={updateDialogDescription}
+        >
+          <div className="app-update-status">
+            <div className={`app-update-symbol app-update-symbol-${updateCheckBusy ? "checking" : updateStatus?.status ?? "idle"}`}>
+              {updateCheckBusy ? (
+                <Loader2 size={22} className="is-spinning" />
+              ) : updateStatus?.status === "up-to-date" ? (
+                <Check size={22} />
+              ) : updateStatus?.status === "failed" || updateStatus?.status === "not-configured" ? (
+                <X size={22} />
+              ) : (
+                <UploadCloud size={22} />
+              )}
+            </div>
+            <div>
+              <Badge tone={updateStatusTone}>{updateStatusLabel}</Badge>
+              <p>{updateStatus?.message ?? "ArchiCode is looking for the latest public version."}</p>
+            </div>
+          </div>
+
+          {updateStatus && updateStatus.status !== "failed" && updateStatus.status !== "not-configured" ? (
+            <div className="app-update-version-grid">
+              <div>
+                <span>Installed</span>
+                <b>{updateStatus.currentVersion}</b>
+              </div>
+              <div>
+                <span>Latest release</span>
+                <b>{updateStatus.latestVersion}</b>
+              </div>
+            </div>
+          ) : null}
+
+          {updateIsWindowsStore ? (
+            <p className="app-update-note">
+              This copy should be updated from Microsoft Store. GitHub downloads are meant for non-Store desktop installs.
+            </p>
+          ) : null}
+
+          <div className="dialog-actions">
+            <Button type="button" onClick={() => void checkForUpdates()} disabled={updateCheckBusy}>
+              {updateCheckBusy ? <Loader2 size={15} className="is-spinning" /> : <RefreshCw size={15} />}
+              <span>Check again</span>
+            </Button>
+            {updateIsWindowsStore ? (
+              <Button type="button" variant="primary" onClick={() => void openMicrosoftStoreUpdates()} disabled={updateCheckBusy}>
+                <ExternalLink size={15} />
+                <span>Open Microsoft Store</span>
+              </Button>
+            ) : (
+              <Button type="button" variant="primary" onClick={() => void openUpdateReleasesPage()} disabled={updateCheckBusy}>
+                <ExternalLink size={15} />
+                <span>GitHub Releases</span>
+              </Button>
+            )}
+            {updateIsWindowsStore ? (
+              <Button type="button" variant="ghost" onClick={() => void openUpdateReleasesPage()} disabled={updateCheckBusy}>
+                <ExternalLink size={14} />
+                <span>View releases</span>
+              </Button>
+            ) : null}
+          </div>
+        </DialogContent>
+      </DialogRoot>
 
       {bundle && visibleRuntimeServices.length && runtimePanelOpen ? (
         <section className="runtime-panel" aria-label="Runtime services">

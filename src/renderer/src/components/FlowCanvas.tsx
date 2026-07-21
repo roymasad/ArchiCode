@@ -32,7 +32,9 @@ import {
   Bot,
   Box,
   Bug,
+  Camera,
   ChevronRight,
+  CheckCircle2,
   CircleHelp,
   CircleDot,
   ClipboardList,
@@ -42,6 +44,7 @@ import {
   FileCode2,
   FilePenLine,
   GitBranch,
+  LoaderCircle,
   Map,
   Maximize2,
   Merge,
@@ -59,6 +62,7 @@ import { useShallow } from "zustand/react/shallow";
 import type { ArchicodeNode, ArchitecturePolicyViolation } from "@shared/schema";
 import type { Flow, ResearchChatScope } from "@shared/schema";
 import type { CodeKnowledgeSnapshot } from "@shared/codeKnowledge";
+import type { ExternalCanvasCaptureRequest } from "../../../preload";
 import { isProductionApproved } from "@shared/schema";
 import { visibleEdgesForNodes, visibleNodesForFlow } from "@shared/graph";
 import { gaiaAgent, pandoraAgent } from "@shared/agentIdentities";
@@ -72,6 +76,7 @@ import { getNodeSignalCounts } from "../utils/nodeSignals";
 import { buildFlowGraphPreview } from "../utils/graphChangePreview";
 import { builtInNodeTypes } from "../utils/nodeTypes";
 import { canvasBackgroundStyle } from "../utils/canvasBackgrounds";
+import { canvasCaptureFileName, captureCleanCanvasViewport, captureVisibleCanvasViewport, type CanvasCaptureStatus } from "../utils/canvasCapture";
 import { matches as chordMatches, type KeyChord } from "../utils/keybindings";
 import { inferEdgeHandleSides } from "../utils/graphHandles";
 import { explainNodesPrompt, explainPolicyViolationsPrompt } from "../utils/explainPrompts";
@@ -91,6 +96,8 @@ const minimapContextScale = 4;
 const minimapSize = { width: 196, height: 147 };
 const minimapOffsetScale = ((minimapContextScale - 1) / 2) * minimapSize.width;
 const policyEdgeColor = "#ff3f5f";
+
+const sleep = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms));
 
 function policyNodePairKey(leftNodeId: string, rightNodeId: string): string {
   return leftNodeId < rightNodeId ? `${leftNodeId}\0${rightNodeId}` : `${rightNodeId}\0${leftNodeId}`;
@@ -666,6 +673,7 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
     undoPresentationAction,
     redoPresentationAction,
     addNode,
+    applyResearchCanvasAction,
     canvasViewport,
     setCanvasViewport,
     setCanvasViewportCenter,
@@ -712,6 +720,7 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
     undoPresentationAction: state.undoPresentationAction,
     redoPresentationAction: state.redoPresentationAction,
     addNode: state.addNode,
+    applyResearchCanvasAction: state.applyResearchCanvasAction,
     canvasViewport: state.canvasViewport,
     setCanvasViewport: state.setCanvasViewport,
     setCanvasViewportCenter: state.setCanvasViewportCenter,
@@ -743,6 +752,7 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
   const reactFlowRef = useRef<ReactFlowInstance<Node, Edge> | null>(null);
   const suppressNodeClickRef = useRef<string | null>(null);
   const lastCanvasPointerRef = useRef<{ x: number; y: number } | null>(null);
+  const captureStatusTimerRef = useRef<number | null>(null);
   const visibleNodes = useMemo(() => flow ? visibleNodesForFlow(flow, activeSubflowId, searchQuery) : [], [flow, activeSubflowId, searchQuery]);
   const visibleNodeIds = useMemo(() => new Set(visibleNodes.map((node) => node.id)), [visibleNodes]);
   const historicalChangedNodeIds = useMemo(() => new Set(
@@ -818,6 +828,8 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
   }, [setActiveSubflow]);
   const [dragSelection, setDragSelection] = useState<DragSelection | null>(null);
   const [currentCanvasZoom, setCurrentCanvasZoom] = useState(canvasViewport?.zoom ?? 1);
+  const [captureBusy, setCaptureBusy] = useState(false);
+  const [captureStatus, setCaptureStatus] = useState<CanvasCaptureStatus | null>(null);
 
   const overlappingNodeIds = useMemo(() => {
     const rects = visibleNodes.map((node) => {
@@ -948,6 +960,113 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
   useEffect(() => {
     setCanvasNodes(sourceNodes);
   }, [sourceNodes]);
+
+  useEffect(() => () => {
+    if (captureStatusTimerRef.current !== null) window.clearTimeout(captureStatusTimerRef.current);
+  }, []);
+
+  const showCanvasCaptureStatus = useCallback((status: CanvasCaptureStatus) => {
+    setCaptureStatus(status);
+    if (captureStatusTimerRef.current !== null) window.clearTimeout(captureStatusTimerRef.current);
+    captureStatusTimerRef.current = window.setTimeout(() => setCaptureStatus(null), 5000);
+  }, []);
+
+  const captureCanvasViewport = useCallback(async () => {
+    if (captureBusy) return;
+    const projectName = bundle?.project.name ?? "project";
+    const graphLabel = flow?.name ? `graph-${flow.name}` : "graph";
+    setCaptureBusy(true);
+    try {
+      const status = await captureVisibleCanvasViewport(canvasCaptureFileName(projectName, graphLabel), canvasRef.current);
+      if (status) showCanvasCaptureStatus(status);
+    } catch (error) {
+      showCanvasCaptureStatus({ tone: "error", message: error instanceof Error ? error.message : String(error) });
+    } finally {
+      setCaptureBusy(false);
+    }
+  }, [bundle?.project.name, captureBusy, flow?.name, showCanvasCaptureStatus]);
+
+  const respondToExternalCanvasCapture = useCallback(async (request: ExternalCanvasCaptureRequest) => {
+    if (!bundle || request.projectRoot !== bundle.rootPath) return;
+    try {
+      const targetFlow = bundle.flows.find((item) => item.id === request.flowId);
+      if (!targetFlow) throw new Error(`Flow ${request.flowId} was not found.`);
+      const requestedNodes = request.nodeIds.flatMap((nodeId) => {
+        const node = targetFlow.nodes.find((item) => item.id === nodeId);
+        return node ? [node] : [];
+      });
+      if (requestedNodes.length !== request.nodeIds.length) throw new Error("One or more requested nodes were not found.");
+      const groupNodes = request.groupIds.flatMap((groupId) => targetFlow.nodes.filter((node) => node.groupId === groupId));
+      if (request.groupIds.some((groupId) => !targetFlow.groups.some((group) => group.id === groupId))) throw new Error("One or more requested groups were not found.");
+      const targetNodes = [...new globalThis.Map([...requestedNodes, ...groupNodes].map((node) => [node.id, node])).values()];
+      const inferredLayers = new Set(targetNodes.map((node) => node.subflowId ?? null));
+      const targetSubflowId = request.subflowId !== undefined
+        ? request.subflowId
+        : inferredLayers.size === 1
+          ? [...inferredLayers][0]
+          : activeFlowId === targetFlow.id
+            ? activeSubflowId
+            : null;
+      setCanvas3dVisible(false);
+      setKnowledgeMapVisible(false);
+      setKnowledgeMapLayer("architecture");
+      applyResearchCanvasAction(request);
+      const startedAt = Date.now();
+      while (Date.now() - startedAt < 5000) {
+        const state = useArchicodeStore.getState();
+        if (
+          state.activeFlowId === targetFlow.id &&
+          state.activeSubflowId === targetSubflowId &&
+          !state.graphNavigationRequest &&
+          reactFlowRef.current &&
+          canvasRef.current
+        ) {
+          break;
+        }
+        await sleep(50);
+      }
+      const state = useArchicodeStore.getState();
+      if (state.activeFlowId !== targetFlow.id || state.activeSubflowId !== targetSubflowId || state.graphNavigationRequest) {
+        throw new Error("The requested canvas view did not settle before capture.");
+      }
+      await sleep(80);
+      const result = await captureCleanCanvasViewport(
+        `archicode-mcp-canvas-${request.flowId}-${new Date().toISOString().replace(/[:.]/g, "-")}.png`,
+        { destination: "data" },
+        canvasRef.current
+      );
+      if (result.canceled || result.destination !== "data") throw new Error("The canvas screenshot was not returned as image data.");
+      await window.archicode.respondExternalCanvasCaptureRequest?.({
+        requestId: request.requestId,
+        result: {
+          requestId: request.requestId,
+          projectRoot: request.projectRoot,
+          flowId: request.flowId,
+          subflowId: targetSubflowId,
+          nodeIds: request.nodeIds,
+          groupIds: request.groupIds,
+          label: request.label,
+          mimeType: "image/png",
+          data: result.data,
+          width: result.width,
+          height: result.height,
+          capturedAt: new Date().toISOString()
+        }
+      });
+    } catch (error) {
+      await window.archicode.respondExternalCanvasCaptureRequest?.({
+        requestId: request.requestId,
+        error: error instanceof Error ? error.message : String(error)
+      });
+    }
+  }, [activeFlowId, activeSubflowId, applyResearchCanvasAction, bundle]);
+
+  useEffect(() => {
+    if (!window.archicode?.onExternalCanvasCaptureRequest) return;
+    return window.archicode.onExternalCanvasCaptureRequest((request) => {
+      void respondToExternalCanvasCapture(request);
+    });
+  }, [respondToExternalCanvasCapture]);
 
   const openPolicyViolationSource = useCallback((violation: ArchitecturePolicyViolation) => {
     setPolicyIssuesOpen(false);
@@ -2306,6 +2425,27 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
                 return theme === "dark" ? "#27383c" : "#dceff2";
               }}
             />
+          ) : null}
+          {!historicalInspection ? (
+            <Panel position="bottom-right" className={`canvas-capture-panel${minimapVisible ? " has-minimap" : ""}${policyViolations.length ? " has-policy-overlay" : ""}`}>
+              {captureStatus ? (
+                <div className={`canvas-capture-status is-${captureStatus.tone}`} role="status" aria-live="polite">
+                  {captureStatus.tone === "success" ? <CheckCircle2 size={14} /> : <X size={14} />}
+                  <span>{captureStatus.message}</span>
+                </div>
+              ) : null}
+              <Tooltip content="Capture visible canvas">
+                <button
+                  type="button"
+                  className="canvas-capture-button"
+                  aria-label="Capture visible canvas"
+                  disabled={captureBusy}
+                  onClick={() => void captureCanvasViewport()}
+                >
+                  {captureBusy ? <LoaderCircle className="spin" size={15} /> : <Camera size={15} />}
+                </button>
+              </Tooltip>
+            </Panel>
           ) : null}
           {currentCanvasZoom < nodeDetailZoomThreshold && visibleNodes.length > 0 ? (
             <Panel position="bottom-center" className="canvas-node-detail-hint" role="status">

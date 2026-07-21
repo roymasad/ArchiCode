@@ -411,6 +411,7 @@ describe("renderer UI system", () => {
     const canvas = readFileSync(resolve(repoRoot, "src/renderer/src/components/FlowCanvas.tsx"), "utf8");
     const nodeCard = readFileSync(resolve(repoRoot, "src/renderer/src/components/ArchicodeNodeCard.tsx"), "utf8");
     const css = readFileSync(resolve(repoRoot, "src/renderer/src/styles/app.css"), "utf8");
+    const captureUtil = readFileSync(resolve(repoRoot, "src/renderer/src/utils/canvasCapture.ts"), "utf8");
     const preload = readFileSync(resolve(repoRoot, "src/preload/index.ts"), "utf8");
     const main = readFileSync(resolve(repoRoot, "src/main/index.ts"), "utf8");
 
@@ -424,15 +425,34 @@ describe("renderer UI system", () => {
     expect(history).toContain("graph-history-change-key");
     expect(history).toContain("const selectHistoricalGraph = (commit: string)");
     expect(history).toContain("if (graphHistoryOpen) toggleGraphHistory();");
-    expect(history).toContain("captureCanvasViewport");
-    expect(history).toContain("Capture visible canvas to Downloads");
-    expect(history).toContain("Saved to Downloads");
+    expect(history).not.toContain("captureCanvasViewport");
+    expect(history).not.toContain("Capture visible canvas");
     expect(preload).toContain('ipcRenderer.invoke("archicode:capture-canvas-viewport"');
+    expect(preload).toContain("CanvasCaptureDestination");
+    expect(main).toContain("Where should ArchiCode save this canvas capture?");
+    expect(main).toContain("clipboard.writeImage");
+    expect(main).toContain("dialog.showSaveDialog");
     expect(main).toContain('app.getPath("downloads")');
     expect(main).toContain("event.sender.capturePage");
     expect(canvas).toContain("historicalChangedNodeIds");
+    expect(canvas).toContain("canvas-capture-panel");
+    expect(canvas).toContain("captureVisibleCanvasViewport");
+    expect(captureUtil).toContain('document.body.classList.add("is-canvas-capture-exporting")');
+    expect(captureUtil).toContain('canvas.classList.add("is-canvas-capture-exporting")');
+    expect(captureUtil).toContain('document.body.classList.remove("is-canvas-capture-exporting")');
+    expect(captureUtil).toContain('canvas.classList.remove("is-canvas-capture-exporting")');
+    expect(canvas).toContain('policyViolations.length ? " has-policy-overlay" : ""');
     expect(nodeCard).toContain("is-historical-change");
     expect(css).toContain(".flow-node.is-historical-change");
+    expect(css).toContain(".canvas-capture-button");
+    expect(css).toContain("body.is-canvas-capture-exporting .react-flow__panel");
+    expect(css).toContain("body.is-canvas-capture-exporting .react-flow__attribution");
+    expect(css).not.toContain("body.is-canvas-capture-exporting .canvas-scope-breadcrumb");
+    expect(css).toContain("--canvas-overlay-gap: 4px;");
+    expect(css).toContain("--canvas-minimap-height: 147px;");
+    expect(css).toContain("--canvas-minimap-gap: 10px;");
+    expect(css).toContain("calc(var(--canvas-minimap-bottom) + var(--canvas-minimap-height) + var(--canvas-minimap-gap))");
+    expect(css).toContain("calc(var(--canvas-policy-trigger-bottom) + var(--canvas-policy-trigger-size) + var(--canvas-overlay-gap))");
   });
 
   it("persists and restores canvas pan and zoom for existing projects", () => {
@@ -1459,6 +1479,10 @@ describe("renderer UI system", () => {
     expect(canvas).toContain("instance.fitView");
     expect(canvas).toContain("instance.setCenter");
     expect(canvas).toContain("instance.zoomTo");
+    expect(canvas).toContain("onExternalCanvasCaptureRequest");
+    expect(canvas).toContain("respondExternalCanvasCaptureRequest");
+    expect(canvas).toContain("captureCleanCanvasViewport");
+    expect(canvas).toContain('{ destination: "data" }');
   });
 
   it("renders project-local research links through a guarded app opener", () => {
@@ -2052,11 +2076,16 @@ describe("renderer UI system", () => {
     expect(preload).toContain("archicode:regenerate-external-mcp-host-token");
     expect(preload).toContain("onExternalProjectUpdated");
     expect(preload).toContain("archicode:external-project-updated");
+    expect(preload).toContain("onExternalCanvasCaptureRequest");
     expect(main).toContain("syncExternalMcpHost");
     expect(main).toContain("setExternalMcpProjectUpdatePublisher");
+    expect(main).toContain("setExternalMcpCanvasCaptureRequester");
+    expect(main).toContain("archicode:external-canvas-capture-request");
 
     const host = readFileSync(resolve(repoRoot, "src/main/mcpHost.ts"), "utf8");
     expect(host).toContain("archicode_get_scoped_change_context");
+    expect(host).toContain("archicode_capture_canvas");
+    expect(host).toContain('type: "image"');
     expect(host).toContain("persistArtifacts");
     expect(host).toContain("default_tools_approval_mode: auto");
     expect(host).toContain("default_tools_approval_mode, mcp-session-id");

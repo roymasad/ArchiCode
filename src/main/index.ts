@@ -1,6 +1,7 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, Notification, powerSaveBlocker, safeStorage, session, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, Notification, powerSaveBlocker, safeStorage, session, shell } from "electron";
 import type { MenuItemConstructorOptions, OpenDialogOptions, SaveDialogOptions } from "electron";
 import { execFile, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { existsSync, watch as watchFs, type FSWatcher } from "node:fs";
 import { appendFile, mkdir, readFile, realpath, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -14,6 +15,7 @@ import { exportDrawioFlow, exportFlow, exportProjectBundle, importDrawioFlow, im
 import { exportProjectDocument, type ProjectDocumentExportFormat } from "./storage/projectDocumentExport";
 import { checkProjectProvider, createProjectSkill, importProjectMcpServers, installProjectMcpRegistryServer, listMcpServers, listProjectSkills, refreshProjectMcpServerCapabilities, searchMcpRegistry, updateMcpServer } from "./storage/mcpSettings";
 import { addNote, attachNodeReferences, deleteNote, purgeResolvedNotes, purgeSystemNotes, updateNotePinned, updateNoteResolved } from "./storage/notes";
+import { mediaTypeForFile } from "./storage/artifacts";
 import { applyPatchProposal, listPatchProposals, readArtifactDataUrl, readArtifactText } from "./storage/patches";
 import { applyPresentationPatch, archicodeGitAttributesStatus, checkGlobalProvider, createProject, deleteProjectState, enableArchicodeGitAttributes, ensureEmptyCodebaseProject, ensureProject, loadProject, repairProject, saveFlow, setGlobalMcpSettingsStore, setGlobalProviderSettingsStore, updateNode, updateProjectDetails, updateProjectSettings } from "./storage/projectStore";
 import { approveRun, cancelRun, dismissRunError, rejectRun, removeRunFromQueue, reportBug, retryRun, runAgent, startAgentRun, startDebuggingRun, startIncidentDebugRun, startRunProfile, startRuntimeDebugRun, updateBugIncident } from "./storage/runEngine";
@@ -69,9 +71,12 @@ import { archiveResearchChat, createResearchChat, forkResearchChat, listResearch
 import {
   getExternalMcpHostStatus,
   regenerateExternalMcpHostAuth,
+  setExternalMcpCanvasCaptureRequester,
   setExternalMcpProjectUpdatePublisher,
   stopExternalMcpHost,
   syncExternalMcpHost,
+  type ExternalCanvasCaptureRequest,
+  type ExternalCanvasCaptureResult,
   type ExternalMcpHostStatus
 } from "./mcpHost";
 import {
@@ -110,7 +115,7 @@ import {
 } from "./tts";
 import { parseGlobalResearchPersonality, parseGlobalResearchVerbosity, type GlobalResearchPersonality, type GlobalResearchVerbosity } from "../shared/researchPersonality";
 import { shutdownLocalProviderProcesses } from "./providers/localCli";
-import { projectStatePath, readJson, sha256File, writeJson } from "./storage/persistence";
+import { projectStatePath, readJson, safeFileName, sha256File, writeJson } from "./storage/persistence";
 import { setDelphiToolCacheRoot } from "./testing/toolCache";
 import {
   mergeProjectMaintenanceChanges,
@@ -1028,6 +1033,53 @@ async function resolveProjectLocalPath(projectRoot: string, relativePath: string
   }
   const entryStat = await stat(candidateRealPath);
   return { absolutePath: candidateRealPath, isDirectory: entryStat.isDirectory() };
+}
+
+function clipboardImageExtension(mediaType: string): string {
+  if (mediaType === "image/png") return ".png";
+  if (mediaType === "image/jpeg") return ".jpg";
+  if (mediaType === "image/gif") return ".gif";
+  if (mediaType === "image/webp") return ".webp";
+  throw new Error("Only PNG, JPEG, GIF, and WebP clipboard images are supported.");
+}
+
+async function stageResearchClipboardImage(
+  projectRoot: string,
+  input: { fileName?: string; mediaType?: string; data?: ArrayBuffer | Uint8Array | Buffer }
+): Promise<string> {
+  if (!projectRoot || !existsSync(projectRoot)) throw new Error("Project folder was not found.");
+  const mediaType = typeof input.mediaType === "string" ? input.mediaType : "";
+  const ext = clipboardImageExtension(mediaType);
+  if (!input.data) throw new Error("Clipboard image data was empty.");
+  const bytes = Buffer.from(input.data instanceof ArrayBuffer ? new Uint8Array(input.data) : input.data);
+  if (!bytes.length) throw new Error("Clipboard image data was empty.");
+  if (bytes.length > 25 * 1024 * 1024) throw new Error("Clipboard image is too large to attach.");
+
+  const root = await realpath(projectRoot);
+  const stagingDir = path.join(root, ".archicode", "tmp", "research-clipboard");
+  await mkdir(stagingDir, { recursive: true });
+  const pastedName = typeof input.fileName === "string" && input.fileName.trim()
+    ? input.fileName.trim()
+    : "clipboard-image";
+  const baseName = safeFileName(path.basename(pastedName, path.extname(pastedName)) || "clipboard-image");
+  const fileName = safeFileName(`${baseName}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 8)}${ext}`);
+  const targetPath = path.join(stagingDir, fileName);
+  await writeFile(targetPath, bytes);
+  return targetPath;
+}
+
+async function readResearchAttachmentImagePreview(filePath: string): Promise<string> {
+  if (typeof filePath !== "string" || !filePath || filePath.includes("\0") || !path.isAbsolute(filePath)) {
+    throw new Error("Attachment path is invalid.");
+  }
+  const mediaType = mediaTypeForFile(filePath);
+  if (!mediaType.startsWith("image/")) throw new Error("Attachment is not a supported image.");
+  const absolutePath = await realpath(filePath);
+  const entryStat = await stat(absolutePath);
+  if (entryStat.isDirectory()) throw new Error("Expected an image file.");
+  if (entryStat.size > 25 * 1024 * 1024) throw new Error("Image is too large to preview.");
+  const bytes = await readFile(absolutePath);
+  return `data:${mediaType};base64,${bytes.toString("base64")}`;
 }
 
 async function openProjectPath(projectRoot: string, relativePath: string): Promise<boolean> {
@@ -1962,6 +2014,35 @@ async function dismissProjectMaintenanceWarning(projectRoot: string): Promise<Pr
   return next;
 }
 
+const externalCanvasCaptureRequests = new Map<string, {
+  resolve: (result: ExternalCanvasCaptureResult) => void;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
+}>();
+
+function requestExternalCanvasCapture(
+  projectRoot: string,
+  request: Omit<ExternalCanvasCaptureRequest, "requestId" | "projectRoot">
+): Promise<ExternalCanvasCaptureResult> {
+  const windows = BrowserWindow.getAllWindows().filter((win) => !win.isDestroyed());
+  if (!windows.length) throw new Error("No open ArchiCode window is available for canvas screenshots.");
+  const requestId = randomUUID();
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      externalCanvasCaptureRequests.delete(requestId);
+      reject(new Error("Timed out waiting for the ArchiCode canvas to return a screenshot."));
+    }, 8000);
+    externalCanvasCaptureRequests.set(requestId, { resolve, reject, timer });
+    for (const win of windows) {
+      win.webContents.send("archicode:external-canvas-capture-request", {
+        ...request,
+        requestId,
+        projectRoot
+      });
+    }
+  });
+}
+
 function registerIpc(): void {
   setRunUpdatePublisher((projectRoot, run) => {
     const key = runNotificationKey(projectRoot, run.id);
@@ -1984,11 +2065,12 @@ function registerIpc(): void {
       win.webContents.send("archicode:external-project-updated", { projectRoot, ...payload });
     }
   });
+  setExternalMcpCanvasCaptureRequester(requestExternalCanvasCapture);
 
   ipcMain.handle("archicode:app-version", () => app.getVersion());
   ipcMain.handle("archicode:default-root", () => lastProjectRoot());
   ipcMain.handle("archicode:list-recent-projects", () => listRecentProjects());
-  ipcMain.handle("archicode:check-for-updates", () => checkForAppUpdate(app.getVersion()));
+  ipcMain.handle("archicode:check-for-updates", () => checkForAppUpdate(app.getVersion(), undefined, { windowsStore: process.windowsStore }));
   ipcMain.handle("archicode:get-global-providers", async () =>
     (await globalProviders({ includeSecrets: true })) ?? applyPlatformCodexLocalDefaults(createSeedProject("", { includeProviderTemplates: false }).project.settings.providers)
   );
@@ -2110,14 +2192,25 @@ function registerIpc(): void {
     await shell.openExternal(parsed.toString());
     return true;
   });
+  ipcMain.handle("archicode:open-microsoft-store-updates", async () => {
+    if (process.platform !== "win32") return false;
+    await shell.openExternal("ms-windows-store://downloadsandupdates");
+    return true;
+  });
   ipcMain.handle("archicode:show-system-notification", async (_event, input: { title: string; body?: string }) => {
     return showSystemNotification(input, "renderer request");
   });
   ipcMain.handle("archicode:capture-canvas-viewport", async (
     event,
     bounds: { x: number; y: number; width: number; height: number },
-    suggestedName: string
-  ): Promise<{ filePath: string; fileName: string }> => {
+    suggestedName: string,
+    options?: { destination?: "ask" | "clipboard" | "downloads" | "custom" | "data" }
+  ): Promise<
+    | { destination: "clipboard"; canceled?: false }
+    | { destination: "data"; data: string; dataUrl: string; width: number; height: number; canceled?: false }
+    | { destination: "downloads" | "custom"; filePath: string; fileName: string; canceled?: false }
+    | { destination: "ask" | "clipboard" | "downloads" | "custom" | "data"; canceled: true }
+  > => {
     const x = Math.max(0, Math.round(bounds.x));
     const y = Math.max(0, Math.round(bounds.y));
     const width = Math.min(16_384, Math.round(bounds.width));
@@ -2128,11 +2221,70 @@ function registerIpc(): void {
       .replace(/^-+|-+$/g, "")
       .slice(0, 140) || "archicode-graph-proof";
     const fileName = `${safeStem}.png`;
-    const filePath = path.join(app.getPath("downloads"), fileName);
+    let destination = options?.destination ?? "ask";
+    const win = BrowserWindow.fromWebContents(event.sender) ?? BrowserWindow.getFocusedWindow();
+    if (destination === "ask") {
+      const prompt = win
+        ? await dialog.showMessageBox(win, {
+            type: "question",
+            title: "Capture canvas",
+            message: "Where should ArchiCode save this canvas capture?",
+            buttons: ["Clipboard", "Downloads", "Custom...", "Cancel"],
+            defaultId: 1,
+            cancelId: 3,
+            noLink: true
+          })
+        : await dialog.showMessageBox({
+            type: "question",
+            title: "Capture canvas",
+            message: "Where should ArchiCode save this canvas capture?",
+            buttons: ["Clipboard", "Downloads", "Custom...", "Cancel"],
+            defaultId: 1,
+            cancelId: 3,
+            noLink: true
+          });
+      if (prompt.response === 3) return { destination: "ask", canceled: true };
+      destination = prompt.response === 0 ? "clipboard" : prompt.response === 2 ? "custom" : "downloads";
+    }
+    let filePath = destination === "downloads" ? path.join(app.getPath("downloads"), fileName) : "";
+    if (destination === "custom") {
+      const saveOptions: SaveDialogOptions = {
+        title: "Save canvas capture",
+        defaultPath: path.join(app.getPath("downloads"), fileName),
+        filters: [{ name: "PNG image", extensions: ["png"] }],
+        properties: ["createDirectory"]
+      };
+      const result = win ? await dialog.showSaveDialog(win, saveOptions) : await dialog.showSaveDialog(saveOptions);
+      if (result.canceled || !result.filePath) return { destination: "custom", canceled: true };
+      filePath = path.extname(result.filePath) ? result.filePath : `${result.filePath}.png`;
+    }
     const image = await event.sender.capturePage({ x, y, width, height });
     if (image.isEmpty()) throw new Error("ArchiCode could not capture the visible canvas.");
+    if (destination === "data") {
+      const data = image.toPNG().toString("base64");
+      const size = image.getSize();
+      return { destination: "data", data, dataUrl: `data:image/png;base64,${data}`, width: size.width, height: size.height };
+    }
+    if (destination === "clipboard") {
+      clipboard.writeImage(image);
+      return { destination: "clipboard" };
+    }
     await writeFile(filePath, image.toPNG());
-    return { filePath, fileName };
+    return { destination, filePath, fileName: path.basename(filePath) };
+  });
+  ipcMain.handle("archicode:external-canvas-capture-response", async (_event, response: {
+    requestId: string;
+    result?: ExternalCanvasCaptureResult;
+    error?: string;
+  }): Promise<boolean> => {
+    const pending = externalCanvasCaptureRequests.get(response.requestId);
+    if (!pending) return false;
+    externalCanvasCaptureRequests.delete(response.requestId);
+    clearTimeout(pending.timer);
+    if (response.error) pending.reject(new Error(response.error));
+    else if (response.result) pending.resolve(response.result);
+    else pending.reject(new Error("The ArchiCode canvas returned an empty screenshot response."));
+    return true;
   });
   ipcMain.handle("archicode:pick-image-files", async () => {
     const win = BrowserWindow.getFocusedWindow();
@@ -2149,6 +2301,12 @@ function registerIpc(): void {
     const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options);
     return result.canceled ? [] : result.filePaths;
   });
+  ipcMain.handle("archicode:stage-research-clipboard-image", async (_event, projectRoot: string, input) =>
+    stageResearchClipboardImage(projectRoot, input)
+  );
+  ipcMain.handle("archicode:read-research-attachment-image-preview", async (_event, filePath: string) =>
+    readResearchAttachmentImagePreview(filePath)
+  );
   ipcMain.handle("archicode:pick-reference-files", async () => {
     const win = BrowserWindow.getFocusedWindow();
     const options = referenceFileDialogOptions();

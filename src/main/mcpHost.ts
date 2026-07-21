@@ -18,7 +18,7 @@ import { readArtifactText } from "./storage/patches";
 import { ensureExternalMcpHostToken, loadProject, regenerateExternalMcpHostToken } from "./storage/projectStore";
 import { listRuntimeServices } from "./storage/runtimeServices";
 import { applyExternalGraphOperation } from "./research/graphOps";
-import type { Artifact, Note, ProjectBundle, ProjectSettings, RunScope } from "../shared/schema";
+import type { Artifact, Note, ProjectBundle, ProjectSettings, ResearchCanvasAction, ResearchCanvasViewportAction, RunScope } from "../shared/schema";
 import { archicodeCapabilityDigest, archicodeCapabilityVersion, archicodeCurrentProjectOptions } from "../shared/appCapabilities";
 import { redactSensitiveText, sanitizeExternalValue } from "../shared/redaction";
 import { queryCodeKnowledgeSnapshot, type CodeKnowledgeEdge, type CodeKnowledgeQueryInput } from "../shared/codeKnowledge";
@@ -53,6 +53,27 @@ type HostSession = {
   mcpServer: McpServer;
 };
 
+export type ExternalCanvasCaptureRequest = ResearchCanvasAction & {
+  requestId: string;
+  projectRoot: string;
+  label?: string;
+};
+
+export type ExternalCanvasCaptureResult = {
+  requestId: string;
+  projectRoot: string;
+  flowId: string;
+  subflowId: string | null;
+  nodeIds: string[];
+  groupIds: string[];
+  label?: string;
+  mimeType: "image/png";
+  data: string;
+  width: number;
+  height: number;
+  capturedAt: string;
+};
+
 type ToolSpec = {
   name: string;
   description: string;
@@ -69,6 +90,7 @@ const MCP_PATH = "/mcp";
 let runtime: HostRuntime | null = null;
 let lastError: string | undefined;
 let projectUpdatePublisher: ((projectRoot: string, payload: { source: "mcp"; action: string }) => void) | null = null;
+let canvasCaptureRequester: ((projectRoot: string, request: Omit<ExternalCanvasCaptureRequest, "requestId" | "projectRoot">) => Promise<ExternalCanvasCaptureResult>) | null = null;
 
 const ARCHICODE_HOST_VERSION = "0.2.0";
 const idProperty = { type: "string", minLength: 1 } as const;
@@ -254,7 +276,31 @@ const readTools: ToolSpec[] = [
     artifactId: { type: "string" },
     path: { type: "string" },
     maxChars: { type: "integer", minimum: 1000, maximum: 80000 }
-  })
+  }),
+  tool("archicode_capture_canvas", "Ask the open ArchiCode window to navigate the 2D canvas to a flow, detail flow, node set, or group set, then return a PNG screenshot as MCP image content. Use this when an external agent needs to see the actual canvas pixels before deciding what to do next.", {
+    flowId: { type: "string", minLength: 1, description: "Existing target flow id." },
+    subflowId: { type: ["string", "null"], description: "Existing detail-flow id, null for the root layer, or omit to infer it from nodes/groups." },
+    nodeIds: { type: "array", items: { type: "string" }, description: "Existing nodes to select/focus before capture." },
+    groupIds: { type: "array", items: { type: "string" }, description: "Existing groups whose visible member nodes should be selected/focused before capture." },
+    selection: { type: "string", enum: ["replace", "clear", "preserve"], description: "Replace the visual selection with targets, clear it, or preserve the current selection." },
+    label: { type: "string", description: "Optional caller label for the screenshot." },
+    viewport: {
+      type: "object",
+      additionalProperties: false,
+      required: ["mode"],
+      properties: {
+        mode: { type: "string", enum: ["fit", "center", "pan", "zoom-to", "zoom-by", "preserve"] },
+        padding: { type: "number", minimum: 0, maximum: 1 },
+        maxZoom: { type: "number", minimum: 0.035, maximum: 1.35 },
+        x: { type: "number", description: "Flow-space x coordinate for center mode." },
+        y: { type: "number", description: "Flow-space y coordinate for center mode." },
+        zoom: { type: "number", minimum: 0.035, maximum: 1.35, description: "Optional center-mode zoom or required zoom-to level." },
+        dx: { type: "number", description: "Flow-space horizontal pan amount; positive moves toward content on the right." },
+        dy: { type: "number", description: "Flow-space vertical pan amount; positive moves toward content below." },
+        factor: { type: "number", minimum: 0.1, maximum: 10, description: "Relative zoom factor for zoom-by; greater than 1 zooms in." }
+      }
+    }
+  }, ["flowId"])
 ];
 
 const writeTools: ToolSpec[] = [
@@ -390,6 +436,12 @@ export function setExternalMcpProjectUpdatePublisher(
   publisher: ((projectRoot: string, payload: { source: "mcp"; action: string }) => void) | null
 ): void {
   projectUpdatePublisher = publisher;
+}
+
+export function setExternalMcpCanvasCaptureRequester(
+  requester: ((projectRoot: string, request: Omit<ExternalCanvasCaptureRequest, "requestId" | "projectRoot">) => Promise<ExternalCanvasCaptureResult>) | null
+): void {
+  canvasCaptureRequester = requester;
 }
 
 export async function stopExternalMcpHost(): Promise<void> {
@@ -613,7 +665,18 @@ function createMcpServer(projectRoot: string): McpServer {
   });
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     try {
-      const result = sanitizeExternalValue(await callTool(projectRoot, request.params.name, request.params.arguments ?? {}));
+      const rawResult = await callTool(projectRoot, request.params.name, request.params.arguments ?? {});
+      if (isCanvasCaptureResult(rawResult)) {
+        const { data, ...metadata } = rawResult;
+        const result = sanitizeExternalValue(metadata);
+        return {
+          content: [
+            { type: "text", text: JSON.stringify(result.value, null, 2) },
+            { type: "image", data, mimeType: rawResult.mimeType }
+          ]
+        };
+      }
+      const result = sanitizeExternalValue(rawResult);
       return { content: [{ type: "text", text: JSON.stringify(result.value, null, 2) }] };
     } catch (error) {
       return {
@@ -752,6 +815,7 @@ async function callTool(projectRoot: string, name: string, args: Record<string, 
   if (name === "archicode_list_incidents") return recentItems(bundle.incidents.filter((incident) => !optionalStringArg(args, "status") || incident.status === optionalStringArg(args, "status")), integerArg(args, "maxResults", 50, 1, 200));
   if (name === "archicode_list_runtime_services") return runtimeServicesView(projectRoot, integerArg(args, "maxLogs", 50, 0, 200));
   if (name === "archicode_read_artifact") return readArtifact(projectRoot, bundle, optionalStringArg(args, "artifactId"), optionalStringArg(args, "path"), integerArg(args, "maxChars", 40000, 1000, 80000));
+  if (name === "archicode_capture_canvas") return captureCanvas(projectRoot, bundle, args);
   if (name === "archicode_update_project") return applyHostedOperation(projectRoot, name, { kind: "update-project", patch: objectArg(args, "patch") });
   if (name === "archicode_update_flow") return applyHostedOperation(projectRoot, name, { kind: "update-flow", flowId: stringArg(args, "flowId"), patch: objectArg(args, "patch") });
   if (name === "archicode_update_subflow") return applyHostedOperation(projectRoot, name, { kind: "update-subflow", flowId: stringArg(args, "flowId"), subflowId: stringArg(args, "subflowId"), patch: objectArg(args, "patch") });
@@ -890,6 +954,65 @@ async function readArtifact(projectRoot: string, bundle: ProjectBundle, artifact
     truncated: redacted.text.length > maxChars,
     originalChars: rawText.length
   };
+}
+
+async function captureCanvas(projectRoot: string, bundle: ProjectBundle, args: Record<string, unknown>): Promise<ExternalCanvasCaptureResult> {
+  if (!canvasCaptureRequester) {
+    throw new Error("No open ArchiCode renderer is available for canvas screenshots. Open this project in ArchiCode and keep the graph canvas visible.");
+  }
+  const flowId = stringArg(args, "flowId");
+  const flow = requiredFlow(bundle, flowId);
+  const subflowId = args.subflowId === undefined ? undefined : nullableStringArg(args, "subflowId");
+  if (subflowId && !flow.subflows.some((subflow) => subflow.id === subflowId)) {
+    throw new Error(`Subflow ${subflowId} was not found.`);
+  }
+  const nodeIds = stringArrayArg(args, "nodeIds") ?? [];
+  const groupIds = stringArrayArg(args, "groupIds") ?? [];
+  const missingNode = nodeIds.find((nodeId) => !flow.nodes.some((node) => node.id === nodeId));
+  if (missingNode) throw new Error(`Node ${missingNode} was not found.`);
+  const missingGroup = groupIds.find((groupId) => !flow.groups.some((group) => group.id === groupId));
+  if (missingGroup) throw new Error(`Group ${missingGroup} was not found.`);
+  const selection = optionalStringArg(args, "selection") ?? "replace";
+  if (!["replace", "clear", "preserve"].includes(selection)) throw new Error("selection must be replace, clear, or preserve.");
+  const viewport = canvasViewportArg(args);
+  return canvasCaptureRequester(projectRoot, {
+    flowId,
+    subflowId,
+    nodeIds,
+    groupIds,
+    selection: selection as ResearchCanvasAction["selection"],
+    viewport,
+    label: optionalStringArg(args, "label")
+  });
+}
+
+function canvasViewportArg(args: Record<string, unknown>): ResearchCanvasViewportAction {
+  const viewport = args.viewport === undefined ? { mode: "fit", padding: 0.24, maxZoom: 1.08 } : objectArg(args, "viewport");
+  const mode = typeof viewport.mode === "string" ? viewport.mode : "";
+  if (mode === "preserve") return { mode };
+  if (mode === "fit") {
+    return {
+      mode,
+      padding: numberArg(viewport, "padding", 0.24, 0, 1),
+      maxZoom: numberArg(viewport, "maxZoom", 1.08, 0.035, 1.35)
+    };
+  }
+  if (mode === "center") {
+    return {
+      mode,
+      x: requiredNumberArg(viewport, "x"),
+      y: requiredNumberArg(viewport, "y"),
+      ...(viewport.zoom === undefined ? {} : { zoom: numberArg(viewport, "zoom", 1, 0.035, 1.35) })
+    };
+  }
+  if (mode === "pan") return { mode, dx: requiredNumberArg(viewport, "dx"), dy: requiredNumberArg(viewport, "dy") };
+  if (mode === "zoom-to") return { mode, zoom: numberArg(viewport, "zoom", 1, 0.035, 1.35) };
+  if (mode === "zoom-by") return { mode, factor: numberArg(viewport, "factor", 1, 0.1, 10) };
+  throw new Error("viewport.mode must be fit, center, pan, zoom-to, zoom-by, or preserve.");
+}
+
+function isCanvasCaptureResult(value: unknown): value is ExternalCanvasCaptureResult {
+  return Boolean(value && typeof value === "object" && (value as { mimeType?: unknown }).mimeType === "image/png" && typeof (value as { data?: unknown }).data === "string");
 }
 
 function compactArtifact(artifact: Artifact): Record<string, unknown> {
@@ -1242,6 +1365,20 @@ function integerArg(args: Record<string, unknown>, key: string, fallback: number
   const numeric = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
   if (!Number.isFinite(numeric)) return fallback;
   return Math.min(max, Math.max(min, Math.floor(numeric)));
+}
+
+function numberArg(args: Record<string, unknown>, key: string, fallback: number, min: number, max: number): number {
+  const value = args[key];
+  const numeric = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  if (!Number.isFinite(numeric)) return fallback;
+  return Math.min(max, Math.max(min, numeric));
+}
+
+function requiredNumberArg(args: Record<string, unknown>, key: string): number {
+  const value = args[key];
+  const numeric = typeof value === "number" ? value : typeof value === "string" ? Number(value) : NaN;
+  if (!Number.isFinite(numeric)) throw new Error(`${key} must be a finite number.`);
+  return numeric;
 }
 
 function endpointFor(host: string, port: number): string {

@@ -876,6 +876,9 @@ export const ResearchPanel = memo(function ResearchPanel({
     }
   }, [selectedResearchSessionId, hideGraphChangeSetPreview]);
   const [attachmentPaths, setAttachmentPaths] = useState<string[]>([]);
+  const [attachmentPreviewUrls, setAttachmentPreviewUrls] = useState<Record<string, string>>({});
+  const attachmentPreviewUrlsRef = useRef<Record<string, string>>({});
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
   const [focusHistoryOpen, setFocusHistoryOpen] = useState(() => window.innerWidth > 900);
   const [acceptedByChangeSet, setAcceptedByChangeSet] = useState<Record<string, Set<number>>>({});
@@ -1059,6 +1062,90 @@ export const ResearchPanel = memo(function ResearchPanel({
   const pendingMcpApprovalMessage = selected?.messages.find((message) => message.mcpApprovalRequest);
   const mcpApprovalPending = Boolean(pendingMcpApprovalMessage);
 
+  const addAttachmentPaths = useCallback((filePaths: string[]) => {
+    if (!filePaths.length) return;
+    setAttachmentPaths((current) => [...new Set([...current, ...filePaths])]);
+  }, []);
+
+  const setAttachmentPreviewUrl = useCallback((filePath: string, previewUrl: string) => {
+    const previousUrl = attachmentPreviewUrlsRef.current[filePath];
+    if (previousUrl && previousUrl !== previewUrl) URL.revokeObjectURL(previousUrl);
+    attachmentPreviewUrlsRef.current = {
+      ...attachmentPreviewUrlsRef.current,
+      [filePath]: previewUrl
+    };
+    setAttachmentPreviewUrls(attachmentPreviewUrlsRef.current);
+  }, []);
+
+  const revokeAttachmentPreviewUrl = useCallback((filePath: string) => {
+    const previewUrl = attachmentPreviewUrlsRef.current[filePath];
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    const { [filePath]: _removed, ...next } = attachmentPreviewUrlsRef.current;
+    attachmentPreviewUrlsRef.current = next;
+    setAttachmentPreviewUrls(next);
+  }, []);
+
+  const removeAttachmentPath = useCallback((filePath: string) => {
+    revokeAttachmentPreviewUrl(filePath);
+    setAttachmentPaths((current) => current.filter((item) => item !== filePath));
+  }, [revokeAttachmentPreviewUrl]);
+
+  const clearStagedAttachments = useCallback(() => {
+    for (const previewUrl of Object.values(attachmentPreviewUrlsRef.current)) URL.revokeObjectURL(previewUrl);
+    attachmentPreviewUrlsRef.current = {};
+    setAttachmentPreviewUrls({});
+    setAttachmentPaths([]);
+    setAttachmentError(null);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      for (const previewUrl of Object.values(attachmentPreviewUrlsRef.current)) URL.revokeObjectURL(previewUrl);
+      attachmentPreviewUrlsRef.current = {};
+    };
+  }, []);
+
+  const handlePastedImages = useCallback(async (files: File[]) => {
+    if (mcpApprovalPending || !rootPath || !window.archicode?.stageResearchClipboardImage) return;
+    const stagedPaths: string[] = [];
+    let failedCount = 0;
+    for (const file of files) {
+      try {
+        const filePath = await window.archicode.stageResearchClipboardImage(rootPath, {
+          fileName: file.name || "clipboard-image",
+          mediaType: file.type || "image/png",
+          data: await file.arrayBuffer()
+        });
+        stagedPaths.push(filePath);
+        setAttachmentPreviewUrl(filePath, URL.createObjectURL(file));
+      } catch {
+        failedCount += 1;
+      }
+    }
+    addAttachmentPaths(stagedPaths);
+    setAttachmentError(failedCount
+      ? `Could not attach ${failedCount} pasted image${failedCount === 1 ? "" : "s"}.`
+      : null);
+  }, [addAttachmentPaths, mcpApprovalPending, rootPath, setAttachmentPreviewUrl]);
+
+  const loadAttachmentImagePreviews = useCallback(async (filePaths: string[]) => {
+    const imagePaths = filePaths.filter((filePath) =>
+      isImageAttachmentPath(filePath) && !attachmentPreviewUrlsRef.current[filePath]
+    );
+    if (!imagePaths.length || !window.archicode?.readResearchAttachmentImagePreview) return;
+    let failedCount = 0;
+    await Promise.all(imagePaths.map(async (filePath) => {
+      try {
+        setAttachmentPreviewUrl(filePath, await window.archicode.readResearchAttachmentImagePreview(filePath));
+      } catch {
+        failedCount += 1;
+      }
+    }));
+    setAttachmentError(failedCount
+      ? `Could not preview ${failedCount} selected image${failedCount === 1 ? "" : "s"}.`
+      : null);
+  }, [setAttachmentPreviewUrl]);
+
   useEffect(() => {
     setChatModelValue(persistedChatModelValue);
     setModelSwitchWarning(null);
@@ -1228,7 +1315,7 @@ export const ResearchPanel = memo(function ResearchPanel({
           setComposingNewChat(false);
           clearResearchDraft();
           const attached = attachmentPaths;
-          setAttachmentPaths([]);
+          clearStagedAttachments();
           const rememberedMcpServerIds = selected ? [...(rememberedMcpByChat[selected.id] ?? new Set<string>())] : [];
           researchRevealSubmittedMessageRef.current = !researchBusy;
           await sendResearchMessage(
@@ -1256,6 +1343,7 @@ export const ResearchPanel = memo(function ResearchPanel({
     clearResearchDraft,
     appendResearchDraftText,
     attachmentPaths,
+    clearStagedAttachments,
     mcpApprovalPending,
     rememberedMcpByChat,
     researchBusy,
@@ -2386,16 +2474,16 @@ export const ResearchPanel = memo(function ResearchPanel({
   const submit = async () => {
     if (mcpApprovalPending) return;
     const researchDraft = useArchicodeStore.getState().researchDraft;
-    if (!composerHasContent(researchDraft)) return;
+    if (!composerHasContent(researchDraft) && !attachmentPaths.length) return;
     const serialized = serializeComposerDraft(researchDraft, bundle);
-    const message = serialized.message.trim();
-    if (!message && serialized.referencedNodeIds.length === 0) return;
+    const message = serialized.message.trim() || (attachmentPaths.length === 1 ? "See attached file." : "See attached files.");
+    if (!message && serialized.referencedNodeIds.length === 0 && !attachmentPaths.length) return;
     setComposingNewChat(false);
     researchManualScrollHoldRef.current = false;
     researchScrollFollowRef.current = true;
     clearResearchDraft();
     const attached = attachmentPaths;
-    setAttachmentPaths([]);
+    clearStagedAttachments();
     const rememberedMcpServerIds = selected ? [...(rememberedMcpByChat[selected.id] ?? new Set<string>())] : [];
     // An in-flight session queues the new message outside the transcript. A
     // normal send appends an optimistic user message immediately, so mark that
@@ -2678,7 +2766,7 @@ export const ResearchPanel = memo(function ResearchPanel({
         ].filter(Boolean).join("\n")
       }
     : null;
-  const chatTitle = selected?.title ?? (composingNewChat ? "New chat" : "Chat");
+  const chatTitle = selected?.title ?? (composingNewChat ? "New chat" : "Scope");
 
   if (!bundle || !scope) {
     return (
@@ -3706,8 +3794,45 @@ export const ResearchPanel = memo(function ResearchPanel({
             <ChatComposer
               placeholder={mcpApprovalPending ? "Approve or reject first" : "Ask anything"}
               disabled={mcpApprovalPending}
+              onPasteImages={handlePastedImages}
               onSubmit={() => void submit()}
             />
+            {attachmentPaths.length ? (
+              <div className="research-composer-attachments" aria-label="Staged attachments">
+                {attachmentPaths.map((filePath) => {
+                  const previewUrl = attachmentPreviewUrls[filePath];
+                  const fileName = attachmentFileName(filePath);
+                  return previewUrl ? (
+                    <div key={filePath} className="research-composer-image-attachment" title={fileName}>
+                      <img src={previewUrl} alt={fileName} />
+                      <button
+                        type="button"
+                        aria-label={`Remove ${fileName}`}
+                        title="Remove attachment"
+                        disabled={mcpApprovalPending}
+                        onClick={() => removeAttachmentPath(filePath)}
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      key={filePath}
+                      type="button"
+                      className="research-composer-file-attachment"
+                      title={`Remove ${fileName}`}
+                      disabled={mcpApprovalPending}
+                      onClick={() => removeAttachmentPath(filePath)}
+                    >
+                      {isImageAttachmentPath(filePath) ? <Paperclip size={13} /> : <FileText size={13} />}
+                      <span>{fileName}</span>
+                      <X size={12} />
+                    </button>
+                  );
+                })}
+              </div>
+            ) : null}
+            {attachmentError ? <div className="research-composer-attachment-error">{attachmentError}</div> : null}
             {modelSwitchWarning ? (
               <div className="research-model-switch-warning" role="status" aria-live="polite">
                 <AlertTriangle size={15} aria-hidden="true" />
@@ -3775,7 +3900,11 @@ export const ResearchPanel = memo(function ResearchPanel({
                     const filePaths = await window.archicode?.pickResearchAttachmentFiles?.(
                       providerSupportsImages(chatProvider, chatModelRequest ?? undefined)
                     );
-                    if (filePaths?.length) setAttachmentPaths((current) => [...new Set([...current, ...filePaths])]);
+                    if (filePaths?.length) {
+                      setAttachmentError(null);
+                      addAttachmentPaths(filePaths);
+                      void loadAttachmentImagePreviews(filePaths);
+                    }
                   }}
                 >
                   <Paperclip size={15} />
@@ -3785,7 +3914,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                   <IconButton
                     title="Clear attachments"
                     disabled={mcpApprovalPending}
-                    onClick={() => setAttachmentPaths([])}
+                    onClick={clearStagedAttachments}
                   >
                     <X size={15} />
                   </IconButton>

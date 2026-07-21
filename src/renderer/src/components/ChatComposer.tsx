@@ -128,11 +128,13 @@ type RenderedTrigger =
 export function ChatComposer({
   placeholder,
   disabled,
-  onSubmit
+  onSubmit,
+  onPasteImages
 }: {
   placeholder: string;
   disabled: boolean;
   onSubmit: () => void;
+  onPasteImages?: (files: File[]) => void | Promise<void>;
 }) {
   const bundle = useArchicodeStore((state) => state.bundle);
   const segments = useArchicodeStore((state) => state.researchDraft);
@@ -282,6 +284,38 @@ export function ChatComposer({
     updateTrigger();
   }, [syncFromDom, updateTrigger]);
 
+  const handlePaste = useCallback((event: React.ClipboardEvent<HTMLDivElement>) => {
+    const clipboardData = event.clipboardData;
+    const itemImageFiles = Array.from(clipboardData.items)
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .flatMap((item) => {
+        const file = item.getAsFile();
+        return file ? [file] : [];
+      });
+    const imageFiles = itemImageFiles.length
+      ? itemImageFiles
+      : Array.from(clipboardData.files).filter((file) => file.type.startsWith("image/"));
+    if (!imageFiles.length) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const uniqueImages = imageFiles.filter((file, index) =>
+      imageFiles.findIndex((candidate) =>
+        candidate.name === file.name &&
+        candidate.type === file.type &&
+        candidate.size === file.size &&
+        candidate.lastModified === file.lastModified
+      ) === index
+    );
+    const plainText = clipboardData.getData("text/plain");
+    if (plainText) {
+      document.execCommand("insertText", false, plainText);
+      syncFromDom();
+      updateTrigger();
+    }
+    setRenderedTrigger({ kind: "none" });
+    void onPasteImages?.(uniqueImages);
+  }, [onPasteImages, syncFromDom, updateTrigger]);
+
   const handleKeyDown = useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
     if (renderedTrigger.kind === "popover") {
       const options = renderedTrigger.options;
@@ -331,6 +365,7 @@ export function ChatComposer({
         spellCheck
         data-placeholder={placeholder}
         onInput={handleInput}
+        onPaste={handlePaste}
         onKeyDown={handleKeyDown}
         onBlur={() => setRenderedTrigger({ kind: "none" })}
       />

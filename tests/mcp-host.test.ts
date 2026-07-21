@@ -5,7 +5,7 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { addNote, attachNodeReferences } from "../src/main/storage/notes";
 import { ensureExternalMcpHostToken, ensureFixtureProject, loadProject, updateNode, updateProjectSettings } from "../src/main/storage/projectStore";
-import { getExternalMcpHostStatus, setExternalMcpProjectUpdatePublisher, stopExternalMcpHost, syncExternalMcpHost } from "../src/main/mcpHost";
+import { getExternalMcpHostStatus, setExternalMcpCanvasCaptureRequester, setExternalMcpProjectUpdatePublisher, stopExternalMcpHost, syncExternalMcpHost } from "../src/main/mcpHost";
 import { sanitizeExternalValue } from "../src/shared/redaction";
 import { codeKnowledgeSnapshotSchema } from "../src/shared/codeKnowledge";
 import { writeCodeKnowledgeSnapshot } from "../src/main/importer/knowledgeSnapshot";
@@ -27,6 +27,7 @@ function hostedCodeKnowledgeFixture() {
 
 describe("Hosted ArchiCode MCP", () => {
   afterEach(async () => {
+    setExternalMcpCanvasCaptureRequester(null);
     setExternalMcpProjectUpdatePublisher(null);
     await stopExternalMcpHost();
   });
@@ -72,6 +73,7 @@ describe("Hosted ArchiCode MCP", () => {
     expect(toolNames).toContain("archicode_get_scoped_change_context");
     expect(toolNames).toContain("archicode_get_rules");
     expect(toolNames).toContain("archicode_query_code_graph");
+    expect(toolNames).toContain("archicode_capture_canvas");
     expect(toolNames).toContain("archicode_update_node");
     expect(toolNames).toContain("archicode_update_subflow");
     expect(toolNames).toEqual(expect.arrayContaining([
@@ -99,6 +101,52 @@ describe("Hosted ArchiCode MCP", () => {
       arguments: { scope: "hosted MCP tests" }
     });
     expect(prompt.result.messages[0].content.text).toContain("archicode_get_scoped_change_context");
+  });
+
+  it("returns hosted canvas screenshots as MCP image content", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "archicode-mcp-host-canvas-"));
+    const bundle = await enableHost(root, await freePort());
+    const flow = bundle.flows[0]!;
+    const node = flow.nodes[0]!;
+    const png = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]).toString("base64");
+    setExternalMcpCanvasCaptureRequester(async (projectRoot, request) => ({
+      requestId: "capture-test",
+      projectRoot,
+      flowId: request.flowId,
+      subflowId: request.subflowId ?? null,
+      nodeIds: request.nodeIds,
+      groupIds: request.groupIds,
+      label: request.label,
+      mimeType: "image/png",
+      data: png,
+      width: 800,
+      height: 600,
+      capturedAt: "2026-07-21T10:00:00.000Z"
+    }));
+    const status = await getExternalMcpHostStatus(root, bundle.project.settings);
+    const rpc = await connectRpc(status.endpoint, status.token!);
+
+    const result = await rpc("tools/call", {
+      name: "archicode_capture_canvas",
+      arguments: {
+        flowId: flow.id,
+        nodeIds: [node.id],
+        label: "node focus"
+      }
+    });
+
+    expect(result.result.isError).not.toBe(true);
+    const metadata = JSON.parse(result.result.content[0].text);
+    expect(metadata).toMatchObject({
+      flowId: flow.id,
+      nodeIds: [node.id],
+      label: "node focus",
+      mimeType: "image/png",
+      width: 800,
+      height: 600
+    });
+    expect(metadata.data).toBeUndefined();
+    expect(result.result.content[1]).toMatchObject({ type: "image", data: png, mimeType: "image/png" });
   });
 
   it("exposes bounded local code graph queries over hosted MCP", async () => {

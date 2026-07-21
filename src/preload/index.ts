@@ -1,5 +1,5 @@
 import { clipboard, contextBridge, ipcRenderer, webFrame } from "electron";
-import type { Note, DebugIncident, Flow, LlmPatchProposal, NodePatch, PatchOperationDecision, PresentationPatchRequest, PresentationPatchResult, Project, ProjectBundle, ProjectSettings, ProjectMemoryNote, Artifact, PatchReviewRecord, Run, RunEffort, RunGuidance, RunScope, RuntimeService, ResearchChatScope, ResearchChatSession, ResearchGraphChangeDecision, ResearchGraphChangeResult, ResearchMessageNodeReference } from "../shared/schema";
+import type { Note, DebugIncident, Flow, LlmPatchProposal, NodePatch, PatchOperationDecision, PresentationPatchRequest, PresentationPatchResult, Project, ProjectBundle, ProjectSettings, ProjectMemoryNote, Artifact, PatchReviewRecord, Run, RunEffort, RunGuidance, RunScope, RuntimeService, ResearchCanvasAction, ResearchChatScope, ResearchChatSession, ResearchGraphChangeDecision, ResearchGraphChangeResult, ResearchMessageNodeReference } from "../shared/schema";
 import type { SpeechModelId, SpeechSettings, TtsModelId, TtsSettings, TtsVoiceId } from "../shared/schema";
 import type { TtsModelDownloadProgress, TtsModelStatus, TtsRuntimeStatus, TtsSpeechStreamChunk, TtsSpeechStreamResult, TtsSynthesisResult } from "../main/tts";
 import type {
@@ -55,6 +55,34 @@ export type OpenProjectFolderResult = {
 export type RecentProjectEntry = {
   rootPath: string;
   name: string;
+};
+
+export type CanvasCaptureDestination = "ask" | "clipboard" | "downloads" | "custom" | "data";
+export type CanvasCaptureResult =
+  | { destination: "clipboard"; canceled?: false }
+  | { destination: "data"; data: string; dataUrl: string; width: number; height: number; canceled?: false }
+  | { destination: "downloads" | "custom"; filePath: string; fileName: string; canceled?: false }
+  | { destination: CanvasCaptureDestination; canceled: true };
+
+export type ExternalCanvasCaptureRequest = ResearchCanvasAction & {
+  requestId: string;
+  projectRoot: string;
+  label?: string;
+};
+
+export type ExternalCanvasCaptureResult = {
+  requestId: string;
+  projectRoot: string;
+  flowId: string;
+  subflowId: string | null;
+  nodeIds: string[];
+  groupIds: string[];
+  label?: string;
+  mimeType: "image/png";
+  data: string;
+  width: number;
+  height: number;
+  capturedAt: string;
 };
 
 export type CodebaseMappingResult = {
@@ -290,6 +318,7 @@ const api = {
   maximizeWindow: (): Promise<boolean> => ipcRenderer.invoke("archicode:maximize-window"),
   openProjectInVsCode: (projectRoot: string): Promise<boolean> => ipcRenderer.invoke("archicode:open-project-in-vscode", projectRoot),
   openExternalUrl: (url: string): Promise<boolean> => ipcRenderer.invoke("archicode:open-external-url", url),
+  openMicrosoftStoreUpdates: (): Promise<boolean> => ipcRenderer.invoke("archicode:open-microsoft-store-updates"),
   copyTextToClipboard: (text: string): boolean => {
     clipboard.writeText(text);
     return true;
@@ -298,11 +327,23 @@ const api = {
     ipcRenderer.invoke("archicode:show-system-notification", input),
   captureCanvasViewport: (
     bounds: { x: number; y: number; width: number; height: number },
-    suggestedName: string
-  ): Promise<{ filePath: string; fileName: string }> =>
-    ipcRenderer.invoke("archicode:capture-canvas-viewport", bounds, suggestedName),
+    suggestedName: string,
+    options?: { destination?: CanvasCaptureDestination }
+  ): Promise<CanvasCaptureResult> =>
+    ipcRenderer.invoke("archicode:capture-canvas-viewport", bounds, suggestedName, options),
+  onExternalCanvasCaptureRequest: (handler: (request: ExternalCanvasCaptureRequest) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, request: ExternalCanvasCaptureRequest) => handler(request);
+    ipcRenderer.on("archicode:external-canvas-capture-request", listener);
+    return () => ipcRenderer.removeListener("archicode:external-canvas-capture-request", listener);
+  },
+  respondExternalCanvasCaptureRequest: (response: { requestId: string; result?: ExternalCanvasCaptureResult; error?: string }): Promise<boolean> =>
+    ipcRenderer.invoke("archicode:external-canvas-capture-response", response),
   pickImageFiles: (): Promise<string[]> => ipcRenderer.invoke("archicode:pick-image-files"),
   pickResearchAttachmentFiles: (includeImages = true): Promise<string[]> => ipcRenderer.invoke("archicode:pick-research-attachment-files", includeImages),
+  stageResearchClipboardImage: (projectRoot: string, input: { fileName?: string; mediaType: string; data: ArrayBuffer }): Promise<string> =>
+    ipcRenderer.invoke("archicode:stage-research-clipboard-image", projectRoot, input),
+  readResearchAttachmentImagePreview: (filePath: string): Promise<string> =>
+    ipcRenderer.invoke("archicode:read-research-attachment-image-preview", filePath),
   pickReferenceFiles: (): Promise<string[]> => ipcRenderer.invoke("archicode:pick-reference-files"),
   createProject: (templateId: string): Promise<ProjectBundle | null> => ipcRenderer.invoke("archicode:create-project", templateId),
   saveFlow: (projectRoot: string, flow: Flow): Promise<ProjectBundle> => ipcRenderer.invoke("archicode:save-flow", projectRoot, flow),
