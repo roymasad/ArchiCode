@@ -27,6 +27,27 @@ rmSync(join(buildDir, "icon.iconset"), { recursive: true, force: true });
 
 console.log("Generated build/icon.png, build/icon.ico, and build/icon.icns");
 
+// Windows Store (appx) tile assets. electron-builder reads user tiles from
+// build/appx/ and substitutes its own placeholder samples for any that are
+// missing — those placeholders trip Store policy 10.1.1.11 ("default image").
+// Filenames must match the manifest references in app-builder-lib's AppxTarget.
+const appxDir = join(buildDir, "appx");
+mkdirSync(appxDir, { recursive: true });
+const squareTiles = new Map([
+  ["Square44x44Logo.png", 44],
+  ["StoreLogo.png", 50],
+  ["SmallTile.png", 71], // -> Square71x71Logo in manifest
+  ["Square150x150Logo.png", 150],
+  ["LargeTile.png", 310] // -> Square310x310Logo in manifest
+]);
+for (const [name, size] of squareTiles) {
+  writeFileSync(join(appxDir, name), createPngIcon(size));
+}
+writeFileSync(join(appxDir, "Wide310x150Logo.png"), createTile(310, 150, 0.7));
+writeFileSync(join(appxDir, "SplashScreen.png"), createTile(620, 300, 0.5));
+
+console.log(`Generated ${squareTiles.size + 2} appx tiles in build/appx/`);
+
 function createPngIcon(size) {
   const scale = 3;
   const width = size * scale;
@@ -46,11 +67,38 @@ function createPngIcon(size) {
   return encodePng(size, size, downsample(pixels, width, scale));
 }
 
-function drawCubeMark(pixels, width, unit, cx, cy, radius) {
-  const center = [cx * unit, cy * unit];
+// Renders a (possibly non-square) tile: dark rounded-rect background with the
+// cube mark centered. Used for the wide/splash appx tiles that aren't square.
+function createTile(displayWidth, displayHeight, markScale = 0.62) {
+  const scale = 3;
+  const width = displayWidth * scale;
+  const height = displayHeight * scale;
+  const pixels = new Uint8ClampedArray(width * height * 4);
+  const shortSide = Math.min(width, height);
+  const bgUnit = shortSide / 1024;
+  const radius = 150 * bgUnit;
+
+  fillRoundRect(pixels, width, 0, 0, width, height, radius, [14, 21, 25, 255], height);
+  const inset = 26 * bgUnit;
+  fillRoundRect(pixels, width, inset, inset, width - inset * 2, height - inset * 2, radius - inset, [24, 35, 41, 255], height);
+
+  const unit = (shortSide * markScale) / 1024;
+  const ox = width / 2 - 512 * unit;
+  const oy = height / 2 - 500 * unit;
+  drawCubeMark(pixels, width, unit, 512, 326, 154, height, ox, oy);
+  drawCubeMark(pixels, width, unit, 350, 594, 154, height, ox, oy);
+  drawCubeMark(pixels, width, unit, 674, 594, 154, height, ox, oy);
+  drawLine(pixels, width, ox + 512 * unit, oy + 480 * unit, ox + 350 * unit, oy + 440 * unit, 38 * unit, [238, 251, 255, 255], height);
+  drawLine(pixels, width, ox + 512 * unit, oy + 480 * unit, ox + 674 * unit, oy + 440 * unit, 38 * unit, [238, 251, 255, 255], height);
+
+  return encodePng(displayWidth, displayHeight, downsample(pixels, width, scale, height));
+}
+
+function drawCubeMark(pixels, width, unit, cx, cy, radius, height = width, ox = 0, oy = 0) {
+  const center = [cx * unit + ox, cy * unit + oy];
   const points = Array.from({ length: 6 }, (_, index) => {
     const angle = (-90 + index * 60) * Math.PI / 180;
-    return [(cx + Math.cos(angle) * radius) * unit, (cy + Math.sin(angle) * radius) * unit];
+    return [(cx + Math.cos(angle) * radius) * unit + ox, (cy + Math.sin(angle) * radius) * unit + oy];
   });
   const stroke = 36 * unit;
   const shadow = [0, 8, 10, 115];
@@ -60,19 +108,19 @@ function drawCubeMark(pixels, width, unit, cx, cy, radius) {
   for (const color of [shadow, outer]) {
     const widthBoost = color === shadow ? 12 * unit : 0;
     for (let index = 0; index < points.length; index += 1) {
-      drawLine(pixels, width, points[index][0], points[index][1], points[(index + 1) % points.length][0], points[(index + 1) % points.length][1], stroke + widthBoost, color);
+      drawLine(pixels, width, points[index][0], points[index][1], points[(index + 1) % points.length][0], points[(index + 1) % points.length][1], stroke + widthBoost, color, height);
     }
   }
   for (const pointIndex of [0, 2, 4]) {
-    drawLine(pixels, width, center[0], center[1], points[pointIndex][0], points[pointIndex][1], stroke * 0.82, inner);
+    drawLine(pixels, width, center[0], center[1], points[pointIndex][0], points[pointIndex][1], stroke * 0.82, inner, height);
   }
 }
 
-function fillRoundRect(pixels, width, x, y, w, h, radius, color) {
+function fillRoundRect(pixels, width, x, y, w, h, radius, color, height = width) {
   const x1 = Math.max(0, Math.floor(x));
   const x2 = Math.min(width - 1, Math.ceil(x + w));
   const y1 = Math.max(0, Math.floor(y));
-  const y2 = Math.min(width - 1, Math.ceil(y + h));
+  const y2 = Math.min(height - 1, Math.ceil(y + h));
   for (let py = y1; py <= y2; py += 1) {
     for (let px = x1; px <= x2; px += 1) {
       if (insideRoundRect(px + 0.5, py + 0.5, x, y, w, h, radius)) blendPixel(pixels, width, px, py, color);
@@ -80,9 +128,9 @@ function fillRoundRect(pixels, width, x, y, w, h, radius, color) {
   }
 }
 
-function strokeRoundRect(pixels, width, x, y, w, h, radius, strokeWidth, color) {
-  fillRoundRect(pixels, width, x, y, w, h, radius, color);
-  fillRoundRect(pixels, width, x + strokeWidth, y + strokeWidth, w - strokeWidth * 2, h - strokeWidth * 2, radius - strokeWidth, [24, 35, 41, 255]);
+function strokeRoundRect(pixels, width, x, y, w, h, radius, strokeWidth, color, height = width) {
+  fillRoundRect(pixels, width, x, y, w, h, radius, color, height);
+  fillRoundRect(pixels, width, x + strokeWidth, y + strokeWidth, w - strokeWidth * 2, h - strokeWidth * 2, radius - strokeWidth, [24, 35, 41, 255], height);
 }
 
 function insideRoundRect(px, py, x, y, w, h, radius) {
@@ -91,12 +139,12 @@ function insideRoundRect(px, py, x, y, w, h, radius) {
   return (px - rx) ** 2 + (py - ry) ** 2 <= radius ** 2;
 }
 
-function drawLine(pixels, width, x1, y1, x2, y2, strokeWidth, color) {
+function drawLine(pixels, width, x1, y1, x2, y2, strokeWidth, color, height = width) {
   const radius = strokeWidth / 2;
   const minX = Math.max(0, Math.floor(Math.min(x1, x2) - radius - 1));
   const maxX = Math.min(width - 1, Math.ceil(Math.max(x1, x2) + radius + 1));
   const minY = Math.max(0, Math.floor(Math.min(y1, y2) - radius - 1));
-  const maxY = Math.min(width - 1, Math.ceil(Math.max(y1, y2) + radius + 1));
+  const maxY = Math.min(height - 1, Math.ceil(Math.max(y1, y2) + radius + 1));
   const dx = x2 - x1;
   const dy = y2 - y1;
   const lengthSquared = dx * dx + dy * dy || 1;
@@ -122,10 +170,11 @@ function blendPixel(pixels, width, x, y, [r, g, b, a]) {
   pixels[offset + 3] = Math.round(nextAlpha * 255);
 }
 
-function downsample(source, sourceWidth, scale) {
+function downsample(source, sourceWidth, scale, sourceHeight = sourceWidth) {
   const width = sourceWidth / scale;
-  const output = new Uint8ClampedArray(width * width * 4);
-  for (let y = 0; y < width; y += 1) {
+  const height = sourceHeight / scale;
+  const output = new Uint8ClampedArray(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
       const total = [0, 0, 0, 0];
       for (let sy = 0; sy < scale; sy += 1) {
