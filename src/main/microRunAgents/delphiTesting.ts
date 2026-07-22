@@ -15,11 +15,6 @@ import { createGuardedConsoleTool } from "./guardedConsole";
 const DELPHI_TIMEOUT_MS = 45 * 60 * 1000;
 const DELPHI_MAX_OBSERVATION_ARTIFACTS = 12;
 
-function requestsPixelLevelVisualInspection(task: DelphiTestingInput): boolean {
-  const text = [task.objective, task.scope, ...task.acceptanceCriteria].filter(Boolean).join("\n").toLowerCase();
-  return /\b(?:visual(?:ly)?|appearance|layout|responsive(?:ness)?|viewport|pixel|screenshot|clipping|overlap|spacing|alignment|contrast|ui polish)\b/.test(text);
-}
-
 function capturedObservationRefs(toolCalls: MicroRunToolInvocation[]): Array<{ id: string; label: string }> {
   const refs = new Map<string, { id: string; label: string }>();
   for (const call of toolCalls) {
@@ -41,28 +36,6 @@ function capturedObservationRefs(toolCalls: MicroRunToolInvocation[]): Array<{ i
   return [...refs.values()];
 }
 
-function makesPixelLevelVisualClaim(report: DelphiTestingOutput): boolean {
-  const statements = [
-    report.summary,
-    ...report.checks.flatMap((check) => [check.name, ...check.evidence]),
-    ...report.findings.flatMap((finding) => [finding.title, finding.detail, ...finding.evidence])
-  ].flatMap((text) => text.split(/(?<=[.!?])\s+|\n+/).map((statement) => statement.trim()).filter(Boolean));
-  const explicitlyUnavailable = (statement: string): boolean =>
-    /\b(?:cannot|can't|could not|not|never|unable to|unavailable|unverified|not verified|without (?:pixel|image|screenshot|visual) (?:inspection|analysis|support))\b/i.test(statement);
-  return statements.some((statement) => {
-    if (explicitlyUnavailable(statement)) return false;
-    return /\bvisually\s+(?:correct|consistent|polished|sound|good|excellent|verified|passed)\b/i.test(statement)
-      || /\b(?:layout|appearance|design|styling|spacing|alignment|contrast|responsiveness|responsive layout)\b.{0,60}\b(?:pass(?:ed|es)?|correct|verified|good|excellent|consistent|intact|no (?:issues|problems|breakage|defects))\b/i.test(statement)
-      || /\b(?:header|navigation|page)\b.{0,50}\bvisually consistent\b/i.test(statement)
-      || /\b(?:no|without)\s+(?:visual|layout|responsive)\s+(?:issues|breakage|defects|problems)\b/i.test(statement);
-  });
-}
-
-function isUnavailableVisualFinding(finding: DelphiTestingOutput["findings"][number]): boolean {
-  const text = [finding.title, finding.detail, ...finding.evidence].join("\n");
-  return /\b(?:cannot|can't|could not|unable to|unavailable|unverified|not verified|not inspected|without (?:pixel|image|screenshot|visual) (?:inspection|analysis|support))\b/i.test(text);
-}
-
 function systemPrompt(input: unknown, context: MicroRunContext): string {
   const task = delphiTestingInputSchema.parse(input);
   return [
@@ -80,9 +53,13 @@ function systemPrompt(input: unknown, context: MicroRunContext): string {
     "A source review is not a visual test. A test command is not an emulator audit unless it actually exercised the selected emulator/device.",
     "A captured screenshot is evidence, not by itself proof that the layout is correct. DOM/runtime assertions support only the exact conditions they assert; pixel-level layout or visual-quality conclusions require an executed visual-regression check or actual screenshot-pixel analysis.",
     "Report the number of executed assert-* actions as assertions. Never label the total Playwright action count as checks or assertions. Without screenshot-pixel analysis, say no horizontal overflow was detected when that assertion passed; do not call the responsive layout intact, correct, or visually verified.",
-    context.analyzeObservation
-      ? "The selected Delphi model supports image input. Screenshot paths returned by runtime adapters do not expose their pixels to you; use delphi_analyze_observation on the relevant captured states before making pixel-level visual claims. Each captured artifact may be analyzed once. When the objective or acceptance criteria request visual quality, layout, or responsive inspection, analyze enough relevant captures to support the requested coverage before completing the audit."
-      : `The selected Delphi model's image-input capability is ${context.imageInputSupport ?? "unknown"}. Screenshots are still captured for the user's evidence gallery, but their pixels are not available to you. Do not claim that you visually inspected them and do not return visual-category findings based only on screenshot paths.`,
+    task.visualInspection === "pixel" && context.analyzeObservation
+      ? "The caller explicitly requested pixel-level visual inspection and the selected Delphi model supports image input. Screenshot paths returned by runtime adapters do not expose their pixels to you; use delphi_analyze_observation on enough relevant captured states to support that requested coverage. Each captured artifact may be analyzed once."
+      : task.visualInspection === "pixel"
+        ? `The caller explicitly requested pixel-level visual inspection, but the selected Delphi model's image-input capability is ${context.imageInputSupport ?? "unknown"}. Screenshots may still be captured for the user's evidence gallery, but their pixels are not available to you. Preserve functional results and return visual coverage as blocked; do not return visual-category findings based only on screenshot paths.`
+        : task.visualInspection === "capture"
+          ? "The caller requested screenshots for human review, not model pixel analysis. Capture purposeful states, but do not turn their paths into visual-quality conclusions or visual-category findings."
+          : "The caller did not request visual inspection. Do not broaden the audit into visual-quality evaluation.",
     `The audit has an overall time/resource boundary and a ceiling of ${DELPHI_MAX_OBSERVATION_ARTIFACTS} screenshots. These are ceilings, never quotas or KPIs. Do not repeat a command, browser flow, or screenshot unless the repetition answers a concrete unresolved question. Give each screenshot a descriptive label and purpose, and stop collecting evidence once the objective is supported.`,
     "Return exactly one JSON object with: status, verdict, summary, attempts, checks, findings, toolchains, artifacts, blockers, recommendedNextSteps.",
     "status is completed, blocked, or needs-setup. verdict is passed, failed, blocked, or not-run. Include commands and concise evidence in checks. Findings must include severity, category, detail, reproductionSteps, and evidence. Finding category must be one of: functional, visual, accessibility, performance, compatibility, tooling, or other.",
@@ -516,42 +493,6 @@ function invocationArguments(call: MicroRunToolInvocation): Record<string, unkno
   }
 }
 
-function playwrightExecutionStats(toolCalls: MicroRunToolInvocation[]): { assertions: number; horizontalOverflowAssertions: number } {
-  let assertions = 0;
-  let horizontalOverflowAssertions = 0;
-  for (const call of toolCalls) {
-    if (call.providerToolName !== "delphi_run_playwright_flow" || call.succeeded === false || !call.executionStarted) continue;
-    const actions = invocationResult(call)?.actions;
-    if (!Array.isArray(actions)) continue;
-    for (const value of actions) {
-      const action = delphiString(delphiRecord(value)?.action);
-      if (!action?.startsWith("assert-")) continue;
-      assertions += 1;
-      if (action === "assert-no-horizontal-overflow") horizontalOverflowAssertions += 1;
-    }
-  }
-  return { assertions, horizontalOverflowAssertions };
-}
-
-function normalizeDelphiSummary(summary: string, toolCalls: MicroRunToolInvocation[]): string {
-  const stats = playwrightExecutionStats(toolCalls);
-  let normalized = summary;
-  if (stats.assertions > 0) {
-    normalized = normalized.replace(
-      /\b\d+(?:\/\d+)?\s+Playwright\s+(?:checks?|actions?|steps?)\s+(?:passed|completed)\b/gi,
-      `${stats.assertions}/${stats.assertions} assertions passed`
-    );
-  }
-  const analyzedPixels = toolCalls.some((call) => call.providerToolName === "delphi_analyze_observation" && call.succeeded !== false);
-  if (!analyzedPixels && stats.horizontalOverflowAssertions > 0) {
-    normalized = normalized.replace(
-      /\b(?:the\s+)?responsive layout\s+(?:is\s+)?(?:intact|correct|verified|good|consistent|passed)\b/gi,
-      "no horizontal overflow detected"
-    );
-  }
-  return normalized;
-}
-
 function invocationEvidence(result: Record<string, unknown> | undefined, error?: string): string[] {
   const evidence = [
     ...delphiStringList(result?.evidence),
@@ -715,7 +656,7 @@ function parseOutput(text: string, toolCalls: MicroRunToolInvocation[] = []): De
     status: parsed.status === "blocked" || parsed.status === "needs-setup" ? parsed.status : "completed",
     verdict: executedFailure ? "failed" : modelVerdict,
     summary: typeof parsed.summary === "string" && parsed.summary.trim()
-      ? normalizeDelphiSummary(parsed.summary, toolCalls)
+      ? parsed.summary.trim()
       : executedFailure
         ? `${executedFailure.name} failed. See the recorded evidence for details.`
         : text.trim().slice(0, 4000) || "Delphi returned no narrative summary; the host assembled the executed evidence below.",
@@ -757,22 +698,15 @@ function validateOutput(output: unknown, toolCalls: MicroRunToolInvocation[], ra
   if (report.status === "completed" && report.verdict === "blocked") return "Delphi marked the audit completed while returning a blocked verdict.";
   if (report.status === "needs-setup" && report.toolchains.every((toolchain) => toolchain.status !== "missing")) return "Delphi requested setup without identifying a missing toolchain.";
   if (report.verdict === "failed" && report.findings.length === 0) return "Delphi reported a failure without a structured finding.";
-  const hostCommandChecks = hostChecks(toolCalls).filter((check) => Boolean(check.command));
-  if (hostCommandChecks.length && /(?:raw|command|terminal|build|typecheck).{0,80}(?:not (?:visible|available)|unavailable|cannot (?:independently )?(?:confirm|verify)|could not (?:confirm|verify))/i.test(report.summary)) {
-    return "The host retained authoritative command results, but Delphi's summary incorrectly claimed that terminal evidence was unavailable. Preserve the recorded command pass/fail status and evidence in the corrected report.";
-  }
   const analyzedPixels = toolCalls.some((call) => call.providerToolName === "delphi_analyze_observation" && call.succeeded !== false);
   const visualAuditReachedRuntime = directRuntimeChecks.length > 0 || capturedObservationRefs(toolCalls).length > 0;
-  if (!context?.analyzeObservation && requestsPixelLevelVisualInspection(task) && visualAuditReachedRuntime && report.verdict === "passed") {
+  if (!context?.analyzeObservation && task.visualInspection === "pixel" && visualAuditReachedRuntime && report.verdict === "passed") {
     return "This audit requested pixel-level visual, layout, or responsive inspection, but the selected model cannot inspect screenshot pixels. Preserve the passing functional checks, explicitly mark visual inspection unavailable, and return a blocked status/verdict instead of claiming the whole visual audit passed.";
   }
-  if (context?.analyzeObservation && requestsPixelLevelVisualInspection(task) && visualAuditReachedRuntime && !analyzedPixels) {
+  if (context?.analyzeObservation && task.visualInspection === "pixel" && visualAuditReachedRuntime && !analyzedPixels) {
     return "This audit requested pixel-level visual, layout, or responsive inspection and the selected model supports image input, but Delphi completed without analyzing any captured screenshot pixels.";
   }
-  if (!analyzedPixels && makesPixelLevelVisualClaim(report)) {
-    return "Delphi made a pixel-level visual-quality claim without analyzing any captured screenshot pixels. DOM visibility and screenshot paths can support functional checks, but not appearance, layout-quality, or visual-consistency conclusions.";
-  }
-  if (report.findings.some((finding) => finding.category === "visual" && !isUnavailableVisualFinding(finding)) && !analyzedPixels) {
+  if (report.findings.some((finding) => finding.category === "visual") && !analyzedPixels) {
     return "Delphi returned a visual finding without analyzing the pixels of a captured runtime observation. Screenshot paths alone are human-visible evidence, not model visual evidence.";
   }
   return undefined;

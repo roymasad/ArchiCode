@@ -74,6 +74,17 @@ export function runProfileCommands(profile: ProjectSettings["runTargetProfiles"]
   ].filter((command): command is string => Boolean(command?.trim()));
 }
 
+export function runProfileLaunchCommands(profile: ProjectSettings["runTargetProfiles"][number]): string[] {
+  return [
+    profile.discoverCommand,
+    profile.launchCommand,
+    profile.waitCommand,
+    ...profile.diagnosticCommands,
+    ...profile.recoveryCommands,
+    profile.runCommand
+  ].filter((command): command is string => Boolean(command?.trim()));
+}
+
 export function profileRisk(profile: ProjectSettings["runTargetProfiles"][number]): Run["risk"] {
   const risks = runProfileCommands(profile).map(classifyCommandRisk);
   if (risks.includes("high")) return "high";

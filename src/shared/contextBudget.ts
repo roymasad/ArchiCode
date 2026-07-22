@@ -124,6 +124,8 @@ function knownContextWindowFloorForProvider(provider: Provider): number | undefi
 export function knownContextWindowTokensForModel(modelId?: string): number | undefined {
   const model = modelId?.toLowerCase().trim() ?? "";
   if (!model) return undefined;
+  if (model.includes("gpt-realtime-2")) return 128000;
+  if (model.includes("gpt-realtime")) return 32000;
   if (model.includes("gpt-5.6")) return 1050000;
   if (model.includes("gemini")) return knownGeminiContextWindow(model);
   if (model.includes("grok-build") || model.includes("grok-code-fast")) return 256000;
@@ -180,6 +182,17 @@ export function deriveResearchChatContextPlan(settings: ProjectSettings): Resear
   const modelContextTokens = (settings.contextBudgetMode ?? "auto") === "manual"
     ? settings.contextTokenBudget
     : inferModelContextTokens(provider).tokens;
+  const recentMessageLimit = automaticResearchMessageLimit(modelContextTokens);
+  return {
+    modelContextTokens,
+    recentMessageLimit,
+    compactionTriggerLimit: automaticResearchCompactionTriggerLimit(recentMessageLimit),
+    historyTokenBudget: automaticResearchHistoryTokenBudget(modelContextTokens)
+  };
+}
+
+export function deriveResearchChatContextPlanForModel(modelId?: string): ResearchChatContextPlan {
+  const modelContextTokens = knownContextWindowTokensForModel(modelId) ?? 128000;
   const recentMessageLimit = automaticResearchMessageLimit(modelContextTokens);
   return {
     modelContextTokens,

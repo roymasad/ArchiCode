@@ -42,10 +42,12 @@ export async function compactResearchMemoryIfNeeded(
   plan: { recentMessageLimit: number; compactionTriggerLimit: number; historyTokenBudget?: number } =
     { recentMessageLimit: RESEARCH_RECENT_MESSAGE_LIMIT, compactionTriggerLimit: RESEARCH_COMPACTION_TRIGGER_LIMIT }
 ): Promise<ResearchChatSession> {
-  if (session.messages.length <= plan.compactionTriggerLimit) return session;
   // Same batched-eviction window the prompt uses, so every message that has
-  // left (or is about to leave) the prompt window is folded into memory.
+  // left (or is about to leave) the prompt window is folded into memory. A
+  // token-heavy chat can cross that boundary before it crosses the count-based
+  // trigger, so calculate the actual window in both cases.
   const recentStart = researchHistoryWindowStart(session.messages, plan.recentMessageLimit, plan.historyTokenBudget);
+  if (session.messages.length <= plan.compactionTriggerLimit && recentStart <= 0) return session;
   if (recentStart <= 0) return session;
   const lastOmitted = session.messages[recentStart - 1];
   if (!lastOmitted || session.memory.lastCompactedMessageId === lastOmitted.id) return session;

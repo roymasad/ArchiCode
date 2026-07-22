@@ -65,7 +65,7 @@ import {
 import type { ComposerMention, ComposerSegment, QueuedResearchMessage, ShellPrompt, AgentRunInput, RunGuidanceInput, BuildQuestionCheck, NodeClipboard, CodebaseOnboardingLevel, CodebaseOnboardingDetail, CodebaseOnboardingGranularity, ProjectSettingsTab, WorkbenchView, GitOperationName, CanvasViewport, UiScale, GraphNavigationRequest, FilePreviewRequest, GraphNavigationTarget, CodebaseOnboarding, ProjectSettingsRequest, RunProfileInput, PatchProposalView, AppNotice, ResearchStreamState, LiveSubagentActivity, LiveResearchActivity, ArchicodeState, StoreSet, StoreGet } from "./types";
 import { uid, uniqueNodeIds, selectedNodeIdsFor, appendEdgeLabelHistory, directUndoNotice, offerGitAttributesSetup, now, runInputKey, runProfileKey, isSameRunRequest, isSameRunProfileRequest, runArtifactIds, runHasQuestionRefreshSignal, shouldRefreshQuestionsForRun, hasActiveRun, editingLockedMessage, notifyJobFinished, notifyReviewRequired, createOptimisticRun, createOptimisticRunProfile, defaultNodeHalfSize, getInitialTheme, getInitialUiScale, projectUiKey, projectScopedUiKey, readStoredWorkbenchView, readProjectFileBrowserState, isFiniteNumber, readStoredViewport, isVisualQaPreview, createFallbackBundle, projectScopedResetState, clearProjectStateForBranchChange, reloadProjectStateAfterBranchChange, isBuildLikeAgentRun, getActiveFlow, getSelectedNode, getSelectedEdge, defaultResearchScope, normalizeComposerSegments, addResearchBusySession, removeResearchBusySession, selectedResearchSessionOrFallback, nextGraphNavigationRequestId, nextFilePreviewRequestId } from "./helpers";
 
-export const createUiSlice = (set: StoreSet, get: StoreGet): Pick<ArchicodeState, "showDirectUndoNotice" | "dismissAppNotice" | "setTheme" | "toggleTheme" | "setUiScale" | "loadKeybindings" | "setKeybinding" | "resetKeybinding" | "resetAllKeybindings" | "loadGlobalSpeechSettings" | "updateGlobalSpeechSettings" | "loadGlobalTtsSettings" | "updateGlobalTtsSettings"> => ({
+export const createUiSlice = (set: StoreSet, get: StoreGet): Pick<ArchicodeState, "showDirectUndoNotice" | "dismissAppNotice" | "setTheme" | "toggleTheme" | "setUiScale" | "loadKeybindings" | "setKeybinding" | "resetKeybinding" | "resetAllKeybindings" | "loadGlobalSpeechSettings" | "updateGlobalSpeechSettings" | "loadGlobalTtsSettings" | "updateGlobalTtsSettings" | "loadGlobalVoiceSettings" | "updateGlobalVoiceSettings"> => ({
   showDirectUndoNotice: () => set((state) => state.appNotice?.message === directUndoNotice.message ? state : { appNotice: directUndoNotice }),
 
   dismissAppNotice: () => set({ appNotice: null }),
@@ -182,6 +182,27 @@ export const createUiSlice = (set: StoreSet, get: StoreGet): Pick<ArchicodeState
       set({ globalTtsSettings: saved });
     } catch (error) {
       console.error("Failed to save TTS settings.", error);
+    }
+  },
+
+  loadGlobalVoiceSettings: async () => {
+    if (!window.archicode?.getGlobalVoiceSettings) return;
+    try {
+      const settings = await window.archicode.getGlobalVoiceSettings();
+      set({ globalVoiceSettings: settings });
+    } catch (error) {
+      console.error("Failed to load voice settings.", error);
+    }
+  },
+
+  updateGlobalVoiceSettings: async (settings) => {
+    set({ globalVoiceSettings: settings });
+    if (!window.archicode?.saveGlobalVoiceSettings) return;
+    try {
+      const saved = await window.archicode.saveGlobalVoiceSettings(settings);
+      set({ globalVoiceSettings: saved });
+    } catch (error) {
+      console.error("Failed to save voice settings.", error);
     }
   }
 });

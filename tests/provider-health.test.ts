@@ -4,7 +4,7 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { applyOpenRouterSessionId, callProvider, callResearchProvider, checkProviderHealth, createConsecutiveToolCallLoopDetector, createUsageAccumulator, isExplicitDelphiAuditRequest, localResearchToolLoopInstructions, localResearchTurnValidationFeedback, researchHistoryThread, extractModelCapabilitiesFromModels, extractContextWindowFromModels, extractModelIdsFromModels, inferModelCapabilityProfile, researchResponseStyleDirective, researchSystemInstructions, type ResearchProviderContinuation, resolveProviderApiKey, resolvePhaseModelPolicy } from "../src/main/providers";
+import { applyOpenRouterSessionId, callProvider, callResearchProvider, checkProviderHealth, createConsecutiveToolCallLoopDetector, createUsageAccumulator, localResearchToolLoopInstructions, localResearchTurnValidationFeedback, researchHistoryThread, extractModelCapabilitiesFromModels, extractContextWindowFromModels, extractModelIdsFromModels, inferModelCapabilityProfile, researchResponseStyleDirective, researchSystemInstructions, type ResearchProviderContinuation, resolveProviderApiKey, resolvePhaseModelPolicy } from "../src/main/providers";
 import { buildAnthropicCompatibleBody, buildAnthropicResearchBody } from "../src/main/providers/anthropic";
 import { activeLocalProviderProcesses, buildAntigravityLocalArgs, buildClaudeLocalArgs, buildClaudeLocalResearchArgs, buildCodexLocalArgs, buildCodexLocalResearchArgs, buildGrokLocalArgs, buildKimiLocalArgs, buildOpenCodeLocalArgs, grokCatalogLooksUnauthenticated, grokJsonEvent, kimiArchiCodePermissionConfig, kimiJsonEvent, openCodeJsonEvent, openCodeProcessEnv, parseAntigravityModels, parseGrokModels, parseKimiModels, parseOpenCodeModels, runLocalProcess, windowsBatchCommandLine, windowsExecutableCandidates } from "../src/main/providers/localCli";
 import { buildOpenAICompatibleBody, buildOpenAIResearchChatCompletionsBody, buildOpenAIResponsesBody, buildOpenAIResearchResponsesBody } from "../src/main/providers/openai";
@@ -117,14 +117,6 @@ describe("provider health checks", () => {
     expect(localResearchTurnValidationFeedback(malformed)).toContain("could not parse it as a valid tool turn");
     expect(localResearchTurnValidationFeedback(valid)).toBeUndefined();
     expect(localResearchTurnValidationFeedback("The project review is complete.")).toBeUndefined();
-  });
-
-  it("routes only explicit executable test and runtime-audit requests to Delphi", () => {
-    expect(isExplicitDelphiAuditRequest("Run and test the current website, then report what you find.")).toBe(true);
-    expect(isExplicitDelphiAuditRequest("Please retest the mobile app in the emulator.")).toBe(true);
-    expect(isExplicitDelphiAuditRequest("Perform a visual audit of this site.")).toBe(true);
-    expect(isExplicitDelphiAuditRequest("Explain why the existing test failed.")).toBe(false);
-    expect(isExplicitDelphiAuditRequest("Check the project settings for me.")).toBe(false);
   });
 
   it("records whether replayable reasoning state was received across provider rounds", () => {
@@ -1587,7 +1579,8 @@ process.stdin.on("end", () => {
     expect(prompt).toContain("AI Implement can create a new codebase from the graph");
     expect(prompt).toContain("Gaia — Build & Implementation");
     expect(prompt).toContain("focused repairs belong to Pandora through AI Debug");
-    expect(prompt).toContain("Do not include guidance on start-run-profile");
+    expect(prompt).toContain("start-run-profile remains parseable only for legacy saved proposals");
+    expect(prompt).toContain("Never emit it for new work");
     expect(prompt).toContain("Do not include providerId in queue action operations.");
     expect(prompt).not.toContain("\\\"providerId\\\": \\\"openai-compatible\\\"");
   });

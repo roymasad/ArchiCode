@@ -53,7 +53,7 @@ export function resolveSafeProjectPath(projectRoot: string, relativePath: string
 
 function createTestAuthoringTools(context: MicroRunContext, input: TestAuthoringInput): MicroRunTool[] {
   const { projectRoot, onProgress } = context;
-  let writeAuthorized = input.writeAuthorizedByUser === true;
+  const writeAuthorized = input.writeAuthorizedByUser === true;
   const assignedTestDirectory = resolveSafeProjectPath(projectRoot, input.suggestedTestDir);
 
   const listProjectFilesTool: MicroRunTool = {
@@ -211,20 +211,10 @@ function createTestAuthoringTools(context: MicroRunContext, input: TestAuthoring
     },
     handler: async (args: { reason: string }) => {
       if (writeAuthorized) return { status: "authorized", message: "The user already authorized test writes for this assigned scope." };
-      const question = [
-        "May Test Authoring create or overwrite test files for this assigned acceptance-test scope?",
-        args.reason.trim() ? `Proposed work: ${args.reason.trim()}` : ""
-      ].filter(Boolean).join("\n\n");
-      const answer = await context.onClarification?.(question) ?? "";
-      const explicitlyApproved = /^\s*(?:yes|y|approved?|allow(?:ed)?|go ahead|do it|proceed)\b/i.test(answer);
-      if (explicitlyApproved) {
-        writeAuthorized = true;
-        return { status: "authorized", answer };
-      }
       return {
-        status: "not-authorized",
-        answer,
-        message: "The user did not explicitly authorize test-file writes. Continue inspection-only and report the proposed tests."
+        status: "approval-required",
+        reason: args.reason.trim(),
+        message: "Test-file writes require the caller's explicit structured approval. This running agent cannot obtain write authorization from free-form text; continue inspection-only and report the proposed tests."
       };
     }
   };

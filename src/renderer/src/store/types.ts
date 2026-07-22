@@ -27,7 +27,8 @@ import type {
   Run,
   RuntimeService,
   SpeechSettings,
-  TtsSettings
+  TtsSettings,
+  VoiceSettings
 } from "@shared/schema";
 import type {
   GitOperationResult,
@@ -342,6 +343,7 @@ export type ArchicodeState = {
   keybindingsBusy: boolean;
   globalSpeechSettings: SpeechSettings | null;
   globalTtsSettings: TtsSettings | null;
+  globalVoiceSettings: VoiceSettings | null;
   canvasViewport: CanvasViewport | null;
   canvasViewportCenter: { x: number; y: number } | null;
   lastAddNodePosition: { x: number; y: number } | null;
@@ -563,6 +565,8 @@ export type ArchicodeState = {
   updateGlobalSpeechSettings: (settings: SpeechSettings) => Promise<void>;
   loadGlobalTtsSettings: () => Promise<void>;
   updateGlobalTtsSettings: (settings: TtsSettings) => Promise<void>;
+  loadGlobalVoiceSettings: () => Promise<void>;
+  updateGlobalVoiceSettings: (settings: VoiceSettings) => Promise<void>;
 };
 
 export type StoreSet = StoreApi<ArchicodeState>["setState"];

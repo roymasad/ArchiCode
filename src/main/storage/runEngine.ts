@@ -245,7 +245,7 @@ import {
   profileRisk,
   resolveProfileCwd,
   runManagedPreflightCommand,
-  runProfileCommands
+  runProfileLaunchCommands
 } from "./runtimeServices";
 
 import {
@@ -2844,7 +2844,7 @@ async function startRunProfileUnlocked(input: {
     throw new Error(`Run target ${input.profileId} was not found. Configure run targets in Settings.`);
   }
 
-  const commands = runProfileCommands(profile);
+  const commands = runProfileLaunchCommands(profile);
   const cwdInfo = await resolveProfileCwd(input.projectRoot, profile.cwd);
   const reusablePolicy = commandAllowedBySettings(bundle.project.settings, profile.runCommand, cwdInfo.cwd);
   const risk = profileRisk(profile);
@@ -3946,7 +3946,7 @@ async function startRunProfileRetry(projectRoot: string, run: Run): Promise<{ bu
     throw new Error(`Run target ${run.runProfileId} was not found. Configure run targets in Settings.`);
   }
 
-  const commands = runProfileCommands(profile);
+  const commands = runProfileLaunchCommands(profile);
   const cwdInfo = await resolveProfileCwd(projectRoot, profile.cwd);
   const reusablePolicy = commandAllowedBySettings(bundle.project.settings, profile.runCommand, cwdInfo.cwd);
   const risk = profileRisk(profile);
@@ -5023,7 +5023,7 @@ function localProviderSubagentPrompt(settings: ProjectSettings, provider: Projec
     "To delegate, stop the current response and return exactly one JSON object with this shape: { \"archicodeSubagentRequest\": { \"agent\": \"sherlock\" | \"picasso\" | \"delphi\", \"input\": { \"objective\": string, ... } } }.",
     "Sherlock input may also include mode (codebase/online/topic/mixed), scope, codePaths, and evidenceRequirements. Sherlock is read-only.",
     "Picasso input may also include mode (assess/design/refine/reconcile), scope, evidenceSummary, constraints, and detailLevel. Assess is read-only; Picasso's graph changes are proposal-only and always require review.",
-    "Delphi input may also include mode (plan/audit/retest), scope, codePaths, platforms, observation (visible/headless plus evidence preference), an explicit target (profileId/deviceId/baseUrl or a localhost appiumServerUrl plus existing appiumSessionId), target launch (never/if-needed), cleanup (stop-if-started/keep-running), acceptanceCriteria, and advisory command ideas. Give Delphi the goal and boundaries, not a command sequence or retry plan. Default to visible observation for interactive audits. Use launch if-needed when Delphi should start an existing Run App profile or emulator after approval. Missing supported adapters are downloaded only after user approval into ArchiCode's managed cache; Delphi never installs dependencies silently or into the project.",
+    "Delphi input may also include mode (plan/audit/retest), visualInspection (none/capture/pixel), scope, codePaths, platforms, observation (visible/headless plus evidence preference), an explicit target (profileId/deviceId/baseUrl or a localhost appiumServerUrl plus existing appiumSessionId), target launch (never/if-needed), cleanup (stop-if-started/keep-running), acceptanceCriteria, and advisory command ideas. Set visualInspection explicitly: pixel only for requested model inspection of appearance/layout, capture for human-review screenshots, otherwise none. Give Delphi the goal and boundaries, not a command sequence or retry plan. Default to visible observation for interactive audits. Use launch if-needed when Delphi should start an existing Run App profile or emulator after approval. Missing supported adapters are downloaded only after user approval into ArchiCode's managed cache; Delphi never installs dependencies silently or into the project.",
     "Do not mix the request JSON with prose. ArchiCode will run the subagent and resume this same phase with a compact artifact-backed result. Do not request another subagent from inside a subagent result."
   ].join("\n");
 }
@@ -5497,6 +5497,7 @@ export function runSubagentTools(settings: ProjectSettings): ProviderMcpTool[] {
         properties: {
           objective: { type: "string" },
           mode: { type: "string", enum: ["plan", "audit", "retest"] },
+          visualInspection: { type: "string", enum: ["none", "capture", "pixel"], description: "Explicit visual coverage contract; never infer this from objective wording." },
           scope: { type: "string" },
           codePaths: { type: "array", items: { type: "string" } },
           platforms: { type: "array", items: { type: "string", enum: ["web", "electron", "flutter", "android", "ios", "generic"] } },

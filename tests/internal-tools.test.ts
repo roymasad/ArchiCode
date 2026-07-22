@@ -326,6 +326,22 @@ describe("ArchiCode internal provider tools", () => {
     expect(result.resultText).toContain("no Brave Search API key");
   });
 
+  it("rejects search-engine result pages as source documents", async () => {
+    const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-search-page-guard-"));
+    const bundle = await ensureFixtureProject(projectRoot);
+    const env = {
+      projectRoot,
+      settings: bundle.project.settings,
+      loadProject: async () => bundle,
+      readArtifactText: async () => ""
+    };
+
+    await expect(callArchicodeInternalTool(env, {
+      providerToolName: "archicode_web_open_url",
+      argumentsJson: JSON.stringify({ url: "https://www.google.com/search?q=PixelHat" })
+    })).rejects.toThrow("Search-engine results pages cannot be opened as source documents");
+  });
+
   it("uses Brave Search for internal web search when a local API key is available", async () => {
     const fetchMock = vi.fn(async () => ({
       status: 200,

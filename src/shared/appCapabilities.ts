@@ -38,7 +38,7 @@ export function archicodeCapabilityDigest(): ArchicodeCapabilityDigest {
         "Perform reversible visual canvas actions when explicitly requested: select one or more nodes or groups, switch the visible flow/detail flow, fit targets, center, pan, and zoom.",
         "Propose reviewed updates to project metadata, flows, nodes, subflows, edges, notes, acceptance checks, implementation-scope hints, run targets, and implementation/build/debug queue actions; Research can create node groups and assign nodes to them, while group renaming/color/deletion remains a direct user control.",
         "Help sync graph truth after external source edits and monitor queued work without pretending a proposal is already complete.",
-        "Inspect configured Run App profiles, discover read-only emulator/simulator/device targets, inspect live runtime status and logs, and prepare approval-gated start, stop, or restart actions for exact runtime targets.",
+        "Inspect configured Run App profiles, discover read-only emulator/simulator/device targets, inspect live runtime status and logs, and directly start, stop, or restart an exact runtime service when the user explicitly requests that reversible control.",
         "Delegate substantial investigation to Sherlock, evidence-backed test/visual/runtime audits to Delphi, read-only graph assessment or proposal-only graph design to Picasso, and approval-gated merge-conflict resolution to Solomon when those capabilities are enabled. Delphi can reuse or approval-gated start an explicit Run App profile, including desktop targets and Android/iOS emulators, wait for readiness, audit it, and stop only the runtime/target it started."
       ],
       cannot: [

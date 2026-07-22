@@ -315,7 +315,7 @@ describe("Delphi toolchain planning", () => {
     expect(delphiTestingAgent.validateOutput?.(report, completedCalls, input)).toBeUndefined();
   });
 
-  it("preserves authoritative terminal evidence in report repair", async () => {
+  it("includes authoritative terminal evidence in report repair", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-delphi-repair-evidence-"));
     const bundle = await ensureFixtureProject(root);
     const input = delphiTestingInputSchema.parse({ objective: "Build and typecheck", platforms: ["generic"] });
@@ -343,9 +343,8 @@ describe("Delphi toolchain planning", () => {
       recommendedNextSteps: []
     };
 
-    const validationError = await delphiTestingAgent.validateOutput?.(report, toolCalls, input, context);
-    expect(validationError).toMatch(/host retained authoritative command results/);
-    const repair = delphiTestingAgent.repairMessage?.(input, JSON.stringify(report), validationError!, context, toolCalls);
+    const validationError = "The report needs a corrected structured status.";
+    const repair = delphiTestingAgent.repairMessage?.(input, JSON.stringify(report), validationError, context, toolCalls);
     expect(repair).toContain("Host-authoritative executed checks");
     expect(repair).toContain("vite build completed successfully");
     expect(repair).toContain("do not downgrade them to inconclusive");
@@ -380,7 +379,7 @@ describe("Delphi toolchain planning", () => {
   it("distinguishes human screenshot evidence from model-visible analysis", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "archicode-delphi-vision-contract-"));
     const bundle = await ensureFixtureProject(root);
-    const input = delphiTestingInputSchema.parse({ objective: "Audit visual behavior", platforms: ["web"] });
+    const input = delphiTestingInputSchema.parse({ objective: "Audit visual behavior", visualInspection: "pixel", platforms: ["web"] });
     const context = {
       projectRoot: root,
       bundle,
@@ -388,7 +387,7 @@ describe("Delphi toolchain planning", () => {
       imageInputSupport: "unknown" as const
     };
 
-    expect(delphiTestingAgent.systemPrompt(input, context)).toContain("Screenshots are still captured for the user's evidence gallery, but their pixels are not available to you");
+    expect(delphiTestingAgent.systemPrompt(input, context)).toContain("Screenshots may still be captured for the user's evidence gallery, but their pixels are not available to you");
     const report = {
       status: "completed" as const,
       verdict: "failed" as const,
@@ -434,14 +433,7 @@ describe("Delphi toolchain planning", () => {
       status: "blocked" as const,
       verdict: "blocked" as const,
       summary: "Functional browser checks passed, but responsive layout could not be visually verified because screenshot-pixel inspection is unavailable.",
-      findings: [{
-        title: "Responsive visual inspection unavailable",
-        severity: "info" as const,
-        category: "visual" as const,
-        detail: "The selected model cannot inspect captured screenshot pixels, so responsive appearance remains unverified.",
-        reproductionSteps: ["Review the captured responsive screenshot with a vision-capable model."],
-        evidence: ["Screenshot captured for user review; pixels were not inspected by Delphi."]
-      }],
+      findings: [],
       blockers: ["Pixel-level responsive inspection requires a vision-capable model."]
     };
     expect(delphiTestingAgent.validateOutput?.(honestNonVisionBlock, runtimeCalls, input, context)).toBeUndefined();
@@ -452,6 +444,7 @@ describe("Delphi toolchain planning", () => {
     const bundle = await ensureFixtureProject(root);
     const input = delphiTestingInputSchema.parse({
       objective: "Audit the responsive layout and visual quality",
+      visualInspection: "pixel",
       platforms: ["web"],
       target: { baseUrl: "http://127.0.0.1:4173" }
     });
@@ -499,6 +492,7 @@ describe("Delphi toolchain planning", () => {
     const bundle = await ensureFixtureProject(root);
     const input = delphiTestingInputSchema.parse({
       objective: "Visually audit the responsive layout",
+      visualInspection: "pixel",
       platforms: ["web"],
       target: { baseUrl: "http://127.0.0.1:4173" }
     });
@@ -770,7 +764,7 @@ describe("Delphi toolchain planning", () => {
     expect(analyzed).toEqual([emitted[0]!.id]);
   });
 
-  it("reports executed assertions instead of total browser actions and removes non-vision layout claims", () => {
+  it("does not rewrite a provider summary by interpreting its prose", () => {
     const parsed = delphiTestingAgent.parseOutput(JSON.stringify({
       status: "completed",
       verdict: "passed",
@@ -803,9 +797,9 @@ describe("Delphi toolchain planning", () => {
       }
     ]) as DelphiTestingOutput;
 
-    expect(parsed.summary).toBe("4/4 assertions passed and no horizontal overflow detected.");
-    expect(parsed.summary).not.toContain("6 Playwright checks");
-    expect(parsed.summary).not.toContain("responsive layout");
+    expect(parsed.summary).toBe("6 Playwright checks passed and the responsive layout is intact.");
+    expect(parsed.checks).toHaveLength(1);
+    expect(parsed.checks[0]?.evidence).toContain("No horizontal overflow");
   });
 
   it("installs approved Playwright components into the managed cache without editing the project", async () => {

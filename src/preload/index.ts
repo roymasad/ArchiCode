@@ -1,6 +1,6 @@
 import { clipboard, contextBridge, ipcRenderer, webFrame } from "electron";
 import type { Note, DebugIncident, Flow, LlmPatchProposal, NodePatch, PatchOperationDecision, PresentationPatchRequest, PresentationPatchResult, Project, ProjectBundle, ProjectSettings, ProjectMemoryNote, Artifact, PatchReviewRecord, Run, RunEffort, RunGuidance, RunScope, RuntimeService, ResearchCanvasAction, ResearchChatScope, ResearchChatSession, ResearchGraphChangeDecision, ResearchGraphChangeResult, ResearchMessageNodeReference } from "../shared/schema";
-import type { SpeechModelId, SpeechSettings, TtsModelId, TtsSettings, TtsVoiceId } from "../shared/schema";
+import type { SpeechModelId, SpeechSettings, TtsModelId, TtsSettings, TtsVoiceId, VoiceSettings } from "../shared/schema";
 import type { TtsModelDownloadProgress, TtsModelStatus, TtsRuntimeStatus, TtsSpeechStreamChunk, TtsSpeechStreamResult, TtsSynthesisResult } from "../main/tts";
 import type {
   CreateProjectSkillInput,
@@ -18,6 +18,8 @@ import type { GraphHistoryPage, GraphHistoryPageOptions, GraphNodeHistory, Histo
 import type { GlobalResearchPersonality, GlobalResearchVerbosity } from "../shared/researchPersonality";
 import type { AppUpdateStatus } from "../main/updater";
 import type { ExternalMcpHostStatus } from "../main/mcpHost";
+import type { CodexRealtimeClientSecret, CodexRealtimeStartInput, CodexRealtimeStatus } from "../main/codexRealtime";
+import type { RealtimeResearchTask, RealtimeResearchTaskEvent, StartRealtimeResearchTaskInput } from "../main/research/realtimeTasks";
 import type { SemanticCodeLineContext, SemanticIndexProgress, SemanticIndexStatus, SemanticModelPreferenceId, SemanticNodeContext } from "../main/semanticIndex";
 import type { GraphEvidenceRefreshProgress, GraphEvidenceRefreshResult } from "../main/importer/evidenceRefresh";
 import type { CodeKnowledgeSnapshot } from "../shared/codeKnowledge";
@@ -280,10 +282,13 @@ const api = {
   getGlobalResearchVerbosity: (): Promise<GlobalResearchVerbosity> => ipcRenderer.invoke("archicode:get-global-research-verbosity"),
   getGlobalProviderSecretStatus: (): Promise<Record<string, boolean>> => ipcRenderer.invoke("archicode:get-global-provider-secret-status"),
   getWebSearchSecretStatus: (): Promise<Record<"brave", boolean>> => ipcRenderer.invoke("archicode:get-web-search-secret-status"),
+  getCodexRealtimeSecretStatus: (): Promise<Record<"openAiApiKey", boolean>> => ipcRenderer.invoke("archicode:get-codex-realtime-secret-status"),
   saveGlobalProviders: (providers: ProjectSettings["providers"], options?: { preserveMissingSecrets?: boolean; includeSecrets?: boolean }): Promise<ProjectSettings["providers"]> =>
     ipcRenderer.invoke("archicode:save-global-providers", providers, options),
   saveWebSearchSecrets: (secrets: { braveApiKey?: string }, options?: { preserveMissingSecrets?: boolean }): Promise<Record<"brave", boolean>> =>
     ipcRenderer.invoke("archicode:save-web-search-secrets", secrets, options),
+  saveCodexRealtimeSecrets: (secrets: { openAiApiKey?: string }, options?: { preserveMissingSecrets?: boolean }): Promise<Record<"openAiApiKey", boolean>> =>
+    ipcRenderer.invoke("archicode:save-codex-realtime-secrets", secrets, options),
   saveGlobalResearchPersonality: (personality: GlobalResearchPersonality): Promise<GlobalResearchPersonality> =>
     ipcRenderer.invoke("archicode:save-global-research-personality", personality),
   saveGlobalResearchVerbosity: (verbosity: GlobalResearchVerbosity): Promise<GlobalResearchVerbosity> =>
@@ -294,6 +299,9 @@ const api = {
   getGlobalTtsSettings: (): Promise<TtsSettings> => ipcRenderer.invoke("archicode:get-global-tts-settings"),
   saveGlobalTtsSettings: (settings: TtsSettings): Promise<TtsSettings> =>
     ipcRenderer.invoke("archicode:save-global-tts-settings", settings),
+  getGlobalVoiceSettings: (): Promise<VoiceSettings> => ipcRenderer.invoke("archicode:get-global-voice-settings"),
+  saveGlobalVoiceSettings: (settings: VoiceSettings): Promise<VoiceSettings> =>
+    ipcRenderer.invoke("archicode:save-global-voice-settings", settings),
   getKeybindings: (): Promise<Record<string, { key: string; cmd?: boolean; ctrl?: boolean; shift?: boolean; alt?: boolean }>> =>
     ipcRenderer.invoke("archicode:get-keybindings"),
   saveKeybindings: (bindings: Record<string, { key: string; cmd?: boolean; ctrl?: boolean; shift?: boolean; alt?: boolean }>): Promise<Record<string, { key: string; cmd?: boolean; ctrl?: boolean; shift?: boolean; alt?: boolean }>> =>
@@ -445,6 +453,25 @@ const api = {
     ipcRenderer.invoke("archicode:delete-tts-model", modelId),
   warmTtsModel: (modelId: TtsModelId, voiceId?: TtsVoiceId): Promise<TtsModelStatus> =>
     ipcRenderer.invoke("archicode:warm-tts-model", modelId, voiceId),
+  getCodexRealtimeStatus: (model?: string): Promise<CodexRealtimeStatus> =>
+    ipcRenderer.invoke("archicode:get-codex-realtime-status", model),
+  startCodexRealtime: (input: CodexRealtimeStartInput): Promise<CodexRealtimeClientSecret> =>
+    ipcRenderer.invoke("archicode:codex-realtime-start", input),
+  getCodexRealtimeContext: (input: { model?: string; projectRoot: string; researchSessionId: string }): Promise<string> =>
+    ipcRenderer.invoke("archicode:get-codex-realtime-context", input),
+  callCodexRealtimeReadTool: (input: {
+    argumentsJson: string;
+    model?: string;
+    projectRoot: string;
+    providerToolName: string;
+    researchSessionId: string;
+  }): Promise<string> => ipcRenderer.invoke("archicode:call-codex-realtime-read-tool", input),
+  startRealtimeResearchTask: (input: StartRealtimeResearchTaskInput): Promise<RealtimeResearchTask> =>
+    ipcRenderer.invoke("archicode:start-realtime-research-task", input),
+  getRealtimeResearchTaskStatus: (input: { projectRoot: string; taskId: string }): Promise<RealtimeResearchTask> =>
+    ipcRenderer.invoke("archicode:get-realtime-research-task-status", input),
+  cancelRealtimeResearchTask: (input: { projectRoot: string; researchSessionId: string; taskId: string }): Promise<RealtimeResearchTask> =>
+    ipcRenderer.invoke("archicode:cancel-realtime-research-task", input),
   synthesizeSpeech: (input: {
     text: string;
     modelId?: TtsModelId;
@@ -684,6 +711,12 @@ const api = {
     sessionId: string;
     autoApproveGraphChanges: ResearchChatSession["autoApproveGraphChanges"];
   }): Promise<ResearchChatSession> => ipcRenderer.invoke("archicode:update-research-chat-auto-approval", input),
+  appendResearchChatTranscript: (input: {
+    projectRoot: string;
+    sessionId: string;
+    role: "user" | "assistant";
+    text: string;
+  }): Promise<ResearchChatSession> => ipcRenderer.invoke("archicode:append-research-chat-transcript", input),
   sendResearchChatMessage: (input: {
     projectRoot: string;
     sessionId: string;
@@ -811,6 +844,11 @@ const api = {
     const listener = (_event: Electron.IpcRendererEvent, payload: ResearchSubagentProgressPayload) => handler(payload);
     ipcRenderer.on("archicode:research-subagent-progress", listener);
     return () => ipcRenderer.removeListener("archicode:research-subagent-progress", listener);
+  },
+  onRealtimeResearchTask: (handler: (payload: RealtimeResearchTaskEvent) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: RealtimeResearchTaskEvent) => handler(payload);
+    ipcRenderer.on("archicode:realtime-research-task", listener);
+    return () => ipcRenderer.removeListener("archicode:realtime-research-task", listener);
   },
   onSpeechModelDownloadProgress: (handler: (payload: SpeechModelDownloadProgress) => void): (() => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: SpeechModelDownloadProgress) => handler(payload);

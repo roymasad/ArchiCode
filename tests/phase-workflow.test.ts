@@ -1837,6 +1837,8 @@ process.stdin.on("end", () => {
           launchCommand: "node -e \"console.log('launch {targetId}')\"",
           waitCommand: "node -e \"console.log('ready {targetId}')\"",
           readyPattern: "{targetId}",
+          buildCommand: "node -e \"console.log('build should not run')\"",
+          testCommand: "node -e \"console.log('test should not run')\"",
           diagnosticCommands: [],
           recoveryCommands: [],
           retryAfterRecovery: true,
@@ -1857,6 +1859,8 @@ process.stdin.on("end", () => {
 
     expect(run.command).toBe("node -e \"console.log('run target-1')\"");
     expect(run.runTargetId).toBe("target-1");
+    expect(run.plannedCommands).not.toContain("node -e \"console.log('build should not run')\"");
+    expect(run.plannedCommands).not.toContain("node -e \"console.log('test should not run')\"");
     expect(run.logs.some((line) => line.text.includes("Selected run target: Target One (target-1)"))).toBe(true);
     expect(run.logs.some((line) => line.text.includes("Run target is ready"))).toBe(true);
     expect(run.logs.some((line) => line.text.includes("run target-1"))).toBe(true);

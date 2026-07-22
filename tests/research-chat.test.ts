@@ -8,14 +8,16 @@ import { addNote, attachNodeReferences } from "../src/main/storage/notes";
 import { readArtifactText } from "../src/main/storage/patches";
 import { ensureEmptyCodebaseProject, ensureFixtureProject, loadProject, saveFlow, setGlobalMcpSettingsStore, updateNode, updateProjectSettings } from "../src/main/storage/projectStore";
 import { reportBug } from "../src/main/storage/runEngine";
-import { listRuntimeServices } from "../src/main/storage/runtimeServices";
-import { delphiTestingInputSchema, researchChatSessionSchema, researchGraphOperationKinds, runSchema, subagentRunSchema, type ProjectSettings, type ResearchChatSession } from "../src/shared/schema";
+import { listRuntimeServices, stopRuntimeService } from "../src/main/storage/runtimeServices";
+import { delphiTestingInputSchema, researchChatMessageSchema, researchChatSessionSchema, researchGraphOperationKinds, runSchema, subagentRunSchema, type ProjectSettings, type ResearchChatSession } from "../src/shared/schema";
 import { isResearchThinkingPhrase } from "../src/shared/researchPersonality";
-import { applyResearchGraphChangeSet, cancelResearchChatMessage, delphiAuditReport, effectiveDelphiModelPreflight, mapExistingCodebase, reconcileResearchOutcomeReportState, requestsRedundantOutcomeArtifactRead, respondToSubagentRun, resumeResearchGoalsForRunUpdate, sendResearchChatMessage, setGlobalResearchPersonalityResolver, setGlobalResearchVerbosityResolver } from "../src/main/research";
-import { createResearchChat, listResearchChats, markSubagentRunLive, markSubagentRunSettled, persistResearchSession, renameResearchChat, setResearchStorageRoot, transitionSubagentRun, updateResearchChatAutoApproval } from "../src/main/research/chatStore";
+import { deriveResearchChatContextPlanForModel } from "../src/shared/contextBudget";
+import { applyResearchGraphChangeSet, cancelResearchChatMessage, delphiAuditReport, effectiveDelphiModelPreflight, mapExistingCodebase, prepareResearchChatForContextPlan, reconcileResearchOutcomeReportState, requestsRedundantOutcomeArtifactRead, respondToSubagentRun, resumeResearchGoalsForRunUpdate, sendResearchChatMessage, setGlobalResearchPersonalityResolver, setGlobalResearchVerbosityResolver } from "../src/main/research";
+import { appendDetachedResearchResult, appendResearchChatTranscript, createResearchChat, listResearchChats, markSubagentRunLive, markSubagentRunSettled, persistResearchSession, renameResearchChat, setResearchStorageRoot, transitionSubagentRun, updateResearchChatAutoApproval } from "../src/main/research/chatStore";
 import { buildResearchGraphLayoutToolResult, researchToolInspectCli, researchToolReadFile } from "../src/main/research/inspectionTools";
 import { deriveResearchTurnKind, researchTurnPolicy } from "../src/main/research/turnPolicy";
 import { ARCHICODE_RESEARCH_RULES_SERVER_ID, ARCHICODE_RESEARCH_RULES_TOOL_NAME } from "../src/main/internalTools";
+import { cancelRealtimeResearchTask, getRealtimeResearchTask, startRealtimeResearchTask, type RealtimeResearchTaskEvent } from "../src/main/research/realtimeTasks";
 
 vi.mock("node:dns/promises", () => ({
   lookup: async () => [{ address: "93.184.216.34", family: 4 }]
@@ -478,15 +480,13 @@ describe("research chat workflow", () => {
       includeExternalRetrieval: false,
       includeProjectContext: true,
       includeConversationHistory: true,
-      includeSelectedSkills: false,
-      enforceExplicitDelphiDelegation: false
+      includeSelectedSkills: false
     });
     expect(researchTurnPolicy("user")).toMatchObject({
       includeExternalRetrieval: true,
       includeProjectContext: true,
       includeConversationHistory: true,
-      includeSelectedSkills: true,
-      enforceExplicitDelphiDelegation: true
+      includeSelectedSkills: true
     });
   });
 
@@ -507,6 +507,414 @@ describe("research chat workflow", () => {
     const completed = transitionSubagentRun(running, "completed", { resultSummary: "Verified." });
     expect(completed).toMatchObject({ status: "completed", resultSummary: "Verified." });
     expect(() => transitionSubagentRun(completed, "running")).toThrow("Invalid subagent run transition completed -> running");
+  });
+
+  it("persists completed realtime utterances in the active Research chat", async () => {
+    const { projectRoot } = await setupProject();
+    const session = await createResearchChat({
+      projectRoot,
+      scope: { type: "project", projectId: "project-seed" }
+    });
+
+    await appendResearchChatTranscript({
+      projectRoot,
+      sessionId: session.id,
+      role: "user",
+      text: "  Can you hear me?  "
+    });
+    const updated = await appendResearchChatTranscript({
+      projectRoot,
+      sessionId: session.id,
+      role: "assistant",
+      text: "Yes, loud and clear."
+    });
+
+    expect(updated.messages.map(({ role, delivery, content }) => ({ role, delivery, content }))).toEqual([
+      { role: "user", delivery: "realtime", content: "Can you hear me?" },
+      { role: "assistant", delivery: "realtime", content: "Yes, loud and clear." }
+    ]);
+    const [persisted] = await listResearchChats(projectRoot);
+    expect(persisted.messages).toEqual(updated.messages);
+  });
+
+  it("preserves tool and subagent approval cards returned by detached Research", async () => {
+    const { projectRoot } = await setupProject();
+    const session = await createResearchChat({
+      projectRoot,
+      scope: { type: "project", projectId: "project-seed" }
+    });
+    const now = new Date().toISOString();
+
+    const updated = await appendDetachedResearchResult({
+      projectRoot,
+      sessionId: session.id,
+      message: researchChatMessageSchema.parse({
+        id: "detached-approval-result",
+        role: "assistant",
+        content: "I need approval for the project tool and the Delphi audit before continuing.",
+        createdAt: now,
+        mcpApprovalRequest: {
+          serverIds: ["archicode-project"],
+          serverLabels: ["ArchiCode Project"],
+          toolName: "run_project_command",
+          providerToolName: "archicode_project_run_command",
+          argumentsJson: JSON.stringify({ command: "npm test" }),
+          originalContent: "Run the project test command.",
+          filePaths: []
+        },
+        subagentRuns: [{
+          id: "delphi-approval",
+          kind: "delphi-testing",
+          status: "awaiting-approval",
+          title: "Delphi project audit",
+          argumentsJson: "{}",
+          reviewReason: "Run the project's finite automated checks.",
+          progress: [],
+          createdAt: now,
+          updatedAt: now
+        }]
+      })
+    });
+
+    const result = updated.messages.at(-1);
+    expect(result?.delivery).toBe("background-research");
+    expect(result?.mcpApprovalRequest?.toolName).toBe("run_project_command");
+    expect(result?.subagentRuns).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "delphi-approval", status: "awaiting-approval" })
+    ]));
+  });
+
+  it("keeps live chat writable while detached classical Research completes into the same visible chat", async () => {
+    const { projectRoot } = await setupProject(JSON.stringify({
+      archicodeResearch: {
+        answer: "The detached Research result is ready.",
+        summary: "Completed detached Research."
+      }
+    }));
+    const session = await createResearchChat({
+      projectRoot,
+      scope: { type: "project", projectId: "project-seed" }
+    });
+    const withRequest = await appendResearchChatTranscript({
+      projectRoot,
+      sessionId: session.id,
+      role: "user",
+      text: "Investigate this in the background."
+    });
+    let resolveFinished!: (event: RealtimeResearchTaskEvent) => void;
+    const finished = new Promise<RealtimeResearchTaskEvent>((resolve) => {
+      resolveFinished = resolve;
+    });
+    const started = startRealtimeResearchTask({
+      content: "Inspect the current project and report the useful result.",
+      projectRoot,
+      researchSessionId: session.id,
+      sourceUserMessageId: withRequest.messages[0]?.id
+    }, {
+      onEvent: (event) => {
+        if (event.status === "completed" || event.status === "failed") resolveFinished(event);
+      },
+      onSessionUpdated: () => undefined
+    });
+
+    expect(started.status).toBe("queued");
+    await appendResearchChatTranscript({
+      projectRoot,
+      sessionId: session.id,
+      role: "user",
+      text: "Meanwhile, I am still talking to Archi."
+    });
+    const completed = await finished;
+    expect(completed.status).toBe("completed");
+
+    const chats = await listResearchChats(projectRoot);
+    expect(chats).toHaveLength(1);
+    expect(chats[0]?.messages.map((message) => message.content)).toEqual(expect.arrayContaining([
+      "Investigate this in the background.",
+      "Meanwhile, I am still talking to Archi.",
+      "The detached Research result is ready."
+    ]));
+    expect(chats[0]?.messages.find((message) => message.content === "The detached Research result is ready.")?.delivery)
+      .toBe("background-research");
+  });
+
+  it("reuses an identical recent completed Realtime answer instead of starting duplicate work", async () => {
+    const { projectRoot } = await setupProject(JSON.stringify({
+      archicodeResearch: { answer: "The reusable Research result is ready." }
+    }));
+    const session = await createResearchChat({
+      projectRoot,
+      scope: { type: "project", projectId: "project-seed" }
+    });
+    let resolveFinished!: (event: RealtimeResearchTaskEvent) => void;
+    const finished = new Promise<RealtimeResearchTaskEvent>((resolve) => {
+      resolveFinished = resolve;
+    });
+    const callbacks = {
+      onEvent: (event: RealtimeResearchTaskEvent) => {
+        if (event.status === "completed" || event.status === "failed") resolveFinished(event);
+      },
+      onSessionUpdated: () => undefined
+    };
+    const input = {
+      content: "Find the current answer.",
+      projectRoot,
+      requestKey: "web:current answer",
+      researchSessionId: session.id,
+      reuseCompletedWithinMs: 300_000
+    };
+    const started = startRealtimeResearchTask(input, callbacks);
+    const reusedWhileActive = startRealtimeResearchTask(input, callbacks);
+    expect(reusedWhileActive).toMatchObject({ reused: true, taskId: started.taskId });
+    expect(["queued", "running"]).toContain(reusedWhileActive.status);
+    await finished;
+
+    const reused = startRealtimeResearchTask(input, callbacks);
+
+    expect(reused).toMatchObject({
+      reused: true,
+      status: "completed",
+      taskId: started.taskId,
+      resultSummary: "The reusable Research result is ready."
+    });
+    const visible = (await listResearchChats(projectRoot)).find((item) => item.id === session.id);
+    expect(visible?.messages.filter((message) => message.content === "The reusable Research result is ready.")).toHaveLength(1);
+  });
+
+  it("passes an explicit Run App contract to detached Research", async () => {
+    const { projectRoot, promptPath } = await setupProject(JSON.stringify({
+      archicodeResearch: {
+        answer: "One configured Run App target is available for interactive testing."
+      }
+    }), true);
+    const session = await createResearchChat({
+      projectRoot,
+      scope: { type: "project", projectId: "project-seed" }
+    });
+    let resolveFinished!: (event: RealtimeResearchTaskEvent) => void;
+    const finished = new Promise<RealtimeResearchTaskEvent>((resolve) => {
+      resolveFinished = resolve;
+    });
+    startRealtimeResearchTask({
+      content: "Start the configured Run App target for interactive browser testing. Launch it so the user can test it in the browser.",
+      deliverable: "run-app",
+      projectRoot,
+      researchSessionId: session.id
+    }, {
+      onEvent: (event) => {
+        if (event.status === "completed" || event.status === "failed") resolveFinished(event);
+      },
+      onSessionUpdated: () => undefined
+    });
+
+    const completed = await finished;
+    expect(completed).toMatchObject({ deliverable: "run-app", status: "completed" });
+    expect(completed.label).toContain("Run App target");
+    expect(completed.startedAt).toBeTruthy();
+    const prompt = await readFile(promptPath!, "utf8");
+    expect(prompt).toContain("DELIVERABLE: run-app");
+    expect(prompt).toContain("Do not substitute AI Implement, npm run build, or a Delphi verification audit");
+    expect(prompt).not.toContain("EXPLICIT TEST OBJECTIVE");
+    expect(prompt).not.toContain("archicode_spawn_delphi");
+  });
+
+  it("cancels a running detached Research task without publishing a failure result", async () => {
+    const { projectRoot } = await setupProject();
+    const delayedCommand = await createDelayedResearchCodex(projectRoot, JSON.stringify({
+      archicodeResearch: { answer: "This result should never reach the visible chat." }
+    }), 5_000);
+    const bundle = await loadProject(projectRoot);
+    await updateProjectSettings(projectRoot, {
+      ...bundle.project.settings,
+      providers: bundle.project.settings.providers.map((provider) => provider.id === "codex-local"
+        ? { ...provider, enabled: true, localCommand: delayedCommand, localSandbox: "workspace-write" as const }
+        : { ...provider, enabled: false })
+    });
+    const session = await createResearchChat({
+      projectRoot,
+      scope: { type: "project", projectId: "project-seed" }
+    });
+    let resolveRunning!: () => void;
+    const running = new Promise<void>((resolve) => {
+      resolveRunning = resolve;
+    });
+    const started = startRealtimeResearchTask({
+      content: "Perform a long background graph review investigation.",
+      projectRoot,
+      researchSessionId: session.id
+    }, {
+      onEvent: (event) => {
+        if (event.status === "running") resolveRunning();
+      },
+      onSessionUpdated: () => undefined
+    });
+
+    expect(started.deliverable).toBe("answer");
+    expect(started.label).toBe("Perform a long background graph review investigation.");
+    expect(started.startedAt).toBeUndefined();
+    await running;
+    expect(getRealtimeResearchTask(started.taskId, projectRoot).startedAt).toBeTruthy();
+    const cancelled = cancelRealtimeResearchTask({
+      projectRoot,
+      researchSessionId: session.id,
+      taskId: started.taskId
+    });
+    expect(cancelled.status).toBe("cancelled");
+    expect(cancelled.cancelledAt).toBeTruthy();
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(getRealtimeResearchTask(started.taskId, projectRoot).status).toBe("cancelled");
+    const visible = (await listResearchChats(projectRoot)).find((item) => item.id === session.id);
+    expect(visible?.messages).toHaveLength(0);
+  });
+
+  it("removes a cancelled queued task from the per-chat execution sequence", async () => {
+    const { projectRoot } = await setupProject();
+    const delayedCommand = await createDelayedResearchCodex(projectRoot, JSON.stringify({
+      archicodeResearch: { answer: "The first queued task completed." }
+    }), 300);
+    const bundle = await loadProject(projectRoot);
+    await updateProjectSettings(projectRoot, {
+      ...bundle.project.settings,
+      providers: bundle.project.settings.providers.map((provider) => provider.id === "codex-local"
+        ? { ...provider, enabled: true, localCommand: delayedCommand, localSandbox: "workspace-write" as const }
+        : { ...provider, enabled: false })
+    });
+    const session = await createResearchChat({
+      projectRoot,
+      scope: { type: "project", projectId: "project-seed" }
+    });
+    let resolveFirstFinished!: () => void;
+    const firstFinished = new Promise<void>((resolve) => {
+      resolveFirstFinished = resolve;
+    });
+    const callbacks = {
+      onEvent: (event: RealtimeResearchTaskEvent) => {
+        if (event.status === "completed" && event.resultSummary === "The first queued task completed.") resolveFirstFinished();
+      },
+      onSessionUpdated: () => undefined
+    };
+    startRealtimeResearchTask({
+      content: "Complete the first task.",
+      projectRoot,
+      researchSessionId: session.id
+    }, callbacks);
+    const queued = startRealtimeResearchTask({
+      content: "This second task must not start.",
+      projectRoot,
+      researchSessionId: session.id
+    }, callbacks);
+
+    const cancelled = cancelRealtimeResearchTask({
+      projectRoot,
+      researchSessionId: session.id,
+      taskId: queued.taskId
+    });
+    expect(cancelled.status).toBe("cancelled");
+    await firstFinished;
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(getRealtimeResearchTask(queued.taskId, projectRoot).status).toBe("cancelled");
+    const visible = (await listResearchChats(projectRoot)).find((item) => item.id === session.id);
+    expect(visible?.messages.map((message) => message.content)).toEqual(["The first queued task completed."]);
+  });
+
+  it("requires detached graph-review work to publish a structured actionable card", async () => {
+    const { projectRoot, promptPath } = await setupProject([
+      JSON.stringify({
+        archicodeResearch: {
+          answer: "I have considered the graph update and will prepare it next."
+        }
+      }),
+      JSON.stringify({
+        archicodeResearch: {
+          answer: "The Contact page proposal is ready for review.",
+          changeSet: {
+            summary: "Add Contact page",
+            operations: [{
+              kind: "create-node",
+              flowId: "flow-main",
+              node: {
+                id: "node-contact-page",
+                type: "task",
+                title: "Contact Page",
+                description: "Add the Contact page route, content, and form requirements."
+              }
+            }]
+          }
+        }
+      })
+    ], true);
+    const session = await createResearchChat({
+      projectRoot,
+      scope: { type: "project", projectId: "project-seed" }
+    });
+    let resolveFinished!: (event: RealtimeResearchTaskEvent) => void;
+    const finished = new Promise<RealtimeResearchTaskEvent>((resolve) => {
+      resolveFinished = resolve;
+    });
+    startRealtimeResearchTask({
+      content: "Prepare a graph review card that adds the Contact page.",
+      deliverable: "graph-review",
+      projectRoot,
+      researchSessionId: session.id
+    }, {
+      onEvent: (event) => {
+        if (event.status === "completed" || event.status === "failed") resolveFinished(event);
+      },
+      onSessionUpdated: () => undefined
+    });
+
+    const completed = await finished;
+    expect(completed.status).toBe("completed");
+    expect(completed.deliverable).toBe("graph-review");
+    expect(completed.activity).toContain("added a graph review card");
+    const [updated] = await listResearchChats(projectRoot);
+    const proposal = updated?.messages.find((message) => message.changeSet?.summary === "Add Contact page");
+    expect(proposal).toMatchObject({
+      delivery: "background-research",
+      role: "assistant"
+    });
+    expect(proposal?.changeSet?.operations).toHaveLength(1);
+    expect(updated?.orchestration.todos).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        changeSetId: proposal?.changeSet?.id,
+        messageId: proposal?.id,
+        status: "awaiting-approval"
+      })
+    ]));
+    expect(await readFile(promptPath!, "utf8")).toContain("REQUIRED GRAPH-REVIEW CORRECTION");
+  });
+
+  it("fails detached graph-review work instead of presenting prose as a card", async () => {
+    const { projectRoot } = await setupProject([
+      JSON.stringify({ archicodeResearch: { answer: "I am sending this through the review path." } }),
+      JSON.stringify({ archicodeResearch: { answer: "The graph proposal should appear shortly." } })
+    ]);
+    const session = await createResearchChat({
+      projectRoot,
+      scope: { type: "project", projectId: "project-seed" }
+    });
+    let resolveFinished!: (event: RealtimeResearchTaskEvent) => void;
+    const finished = new Promise<RealtimeResearchTaskEvent>((resolve) => {
+      resolveFinished = resolve;
+    });
+    startRealtimeResearchTask({
+      content: "Prepare a graph review card.",
+      deliverable: "graph-review",
+      projectRoot,
+      researchSessionId: session.id
+    }, {
+      onEvent: (event) => {
+        if (event.status === "completed" || event.status === "failed") resolveFinished(event);
+      },
+      onSessionUpdated: () => undefined
+    });
+
+    const failed = await finished;
+    expect(failed.status).toBe("failed");
+    expect(failed.error).toContain("did not produce the required graph review card");
+    const [updated] = await listResearchChats(projectRoot);
+    expect(updated?.messages.some((message) => Boolean(message.changeSet))).toBe(false);
+    expect(updated?.messages.at(-1)?.content).toContain("I couldn't complete that background Research task");
   });
 
   it("includes concrete Delphi finding details in the parent outcome packet", () => {
@@ -3465,6 +3873,43 @@ describe("research chat workflow", () => {
     expect(prompts[1]).toContain("Old message 204");
   });
 
+  it("compacts a token-heavy chat for Realtime even below the message-count trigger", async () => {
+    const { projectRoot, storageRoot } = await setupProject(JSON.stringify({
+      researchMemoryDelta: {
+        summary: "The large classical transcript was prepared for Live.",
+        facts: [{ text: "The earliest large turns were folded before Realtime handoff.", sourceMessageIds: ["large-0"] }]
+      }
+    }));
+    const created = await createResearchChat({
+      projectRoot,
+      scope: { type: "project", projectId: "project-seed" }
+    });
+    const largeMessages = Array.from({ length: 20 }, (_, index) => ({
+      id: `large-${index}`,
+      role: index % 2 === 0 ? "user" as const : "assistant" as const,
+      content: `Large turn ${index}: ${"context ".repeat(520)}`,
+      createdAt: `2026-06-24T10:${String(index).padStart(2, "0")}:00.000Z`,
+      attachmentIds: [],
+      webUsed: false,
+      mcpToolCalls: []
+    }));
+    await writeFile(researchStorageFile(storageRoot, projectRoot), `${JSON.stringify({
+      projectRoot,
+      sessions: [{ ...created, messages: largeMessages, updatedAt: "2026-06-24T10:19:00.000Z" }]
+    }, null, 2)}\n`, "utf8");
+
+    const prepared = await prepareResearchChatForContextPlan({
+      projectRoot,
+      sessionId: created.id,
+      contextPlan: deriveResearchChatContextPlanForModel("gpt-realtime-2.1")
+    });
+
+    expect(largeMessages.length).toBeLessThan(64);
+    expect(prepared.memory.lastCompactedMessageId).toMatch(/^large-\d+$/);
+    expect(prepared.memory.summary).toContain("prepared for Live");
+    expect(prepared.memory.facts.some((fact) => fact.text.includes("folded before Realtime"))).toBe(true);
+  });
+
   it("applies approved research note lifecycle changes", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-notes-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
@@ -3680,7 +4125,7 @@ describe("research chat workflow", () => {
     expect(loaded.project.settings.runTargetProfiles.find((profile) => profile.id === "research-preview")?.label).toBe("Research Preview");
   });
 
-  it("applies approved research queue actions for existing run targets", async () => {
+  it("converts legacy approved run-target actions into direct runtime services", async () => {
     const output = JSON.stringify({
       archicodeResearch: {
         answer: "I can queue the preview target after you approve it.",
@@ -3711,7 +4156,7 @@ describe("research chat workflow", () => {
           diagnosticCommands: [],
           recoveryCommands: [],
           retryAfterRecovery: false,
-          runCommand: "npm run dev",
+          runCommand: "node -e \"console.log('research-preview-ready'); setInterval(() => {}, 1000)\"",
           timeoutSeconds: 90
         }
       ]
@@ -3735,12 +4180,58 @@ describe("research chat workflow", () => {
       decisions: [{ operationIndex: 0, decision: "accepted" }]
     });
     const loaded = await loadProject(projectRoot);
-    const queued = loaded.runs.find((run) => run.runProfileId === "research-preview");
+    const service = (await listRuntimeServices(projectRoot)).find((item) => item.profileId === "research-preview");
 
     expect(result.results[0]?.status).toBe("applied");
-    expect(result.results[0]?.message).toContain("Queued run profile research-preview as run");
-    expect(queued?.status).not.toBe("needs-permission");
-    expect(queued?.permission.decision).toBe("allowed");
+    expect(result.results[0]?.message).toContain("Started runtime service Research Preview");
+    expect(loaded.runs.some((run) => run.runProfileId === "research-preview")).toBe(false);
+    expect(service?.status).toBe("running");
+    await stopRuntimeService(projectRoot, service!.id);
+  });
+
+  it("starts Run App directly from classical Research without a card or Activity run", async () => {
+    const outputs = [
+      localResearchSinkTurn("", [{
+        providerToolName: "archicode_project_start_runtime_service",
+        arguments: { profileId: "research-direct-preview" }
+      }]),
+      "The preview runtime is running directly for your testing."
+    ];
+    const { projectRoot } = await setupProject(outputs);
+    const bundle = await loadProject(projectRoot);
+    await updateProjectSettings(projectRoot, {
+      ...bundle.project.settings,
+      runTargetProfiles: [{
+        id: "research-direct-preview",
+        label: "Research Direct Preview",
+        kind: "web",
+        targetRequired: false,
+        diagnosticCommands: [],
+        recoveryCommands: [],
+        retryAfterRecovery: false,
+        runCommand: "node -e \"console.log('research-direct-ready'); setInterval(() => {}, 1000)\"",
+        timeoutSeconds: 30
+      }]
+    });
+    const session = await createResearchChat({
+      projectRoot,
+      scope: { type: "project", projectId: bundle.project.id }
+    });
+
+    const answered = await sendResearchChatMessage({
+      projectRoot,
+      sessionId: session.id,
+      content: "Start the preview app so I can test it myself."
+    });
+    const service = (await listRuntimeServices(projectRoot)).find((item) => item.profileId === "research-direct-preview");
+    const loaded = await loadProject(projectRoot);
+    const assistant = [...answered.messages].reverse().find((message) => message.role === "assistant");
+
+    expect(assistant?.content).toContain("running directly");
+    expect(assistant?.changeSet).toBeUndefined();
+    expect(service?.status).toBe("running");
+    expect(loaded.runs.some((run) => run.runProfileId === "research-direct-preview")).toBe(false);
+    await stopRuntimeService(projectRoot, service!.id);
   });
 
   it("lets research chat link an existing node to an existing detail flow", async () => {
@@ -4269,6 +4760,9 @@ describe("research chat workflow", () => {
     expect(prompt).toContain("archicode_console_run_command");
     expect(prompt).toContain("archicode_project_read_artifact");
     expect(prompt).toContain("archicode_project_list_runtime_services");
+    expect(prompt).toContain("archicode_project_start_runtime_service");
+    expect(prompt).toContain("archicode_project_stop_runtime_service");
+    expect(prompt).toContain("archicode_project_restart_runtime_service");
     expect(prompt).toContain("archicode_spawn_sherlock");
     expect(prompt).toContain("\"selectedNodes\"");
     expect(prompt).toContain("\"nodeId\":\"node-project\"");
@@ -4529,7 +5023,9 @@ describe("research chat workflow", () => {
     }
     expect(prompt).toContain("{ \"kind\": \"create-group\"");
     expect(prompt).toContain("optional guidance");
-    expect(prompt).toContain("Do not include guidance on start-run-profile");
+    expect(prompt).toContain("start-run-profile remains parseable only for legacy saved proposals");
+    expect(prompt).toContain("Never emit it for new work");
+    expect(prompt).toContain("use archicode_project_start_runtime_service");
     expect(prompt).toContain("Before proposing any new queue start, check activeQueue, queue, recentRuns, runtimeServices, and orchestration todos already in context.");
     expect(prompt).toContain("If similar work is already active, already queued, or clearly overlaps enough to risk contradiction, duplication, or wasted work, do not propose another new queue start yet");
     expect(prompt).toContain("AI Implement can create a new codebase from the graph");
@@ -5137,7 +5633,7 @@ describe("research chat workflow", () => {
     expect(prompts).not.toContain("Codex Local failed");
   });
 
-  it("returns an omitted Delphi delegation to the same Anthropic trajectory instead of forcing a provider-specific first tool", async () => {
+  it("enforces a structured verification handoff without forcing a provider-specific first tool", async () => {
     const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-anthropic-delphi-route-"));
     setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
     const bundle = await ensureFixtureProject(projectRoot);
@@ -5172,6 +5668,7 @@ describe("research chat workflow", () => {
     const session = await createResearchChat({ projectRoot, scope: { type: "project", projectId: bundle.project.id } });
 
     const answered = await sendResearchChatMessage({
+      actionIntent: "verification",
       projectRoot,
       sessionId: session.id,
       content: "Run and test the current app, including a runtime audit."
@@ -5372,7 +5869,12 @@ describe("research chat workflow", () => {
     });
     vi.stubGlobal("fetch", fetchMock);
     const session = await createResearchChat({ projectRoot, scope: { type: "project", projectId: bundle.project.id } });
-    const prepared = await sendResearchChatMessage({ projectRoot, sessionId: session.id, content: "Run and test this multi-service project." });
+    const prepared = await sendResearchChatMessage({
+      actionIntent: "verification",
+      projectRoot,
+      sessionId: session.id,
+      content: "Run and test this multi-service project."
+    });
     const preparedMessage = prepared.messages.at(-1)!;
     const delphiRun = preparedMessage.subagentRuns.find((run) => run.kind === "delphi-testing")!;
     const parentActivity: string[] = [];
@@ -5408,9 +5910,10 @@ describe("research chat workflow", () => {
     expect(completed.orchestration.goal?.status).toBe("blocked");
     expect(completed.orchestration.goal?.checkpointSummary).toContain(finalReportMessage.id);
     expect(completed.orchestration.goal?.completionEvidence).not.toContain(`Final evidence-backed report persisted in chat message ${finalReportMessage.id}.`);
-    expect(completed.memory.summary).not.toContain("awaiting approval");
+    expect(completed.memory.summary).toContain("The Delphi audit is awaiting approval.");
+    expect(completed.memory.summary).toContain("Delphi audit finished with status blocked");
     expect(completed.memory.todos.find((todo) => todo.title === "Run Delphi test/runtime audit")?.status).toBe("blocked");
-    expect(completed.memory.runRefs.find((runRef) => runRef.runId === "delphi-testing")?.status).toBe("blocked");
+    expect(completed.memory.runRefs.find((runRef) => runRef.runId === "delphi-testing")?.status).toBe("awaiting-approval");
     expect(completed.memory.runRefs.find((runRef) => runRef.runId === delphiRun.id)).toMatchObject({
       title: "delphi-testing",
       status: "blocked"
@@ -6096,42 +6599,17 @@ describe("research chat workflow", () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
-  it("continues the same trajectory when a claimed graph card has not yet been submitted", async () => {
-    const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-card-repair-"));
-    setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
-    const bundle = await ensureFixtureProject(projectRoot);
-    process.env.OPENAI_RESEARCH_TEST_KEY = "test";
-    await updateProjectSettings(projectRoot, {
-      ...bundle.project.settings,
-      providers: bundle.project.settings.providers.map((provider) => provider.kind === "openai-compatible"
-        ? { ...provider, enabled: true, apiKeyEnv: "OPENAI_RESEARCH_TEST_KEY", openAiEndpointMode: "chat-completions" as const }
-        : { ...provider, enabled: false })
-    });
-    const proposedChangeSet = {
-      summary: "Add the confirmed review node",
-      operations: [{
-        kind: "create-node",
-        flowId: "flow-main",
-        node: {
-          id: "node-card-repair",
-          type: "task",
-          title: "Review card repair",
-          description: "Captured by the bounded repair pass."
+  it("does not infer a graph action from assistant prose", async () => {
+    const { projectRoot } = await setupProject([
+      localResearchSinkTurn("Recording the memory decision.", [memoryUnchangedSink()]),
+      JSON.stringify({
+        archicodeResearch: {
+          answer: "I created the graph review card and it is ready.",
+          summary: "No durable state changed."
         }
-      }]
-    };
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([{
-        id: "call-initial-memory",
-        name: "archicode_leave_memory_unchanged",
-        arguments: JSON.stringify({ reason: "No durable state changed." })
-      }], "I have prepared the requested graph review card."))
-      .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([{
-        id: "call-repaired-card",
-        name: "archicode_propose_graph_change_set",
-        arguments: JSON.stringify(proposedChangeSet)
-      }]));
-    vi.stubGlobal("fetch", fetchMock);
+      })
+    ]);
+    const bundle = await loadProject(projectRoot);
     const session = await createResearchChat({
       projectRoot,
       scope: { type: "project", projectId: bundle.project.id }
@@ -6140,56 +6618,12 @@ describe("research chat workflow", () => {
     const answered = await sendResearchChatMessage({
       projectRoot,
       sessionId: session.id,
-      content: "Add the confirmed review node and prepare the review card."
-    });
-
-    const repairBody = JSON.parse(fetchMock.mock.calls[1]![1]!.body as string);
-    const repairToolNames = repairBody.tools.map((tool: { function?: { name?: string } }) => tool.function?.name);
-    const repairTranscript = JSON.stringify(repairBody.messages);
-    const assistant = answered.messages.at(-1)!;
-    expect(repairToolNames).toContain("archicode_propose_graph_change_set");
-    expect(repairToolNames).toContain("archicode_project_read_file");
-    expect(repairTranscript).toContain("invalid-tool-name");
-    expect(repairTranscript).toContain("archicode_propose_graph_change_set");
-    expect(assistant.changeSet?.summary).toBe("Add the confirmed review node");
-    expect(assistant.changeSet?.operations).toHaveLength(1);
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-  });
-
-  it("replaces a false review-card completion with an honest answer when repair cannot build one", async () => {
-    const projectRoot = await mkdtemp(path.join(tmpdir(), "archicode-research-card-honesty-"));
-    setResearchStorageRoot(await mkdtemp(path.join(tmpdir(), "archicode-research-storage-")));
-    const bundle = await ensureFixtureProject(projectRoot);
-    process.env.OPENAI_RESEARCH_TEST_KEY = "test";
-    await updateProjectSettings(projectRoot, {
-      ...bundle.project.settings,
-      providers: bundle.project.settings.providers.map((provider) => provider.kind === "openai-compatible"
-        ? { ...provider, enabled: true, apiKeyEnv: "OPENAI_RESEARCH_TEST_KEY", openAiEndpointMode: "chat-completions" as const }
-        : { ...provider, enabled: false })
-    });
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(streamingChatCompletionToolCallsResponse([{
-        id: "call-false-card-memory",
-        name: "archicode_leave_memory_unchanged",
-        arguments: JSON.stringify({ reason: "No durable state changed." })
-      }], "I created the graph review card and it is ready."))
-      .mockResolvedValueOnce(streamingChatCompletionResponse("No review card was created because the requested operations are not yet clear."));
-    vi.stubGlobal("fetch", fetchMock);
-    const session = await createResearchChat({
-      projectRoot,
-      scope: { type: "project", projectId: bundle.project.id }
-    });
-
-    const answered = await sendResearchChatMessage({
-      projectRoot,
-      sessionId: session.id,
-      content: "Prepare whatever graph review card you can."
+      content: "Tell me what happened."
     });
 
     const assistant = answered.messages.at(-1)!;
-    expect(assistant.content).toBe("No review card was created because the requested operations are not yet clear.");
+    expect(assistant.content).toBe("I created the graph review card and it is ready.");
     expect(assistant.changeSet).toBeUndefined();
-    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("lets Research read current flow violations without requesting mutation approval", async () => {

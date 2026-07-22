@@ -1,8 +1,8 @@
-import { AlertCircle, AlertTriangle, Archive, Box, Brain, Check, CheckCircle2, ChevronDown, ChevronUp, Circle, Clock3, Copy, Download, ExternalLink, Eye, EyeOff, FileJson, FileText, FolderKanban, History, Layers3, ListTodo, Loader2, Maximize2, MessageSquare, Mic, Minimize2, PanelLeftClose, PanelLeftOpen, Paperclip, Play, Plus, RefreshCw, Send, ShieldCheck, Sparkles, Split, Square, Volume2, Workflow, X } from "lucide-react";
+import { AlertCircle, AlertTriangle, Archive, Box, Brain, Check, CheckCircle2, ChevronDown, ChevronUp, Circle, Clock3, Copy, Download, ExternalLink, Eye, EyeOff, FileJson, FileText, FolderKanban, History, Layers3, ListTodo, Loader2, Maximize2, MessageSquare, Mic, MicOff, Minimize2, PanelLeftClose, PanelLeftOpen, Paperclip, Play, Plus, RefreshCw, Send, ShieldCheck, Sparkles, Split, Square, Volume2, Workflow, X } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps, ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
-import type { Artifact, LlmUsage, ProjectBundle, ProjectSettings, ResearchChatScope, ResearchChatSession } from "@shared/schema";
+import { codexRealtimeModels, codexRealtimeV2Voices, defaultCodexRealtimeModel, defaultCodexRealtimeV2Voice, type Artifact, type LlmUsage, type ProjectBundle, type ProjectSettings, type ResearchChatMessage, type ResearchChatScope, type ResearchChatSession, type Run } from "@shared/schema";
 import { gaiaAgent, pandoraAgent } from "@shared/agentIdentities";
 import { deriveResearchChatContextPlan } from "@shared/contextBudget";
 import { sumLlmUsage, isAllUsageUnavailable, formatCostUsd, formatTokenCount, llmUsageTotalTokens } from "@shared/llmPricing";
@@ -73,8 +73,15 @@ import {
   persistedResearchModelId,
   PROVIDER_DEFAULT_MODEL_VALUE
 } from "../utils/researchModels";
+import { OPENAI_REALTIME_SESSION_DURATION_MS, OpenAiRealtimeCall, type RealtimeFunctionCall } from "./researchRealtime";
+import type { RealtimeResearchTaskEvent } from "../../../main/research/realtimeTasks";
 
 const RESEARCH_RULES_TOOL_NAME = "archicode_project_manage_rules";
+const RECENT_REALTIME_ANSWER_REUSE_MS = 5 * 60_000;
+
+function normalizedRealtimeRequestPart(value: unknown): string {
+  return typeof value === "string" ? value.replace(/\s+/g, " ").trim().toLocaleLowerCase() : "";
+}
 
 type DelphiObservationArtifact = { id: string; label: string; path: string; mediaType: string };
 type DelphiObservationRunStatus = "awaiting-approval" | "running" | "completed" | "incomplete" | "blocked" | "timed-out" | "failed" | "rejected";
@@ -725,6 +732,108 @@ function formatResearchTaskElapsed(elapsedMs: number): string {
     : `${minutes}:${String(seconds).padStart(2, "0")}`;
 }
 
+function formatRealtimeTaskTimestamp(value: string): string {
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) return "Unknown time";
+  return timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function realtimeTaskDeliverableLabel(deliverable: RealtimeResearchTaskEvent["deliverable"]): string {
+  if (deliverable === "graph-review") return "Graph review";
+  if (deliverable === "project-action") return "Project action";
+  if (deliverable === "run-app") return "Run App";
+  if (deliverable === "implementation") return "AI Implement";
+  if (deliverable === "verification") return "Verification";
+  return "Research";
+}
+
+function ResearchBackgroundStatus({ tasks }: { tasks: RealtimeResearchTaskEvent[] }) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    setNowMs(Date.now());
+    const intervalId = window.setInterval(() => setNowMs(Date.now()), 1_000);
+    return () => window.clearInterval(intervalId);
+  }, []);
+  const runningTasks = tasks
+    .filter((task) => task.status === "running")
+    .sort((left, right) => (left.startedAt ?? left.createdAt).localeCompare(right.startedAt ?? right.createdAt));
+  const queuedTasks = tasks
+    .filter((task) => task.status === "queued")
+    .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
+  const orderedTasks = [...runningTasks, ...queuedTasks];
+  const latestActivity = [...tasks].sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))[0]?.activity;
+  const countLabel = [
+    runningTasks.length ? `${runningTasks.length} active` : "",
+    queuedTasks.length ? `${queuedTasks.length} queued` : ""
+  ].filter(Boolean).join(" · ");
+
+  return (
+    <Tooltip content={(
+      <div className="research-background-tooltip">
+        <div className="research-background-tooltip-heading">
+          <strong>Background tasks</strong>
+          <span>{countLabel}</span>
+        </div>
+        <div className="research-background-tooltip-list">
+          {orderedTasks.map((task) => {
+            const isRunning = task.status === "running";
+            const taskStartedAt = task.startedAt ?? task.updatedAt;
+            const elapsed = formatResearchTaskElapsed(nowMs - new Date(isRunning ? taskStartedAt : task.createdAt).getTime());
+            const queuedPosition = isRunning ? -1 : queuedTasks.findIndex((candidate) => candidate.taskId === task.taskId) + 1;
+            return (
+              <div className="research-background-tooltip-item" key={task.taskId}>
+                <div className="research-background-tooltip-item-heading">
+                  <span className={`research-background-task-state${isRunning ? " is-running" : ""}`}>
+                    {isRunning ? "Active" : `Queued #${queuedPosition}`}
+                  </span>
+                  <span>{realtimeTaskDeliverableLabel(task.deliverable)}</span>
+                </div>
+                <strong>{task.label}</strong>
+                {task.activity ? <span className="research-background-tooltip-activity">{task.activity}</span> : null}
+                <span className="research-background-tooltip-time">
+                  {isRunning
+                    ? `Queued ${formatRealtimeTaskTimestamp(task.createdAt)} · Started ${formatRealtimeTaskTimestamp(taskStartedAt)} · Active ${elapsed}`
+                    : `Queued ${formatRealtimeTaskTimestamp(task.createdAt)} · Waiting ${elapsed}`}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    )}>
+      <div
+        className="research-background-status"
+        role="status"
+        aria-live="polite"
+        aria-label={`Archi background work: ${countLabel}`}
+        tabIndex={0}
+      >
+        <Brain size={15} />
+        <strong>Archi working</strong>
+        <span>{latestActivity ?? `${tasks.length} background Research task${tasks.length === 1 ? "" : "s"} running.`}</span>
+        {tasks.length > 1 ? <Badge tone="accent">{tasks.length}</Badge> : null}
+      </div>
+    </Tooltip>
+  );
+}
+
+function researchMessageDelivery(message: ResearchChatMessage): ResearchChatMessage["delivery"] {
+  if (message.delivery) return message.delivery;
+  if (message.id.startsWith("research-live-")) return "realtime";
+  if (message.id.startsWith("research-background-")) return "background-research";
+  return undefined;
+}
+
+function researchChangeSetActionKind(changeSet: ResearchChangeSetView): "run-app" | "implementation" | "graph" {
+  if (changeSet.operations.some((operation) =>
+    operation.kind === "start-run-profile"
+    || operation.kind === "stop-runtime-service"
+    || operation.kind === "restart-runtime-service"
+  )) return "run-app";
+  if (changeSet.operations.some((operation) => operation.kind === "start-agent-run")) return "implementation";
+  return "graph";
+}
+
 function ResearchSubmitButton({
   disabled,
   label,
@@ -779,6 +888,27 @@ function ResearchTaskTimer({ startedAtMs }: { startedAtMs: number }) {
   );
 }
 
+function ResearchLiveCountdown({ expiresAtMs }: { expiresAtMs: number }) {
+  const [nowMs, setNowMs] = useState(() => Date.now());
+  useEffect(() => {
+    setNowMs(Date.now());
+    const intervalId = window.setInterval(() => setNowMs(Date.now()), 1_000);
+    return () => window.clearInterval(intervalId);
+  }, [expiresAtMs]);
+  const remainingMs = Math.max(0, expiresAtMs - nowMs);
+  const remaining = formatResearchTaskElapsed(Math.ceil(remainingMs / 1_000) * 1_000);
+  const urgency = remainingMs <= 60_000 ? " is-critical" : remainingMs <= 5 * 60_000 ? " is-warning" : "";
+  return (
+    <span
+      className={`research-live-countdown${urgency}`}
+      title="Time remaining before Archi Live reconnects this chat"
+      aria-label={`${remaining} remaining before Live reconnects`}
+    >
+      {remaining}
+    </span>
+  );
+}
+
 export const ResearchPanel = memo(function ResearchPanel({
   focusMode = false,
   onToggleFocusMode
@@ -805,10 +935,12 @@ export const ResearchPanel = memo(function ResearchPanel({
     requestResearchComposerFocus,
     navigateToGraphTarget,
     refreshResearchChats,
+    createResearchChat,
     selectResearchChat,
     archiveResearchChat,
     renameResearchChat,
     updateResearchChatAutoApproval,
+    handleResearchChatSessionUpdated,
     sendResearchMessage,
     retryResearchMessage,
     stopResearchMessage,
@@ -820,6 +952,7 @@ export const ResearchPanel = memo(function ResearchPanel({
     respondToSubagentRun,
     globalSpeechSettings,
     globalTtsSettings,
+    globalVoiceSettings,
     clearResearchDraft,
     appendResearchDraftText,
     graphPreview,
@@ -844,10 +977,12 @@ export const ResearchPanel = memo(function ResearchPanel({
     requestResearchComposerFocus: state.requestResearchComposerFocus,
     navigateToGraphTarget: state.navigateToGraphTarget,
     refreshResearchChats: state.refreshResearchChats,
+    createResearchChat: state.createResearchChat,
     selectResearchChat: state.selectResearchChat,
     archiveResearchChat: state.archiveResearchChat,
     renameResearchChat: state.renameResearchChat,
     updateResearchChatAutoApproval: state.updateResearchChatAutoApproval,
+    handleResearchChatSessionUpdated: state.handleResearchChatSessionUpdated,
     sendResearchMessage: state.sendResearchMessage,
     retryResearchMessage: state.retryResearchMessage,
     stopResearchMessage: state.stopResearchMessage,
@@ -859,6 +994,7 @@ export const ResearchPanel = memo(function ResearchPanel({
     respondToSubagentRun: state.respondToSubagentRun,
     globalSpeechSettings: state.globalSpeechSettings,
     globalTtsSettings: state.globalTtsSettings,
+    globalVoiceSettings: state.globalVoiceSettings,
     clearResearchDraft: state.clearResearchDraft,
     appendResearchDraftText: state.appendResearchDraftText,
     graphPreview: state.graphPreview,
@@ -913,6 +1049,19 @@ export const ResearchPanel = memo(function ResearchPanel({
   const [ttsError, setTtsError] = useState<string | null>(null);
   const [ttsBusyMessageId, setTtsBusyMessageId] = useState<string | null>(null);
   const [speakingMessageId, setSpeakingMessageId] = useState<string | null>(null);
+  const [codexRealtimeSession, setCodexRealtimeSession] = useState<{
+    error?: string | null;
+    expiresAtMs?: number;
+    inputLevel: number;
+    muted: boolean;
+    model: string;
+    researchSessionId: string | null;
+    sessionId: string;
+    startedAtMs?: number;
+    status: "preparing" | "starting" | "hearing" | "listening" | "speaking" | "thinking" | "reconnecting" | "ended" | "error";
+  } | null>(null);
+  const [codexRealtimeRolloverDue, setCodexRealtimeRolloverDue] = useState<string | null>(null);
+  const [realtimeResearchTasks, setRealtimeResearchTasks] = useState<Record<string, RealtimeResearchTaskEvent>>({});
   const previousFocusModeRef = useRef(focusMode);
   const [ttsHighlight, setTtsHighlight] = useState<{ messageId: string; text: string } | null>(null);
   const messagesViewportRef = useRef<HTMLDivElement | null>(null);
@@ -926,6 +1075,19 @@ export const ResearchPanel = memo(function ResearchPanel({
   const speechProcessorRef = useRef<ScriptProcessorNode | null>(null);
   const speechChunksRef = useRef<Float32Array[]>([]);
   const speechSampleRateRef = useRef(44100);
+  const codexRealtimeCallRef = useRef<OpenAiRealtimeCall | null>(null);
+  const codexRealtimeStartGenerationRef = useRef(0);
+  const codexRealtimeRolloverInFlightRef = useRef(false);
+  const codexRealtimeResearchSessionIdRef = useRef<string | null>(null);
+  const codexRealtimeLastUserMessageIdRef = useRef<string | null>(null);
+  const codexRealtimeStatusRef = useRef<"preparing" | "starting" | "hearing" | "listening" | "speaking" | "thinking" | "reconnecting" | "ended" | "error" | null>(null);
+  const codexRealtimeAnnouncementTimerRef = useRef<number | null>(null);
+  const codexRealtimePendingAnnouncementsRef = useRef(new Map<string, string>());
+  const codexRealtimeSeenEventIdsRef = useRef(new Set<string>());
+  const codexRealtimeMessageSnapshotsRef = useRef(new Map<string, ResearchChatMessage>());
+  const codexRealtimeRunStatusesRef = useRef(new Map<string, Run["status"]>());
+  const realtimeResearchTasksRef = useRef<Record<string, RealtimeResearchTaskEvent>>({});
+  const codexRealtimeTranscriptPersistenceRef = useRef<Promise<void>>(Promise.resolve());
   const ttsAudioContextRef = useRef<AudioContext | null>(null);
   const ttsAudioChunksRef = useRef(new Map<number, { buffer: AudioBuffer; durationMs: number; index: number; text?: string; total: number }>());
   const ttsExpectedChunkCountRef = useRef<number | null>(null);
@@ -1053,6 +1215,23 @@ export const ResearchPanel = memo(function ResearchPanel({
   }, [chatModelValue, chatProvider, persistedChatModelValue, providerDefaultModelId]);
   const speechSettings = globalSpeechSettings;
   const ttsSettings = globalTtsSettings;
+  const voiceSettings = globalVoiceSettings;
+  const localVoiceMode = !voiceSettings || voiceSettings.mode === "local";
+  const codexRealtimeMode = voiceSettings?.mode === "openai-realtime";
+  const configuredCodexRealtimeModel = voiceSettings?.codexRealtime.model && (codexRealtimeModels as readonly string[]).includes(voiceSettings.codexRealtime.model)
+    ? voiceSettings.codexRealtime.model
+    : defaultCodexRealtimeModel;
+  const localSpeechEnabled = localVoiceMode && Boolean(speechSettings?.enabled);
+  const localTtsEnabled = localVoiceMode && Boolean(ttsSettings?.enabled);
+  const codexRealtimeCallActive = Boolean(
+    codexRealtimeSession && codexRealtimeSession.status !== "ended" && codexRealtimeSession.status !== "error"
+  );
+  const activeRealtimeResearchTasks = Object.values(realtimeResearchTasks)
+    .filter((task) => task.projectRoot === rootPath && task.researchSessionId === (selected?.id ?? codexRealtimeSession?.researchSessionId))
+    .filter((task) => task.status === "queued" || task.status === "running");
+  const codexRealtimeDisabledReason = !rootPath
+      ? "Open a project before starting live audio."
+      : null;
   const missingSpeechModelMessage = "Download the active speech model in Advanced settings before recording.";
   const selectedSpeechModelId = speechSettings?.modelId ?? "base";
   const selectedSpeechModel = speechStatus?.models.find((model) => model.id === selectedSpeechModelId) ?? null;
@@ -1227,7 +1406,7 @@ export const ResearchPanel = memo(function ResearchPanel({
   }, [setSpeechMeterLevel]);
 
   const startSpeechRecording = useCallback(async () => {
-    if (!speechSettings?.enabled) {
+    if (!localSpeechEnabled) {
       setSpeechError("Voice input is disabled for this project.");
       return;
     }
@@ -1281,7 +1460,7 @@ export const ResearchPanel = memo(function ResearchPanel({
       await stopSpeechCapture();
       setSpeechError(error instanceof Error ? error.message : "Could not start microphone capture.");
     }
-  }, [missingSpeechModelMessage, refreshSpeechStatus, selectedSpeechModelId, setSpeechMeterLevel, speechSettings?.enabled, speechStatus, stopSpeechCapture]);
+  }, [missingSpeechModelMessage, refreshSpeechStatus, selectedSpeechModelId, setSpeechMeterLevel, localSpeechEnabled, speechStatus, stopSpeechCapture]);
 
   const stopSpeechRecording = useCallback(async (completion: "review" | "send" = "review") => {
     const chunks = speechChunksRef.current;
@@ -1517,6 +1696,791 @@ export const ResearchPanel = memo(function ResearchPanel({
     setTtsHighlight(null);
     ttsDebugContextRef.current = null;
   }, [selected?.id, writeTtsDebugEvent]);
+
+  const stopCodexRealtimeCall = useCallback(async () => {
+    codexRealtimeStartGenerationRef.current += 1;
+    if (codexRealtimeAnnouncementTimerRef.current !== null) {
+      window.clearTimeout(codexRealtimeAnnouncementTimerRef.current);
+      codexRealtimeAnnouncementTimerRef.current = null;
+    }
+    codexRealtimeCallRef.current?.close();
+    codexRealtimeCallRef.current = null;
+    codexRealtimeResearchSessionIdRef.current = null;
+    codexRealtimePendingAnnouncementsRef.current.clear();
+    codexRealtimeMessageSnapshotsRef.current.clear();
+    codexRealtimeRunStatusesRef.current.clear();
+    codexRealtimeStatusRef.current = "ended";
+    setCodexRealtimeRolloverDue(null);
+    setCodexRealtimeSession(null);
+  }, []);
+
+  const toggleCodexRealtimeMute = useCallback(() => {
+    const call = codexRealtimeCallRef.current;
+    if (!call) return;
+    const muted = !call.isMuted();
+    call.setMuted(muted);
+    setCodexRealtimeSession((current) => current ? { ...current, inputLevel: muted ? 0 : current.inputLevel, muted } : current);
+  }, []);
+
+  const persistCodexRealtimeTranscript = useCallback(async (
+    researchSessionId: string | null,
+    role: "user" | "assistant",
+    text: string
+  ) => {
+    if (!rootPath || !researchSessionId || !text.trim()) return;
+    try {
+      const session = await window.archicode.appendResearchChatTranscript({
+        projectRoot: rootPath,
+        sessionId: researchSessionId,
+        role,
+        text
+      });
+      if (role === "user") {
+        codexRealtimeLastUserMessageIdRef.current = [...session.messages].reverse().find((message) => message.role === "user")?.id ?? null;
+      }
+      handleResearchChatSessionUpdated({ projectRoot: rootPath, session });
+    } catch (error) {
+      setCodexRealtimeSession((current) => current ? {
+        ...current,
+        error: error instanceof Error ? `Could not save live transcript: ${error.message}` : "Could not save live transcript."
+      } : current);
+    }
+  }, [handleResearchChatSessionUpdated, rootPath]);
+
+  const queueCodexRealtimeTranscriptPersistence = useCallback((role: "user" | "assistant", text: string) => {
+    const researchSessionId = codexRealtimeResearchSessionIdRef.current;
+    const queued = codexRealtimeTranscriptPersistenceRef.current
+      .then(() => persistCodexRealtimeTranscript(researchSessionId, role, text));
+    codexRealtimeTranscriptPersistenceRef.current = queued;
+    return queued;
+  }, [persistCodexRealtimeTranscript]);
+
+  const scheduleCodexRealtimeAnnouncements = useCallback(() => {
+    if (codexRealtimeAnnouncementTimerRef.current !== null) {
+      window.clearTimeout(codexRealtimeAnnouncementTimerRef.current);
+    }
+    codexRealtimeAnnouncementTimerRef.current = window.setTimeout(() => {
+      codexRealtimeAnnouncementTimerRef.current = null;
+      const realtime = codexRealtimeCallRef.current;
+      if (!realtime || codexRealtimeStatusRef.current !== "listening") return;
+      const announcements = [...codexRealtimePendingAnnouncementsRef.current.values()];
+      codexRealtimePendingAnnouncementsRef.current.clear();
+      if (!announcements.length) return;
+      codexRealtimeStatusRef.current = "thinking";
+      setCodexRealtimeSession((current) => current ? { ...current, status: "thinking" } : current);
+      realtime.appendDeveloperContext([
+        "ArchiCode delivered one or more significant live activity events while you remained connected.",
+        ...announcements,
+        "Immediately give the user a concise spoken update in your own Archi voice. For every terminal background event, explicitly say whether it completed, failed, became blocked, or needs approval, then summarize the concrete result rather than reading a classical AI Assistant message verbatim. If approval is required, name what needs approval and tell the user that its card is visible in chat. Treat coordinated work as your own ongoing work, but do not conceal which visible bubble contains the detailed AI Assistant result."
+      ].join("\n\n"), true);
+    }, 300);
+  }, []);
+
+  const enqueueCodexRealtimeEvent = useCallback((eventId: string, content: string) => {
+    if (!eventId || !content.trim() || codexRealtimeSeenEventIdsRef.current.has(eventId)) return;
+    codexRealtimeSeenEventIdsRef.current.add(eventId);
+    codexRealtimePendingAnnouncementsRef.current.set(eventId, content.trim());
+    if (codexRealtimeStatusRef.current === "listening") scheduleCodexRealtimeAnnouncements();
+  }, [scheduleCodexRealtimeAnnouncements]);
+
+  const handleCodexRealtimeFunctionCall = useCallback(async (call: RealtimeFunctionCall) => {
+    const realtime = codexRealtimeCallRef.current;
+    const researchSessionId = codexRealtimeResearchSessionIdRef.current;
+    if (!realtime || !rootPath || !researchSessionId) return;
+    try {
+      let args: Record<string, unknown> = {};
+      try {
+        args = JSON.parse(call.argumentsJson || "{}") as Record<string, unknown>;
+      } catch {
+        throw new Error("The Realtime model supplied invalid tool arguments.");
+      }
+      if (call.name === "archicode_refresh_project_context") {
+        const context = await window.archicode.getCodexRealtimeContext({
+          model: configuredCodexRealtimeModel,
+          projectRoot: rootPath,
+          researchSessionId
+        });
+        realtime.sendFunctionOutput(call.callId, { context });
+        return;
+      }
+      if ([
+        "archicode_read_chat_history",
+        "archicode_search_previous_chats",
+        "archicode_project_list_files",
+        "archicode_project_search_files",
+        "archicode_project_read_file"
+      ].includes(call.name)) {
+        await codexRealtimeTranscriptPersistenceRef.current;
+        const resultText = await window.archicode.callCodexRealtimeReadTool({
+          argumentsJson: call.argumentsJson || "{}",
+          model: configuredCodexRealtimeModel,
+          projectRoot: rootPath,
+          providerToolName: call.name,
+          researchSessionId
+        });
+        let result: unknown = resultText;
+        try {
+          result = JSON.parse(resultText);
+        } catch {
+          // Tool results are normally JSON, but preserve a useful text result.
+        }
+        realtime.sendFunctionOutput(call.callId, { result });
+        return;
+      }
+      if (call.name === "archicode_launch_run_app") {
+        await codexRealtimeTranscriptPersistenceRef.current;
+        const configuredProfiles = bundle?.project.settings.runTargetProfiles ?? [];
+        const requestedProfileId = typeof args.profileId === "string" ? args.profileId.trim() : "";
+        const profile = requestedProfileId
+          ? configuredProfiles.find((item) => item.id === requestedProfileId)
+          : configuredProfiles.length === 1
+            ? configuredProfiles[0]
+            : undefined;
+        if (!profile) {
+          const available = configuredProfiles.map((item) => `${item.label} (${item.id})`).join(", ");
+          throw new Error(requestedProfileId
+            ? `Run App profile ${requestedProfileId} was not found. Available profiles: ${available || "none"}.`
+            : `Choose one configured Run App profile: ${available || "none are configured"}.`);
+        }
+        const targetId = typeof args.targetId === "string" && args.targetId.trim() ? args.targetId.trim() : undefined;
+        const runtimeServices = await window.archicode.startRuntimeService({
+          profileId: profile.id,
+          projectRoot: rootPath,
+          targetId
+        });
+        useArchicodeStore.setState({ runtimeServices, error: null });
+        const service = runtimeServices.find((item) => item.profileId === profile.id && (!targetId || item.targetId === targetId));
+        if (!service) throw new Error(`Run App did not return a runtime service for ${profile.label}.`);
+        realtime.sendFunctionOutput(call.callId, {
+          action: "run-app",
+          direct: true,
+          service: {
+            id: service.id,
+            label: service.label,
+            profileId: service.profileId,
+            status: service.status,
+            targetId: service.targetId,
+            runTargetId: service.runTargetId,
+            url: service.url
+          },
+          userFacingInstruction: service.status === "running"
+            ? `The ${service.label} runtime is running${service.url ? ` at ${service.url}` : ""}. Tell the user it started directly and is ready for their own testing.`
+            : service.status === "failed"
+              ? `The ${service.label} runtime failed to start. Report that failure and do not claim it is running.`
+              : `The ${service.label} runtime status is ${service.status}. Report that exact status without mentioning approval or an Activity queue.`
+        });
+        return;
+      }
+      if (call.name === "archicode_stop_run_app" || call.name === "archicode_restart_run_app") {
+        await codexRealtimeTranscriptPersistenceRef.current;
+        const serviceId = typeof args.serviceId === "string" ? args.serviceId.trim() : "";
+        if (!serviceId) throw new Error("An exact runtime service id is required.");
+        const existingServices = await window.archicode.listRuntimeServices(rootPath);
+        const existing = existingServices.find((service) => service.id === serviceId);
+        if (!existing) throw new Error(`Runtime service ${serviceId} was not found. Read live activity and use an exact service id.`);
+        const restarting = call.name === "archicode_restart_run_app";
+        const runtimeServices = restarting
+          ? await window.archicode.restartRuntimeService(rootPath, serviceId)
+          : await window.archicode.stopRuntimeService(rootPath, serviceId);
+        useArchicodeStore.setState({ runtimeServices, error: null });
+        const service = runtimeServices.find((item) => item.id === serviceId && (!restarting || item.status === "running"))
+          ?? runtimeServices.find((item) => restarting
+            && item.status === "running"
+            && item.profileId === existing.profileId
+            && item.targetId === existing.targetId
+            && item.relativeCwd === existing.relativeCwd)
+          ?? runtimeServices.find((item) => item.id === serviceId);
+        if (!service) throw new Error(`Runtime service ${existing.label} did not return updated state.`);
+        realtime.sendFunctionOutput(call.callId, {
+          action: restarting ? "restart-run-app" : "stop-run-app",
+          direct: true,
+          service: {
+            id: service.id,
+            label: service.label,
+            profileId: service.profileId,
+            status: service.status,
+            targetId: service.targetId,
+            runTargetId: service.runTargetId,
+            url: service.url
+          },
+          userFacingInstruction: restarting
+            ? `The ${service.label} runtime restart returned status ${service.status}. Report that exact status without mentioning approval or an Activity queue.`
+            : `The ${service.label} runtime is ${service.status}. Tell the user it was stopped directly without an approval card or Activity queue.`
+        });
+        return;
+      }
+      const delegatedTask = call.name === "archicode_run_guarded_command"
+        ? (() => {
+            const command = typeof args.command === "string" ? args.command.trim() : "";
+            const cwd = typeof args.cwd === "string" ? args.cwd.trim() : "";
+            const purpose = typeof args.purpose === "string" ? args.purpose.trim() : "";
+            if (!command || !purpose) throw new Error("A guarded command requires an exact command and purpose.");
+            return [
+              "Execute this exact bounded project command through archicode_console_run_command and report its actual stdout, stderr, exit status, or approval requirement.",
+              "Do not substitute a different command, Run App target, AI Implement job, build, test, or Delphi audit.",
+              `Command: ${command}`,
+              cwd ? `Project-relative cwd: ${cwd}` : "Project-relative cwd: project root",
+              `Purpose: ${purpose}`
+            ].join("\n");
+          })()
+        : call.name === "archicode_search_web"
+          ? (() => {
+              const query = typeof args.query === "string" ? args.query.trim() : "";
+              const purpose = typeof args.purpose === "string" ? args.purpose.trim() : "";
+              if (!query || !purpose) throw new Error("Web research requires a query and purpose.");
+              return [
+                "Perform source-backed web research using ArchiCode's configured native web-search capability.",
+                "Use the provider's search function to discover sources. Never use archicode_web_open_url to open a Google, Bing, or other search-engine results page; open only actual source pages returned by search.",
+                `Query: ${query}`,
+                `User purpose: ${purpose}`
+              ].join("\n");
+            })()
+          : undefined;
+      const dedicatedDeliverable = call.name === "archicode_queue_implementation"
+          ? "implementation" as const
+          : call.name === "archicode_run_verification"
+            ? "verification" as const
+            : call.name === "archicode_run_guarded_command"
+              ? "project-action" as const
+              : call.name === "archicode_search_web"
+                ? "answer" as const
+            : undefined;
+      if (call.name === "archicode_start_research_task" || dedicatedDeliverable) {
+        await codexRealtimeTranscriptPersistenceRef.current;
+        const task = delegatedTask ?? (typeof args.task === "string" ? args.task.trim() : "");
+        if (!task) throw new Error("A background Research task requires a task description.");
+        const requestedDeliverable = args.deliverable;
+        const deliverable = dedicatedDeliverable ?? (requestedDeliverable === "graph-review"
+          || requestedDeliverable === "project-action"
+          || requestedDeliverable === "answer"
+          ? requestedDeliverable
+          : undefined);
+        const effectiveDeliverable = deliverable ?? "answer";
+        const requestKey = call.name === "archicode_search_web"
+          ? `web:${normalizedRealtimeRequestPart(args.query)}`
+          : call.name === "archicode_run_guarded_command"
+            ? `command:${normalizedRealtimeRequestPart(args.cwd)}:${normalizedRealtimeRequestPart(args.command)}`
+            : `${call.name}:${effectiveDeliverable}:${normalizedRealtimeRequestPart(task)}`;
+        const reuseCompletedWithinMs = call.name === "archicode_search_web" && args.refresh !== true
+          ? RECENT_REALTIME_ANSWER_REUSE_MS
+          : call.name === "archicode_start_research_task" && effectiveDeliverable === "answer"
+            ? RECENT_REALTIME_ANSWER_REUSE_MS
+            : 0;
+        const started = await window.archicode.startRealtimeResearchTask({
+          activeFlowId,
+          activeSubflowId,
+          content: task,
+          deliverable,
+          modelId: chatModelRequest,
+          projectRoot: rootPath,
+          providerId: chatProvider?.id,
+          requestKey,
+          researchSessionId,
+          reuseCompletedWithinMs,
+          selectedNodeIds: selectedNodeId ? [selectedNodeId] : [],
+          sourceUserMessageId: codexRealtimeLastUserMessageIdRef.current
+        });
+        realtime.sendFunctionOutput(call.callId, {
+          ...started,
+          acceptedAction: deliverable ?? "answer",
+          completionState: started.reused
+            ? started.status === "completed" ? "existing-result-reused" : "existing-task-reused"
+            : "background-research-started",
+          userFacingInstruction: started.reused
+            ? started.status === "completed"
+              ? "This request was already completed recently. Use the returned result summary and the existing detailed chat result; do not claim that new work started or call the tool again."
+              : "The same background work is already queued or running. Do not start it again; report its current status and continue the conversation."
+            : "The requested action has not completed yet. Acknowledge that background work started without claiming its result."
+        });
+        return;
+      }
+      if (call.name === "archicode_get_research_task_status") {
+        const taskId = typeof args.taskId === "string" ? args.taskId.trim() : "";
+        if (!taskId) throw new Error("A background Research task id is required.");
+        const status = await window.archicode.getRealtimeResearchTaskStatus({ projectRoot: rootPath, taskId });
+        realtime.sendFunctionOutput(call.callId, status);
+        return;
+      }
+      if (call.name === "archicode_cancel_research_task") {
+        const taskId = typeof args.taskId === "string" ? args.taskId.trim() : "";
+        if (!taskId) throw new Error("A background Research task id is required for cancellation.");
+        const cancelled = await window.archicode.cancelRealtimeResearchTask({
+          projectRoot: rootPath,
+          researchSessionId,
+          taskId
+        });
+        for (const eventId of codexRealtimePendingAnnouncementsRef.current.keys()) {
+          if (eventId.startsWith(`task:${taskId}:`)) codexRealtimePendingAnnouncementsRef.current.delete(eventId);
+        }
+        realtime.sendFunctionOutput(call.callId, {
+          ...cancelled,
+          cancellationApplied: cancelled.status === "cancelled",
+          userFacingInstruction: cancelled.status === "cancelled"
+            ? "The host confirms this background task was cancelled."
+            : `The host did not cancel this task because its authoritative status is already ${cancelled.status}. Report that status exactly and do not say it was cancelled.`
+        });
+        return;
+      }
+      if (call.name === "archicode_get_live_activity") {
+        const tasks = Object.values(realtimeResearchTasksRef.current)
+          .filter((task) => task.projectRoot === rootPath && task.researchSessionId === researchSessionId)
+          .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+          .slice(0, 20);
+        const recentRuns = [...(useArchicodeStore.getState().bundle?.runs ?? [])]
+          .sort((left, right) => (right.completedAt ?? right.startedAt ?? right.createdAt).localeCompare(left.completedAt ?? left.startedAt ?? left.createdAt))
+          .slice(0, 20);
+        const describeRun = (run: Run) => ({
+            id: run.id,
+            phase: run.phase,
+            promptSummary: run.promptSummary,
+            runProfileId: run.runProfileId,
+            status: run.status,
+            timestamp: run.completedAt ?? run.startedAt ?? run.createdAt
+          });
+        const implementationJobs = recentRuns.filter((run) => !run.runProfileId).map(describeRun);
+        const runAppRuns = recentRuns.filter((run) => Boolean(run.runProfileId)).map(describeRun);
+        const runtimeServices = await window.archicode.listRuntimeServices(rootPath);
+        useArchicodeStore.setState({ runtimeServices });
+        realtime.sendFunctionOutput(call.callId, {
+          backgroundResearchTasks: tasks,
+          implementationJobs,
+          legacyRunAppQueueEntries: runAppRuns,
+          runtimeServices: runtimeServices.map((service) => ({
+            id: service.id,
+            label: service.label,
+            profileId: service.profileId,
+            status: service.status,
+            targetId: service.targetId,
+            runTargetId: service.runTargetId,
+            url: service.url,
+            startedAt: service.startedAt,
+            stoppedAt: service.stoppedAt
+          })),
+          vocabulary: {
+            implementationJob: "AI Implement coding work that changes source code",
+            runAppTarget: "A configured app or dev-server target launched directly for interactive use; listed under runtimeServices and not the Activity queue",
+            verificationAudit: "Delphi checks and behavioral inspection; not the same as launching Run App"
+          }
+        });
+        return;
+      }
+      throw new Error(`Unsupported Realtime tool ${call.name}.`);
+    } catch (error) {
+      realtime.sendFunctionOutput(call.callId, {
+        error: error instanceof Error ? error.message : "Realtime tool execution failed."
+      });
+    }
+  }, [activeFlowId, activeSubflowId, bundle?.project.settings.runTargetProfiles, chatModelRequest, chatProvider?.id, configuredCodexRealtimeModel, rootPath, selectedNodeId]);
+
+  const startCodexRealtimeCall = useCallback(async () => {
+    if (!rootPath || !codexRealtimeMode) return;
+    const startGeneration = codexRealtimeStartGenerationRef.current + 1;
+    codexRealtimeStartGenerationRef.current = startGeneration;
+    const startIsCurrent = () => codexRealtimeStartGenerationRef.current === startGeneration;
+    let call: OpenAiRealtimeCall | null = null;
+    try {
+      codexRealtimeResearchSessionIdRef.current = selected?.id ?? null;
+      codexRealtimeStatusRef.current = "preparing";
+      setCodexRealtimeRolloverDue(null);
+      setCodexRealtimeSession({
+        inputLevel: 0,
+        muted: false,
+        model: configuredCodexRealtimeModel,
+        researchSessionId: selected?.id ?? null,
+        sessionId: "starting",
+        status: "preparing"
+      });
+      const researchSession = selected ?? await createResearchChat(researchScope ?? undefined, chatModelRequest ?? undefined);
+      if (!startIsCurrent()) return;
+      if (!researchSession) throw new Error("Could not create a chat for OpenAI Realtime.");
+      codexRealtimeResearchSessionIdRef.current = researchSession.id;
+      codexRealtimeLastUserMessageIdRef.current = [...researchSession.messages]
+        .reverse()
+        .find((message) => message.role === "user")?.id ?? null;
+      codexRealtimeMessageSnapshotsRef.current = new Map(researchSession.messages.map((message) => [message.id, message]));
+      codexRealtimeRunStatusesRef.current = new Map((bundle?.runs ?? []).map((run) => [run.id, run.status]));
+      await codexRealtimeTranscriptPersistenceRef.current;
+      if (!startIsCurrent()) return;
+      setComposingNewChat(false);
+      await stopSpeechCapture();
+      if (!startIsCurrent()) return;
+      stopTtsPlayback({ suppressStreamingAutoplay: true });
+      const codexRealtimeVoice = voiceSettings?.codexRealtime.voice && (codexRealtimeV2Voices as readonly string[]).includes(voiceSettings.codexRealtime.voice)
+        ? voiceSettings.codexRealtime.voice
+        : defaultCodexRealtimeV2Voice;
+      const secret = await window.archicode.startCodexRealtime({
+        includeStartupContext: voiceSettings?.codexRealtime.includeStartupContext ?? true,
+        model: configuredCodexRealtimeModel,
+        outputModality: voiceSettings?.codexRealtime.outputModality ?? "audio",
+        projectRoot: rootPath,
+        researchSessionId: researchSession.id,
+        voice: codexRealtimeVoice
+      });
+      if (!startIsCurrent()) return;
+      const sessionId = secret.sessionId ?? window.crypto.randomUUID();
+      call = new OpenAiRealtimeCall({
+        onAssistantTranscript: (text) => {
+          if (!startIsCurrent()) return;
+          void queueCodexRealtimeTranscriptPersistence("assistant", text);
+        },
+        onError: (message) => {
+          if (!startIsCurrent()) return;
+          codexRealtimeStatusRef.current = "error";
+          codexRealtimeCallRef.current?.close();
+          codexRealtimeCallRef.current = null;
+          setCodexRealtimeSession((current) => current?.sessionId === sessionId
+            ? { ...current, error: message, status: "error" }
+            : current);
+        },
+        onFunctionCall: (functionCall) => {
+          if (!startIsCurrent()) return;
+          void handleCodexRealtimeFunctionCall(functionCall);
+        },
+        onInputLevel: (inputLevel) => {
+          if (!startIsCurrent()) return;
+          setCodexRealtimeSession((current) => current?.sessionId === sessionId ? { ...current, inputLevel } : current);
+        },
+        onSessionCreated: () => {
+          if (!startIsCurrent()) return;
+          const startedAtMs = Date.now();
+          setCodexRealtimeRolloverDue(null);
+          setCodexRealtimeSession((current) => current?.sessionId === sessionId ? {
+            ...current,
+            expiresAtMs: startedAtMs + OPENAI_REALTIME_SESSION_DURATION_MS,
+            startedAtMs
+          } : current);
+        },
+        onStatus: (status) => {
+          if (!startIsCurrent()) return;
+          codexRealtimeStatusRef.current = status;
+          if (status !== "listening" && codexRealtimeAnnouncementTimerRef.current !== null) {
+            window.clearTimeout(codexRealtimeAnnouncementTimerRef.current);
+            codexRealtimeAnnouncementTimerRef.current = null;
+          }
+          setCodexRealtimeSession((current) => current?.sessionId === sessionId ? { ...current, status } : current);
+          if (status === "listening" && codexRealtimePendingAnnouncementsRef.current.size) {
+            scheduleCodexRealtimeAnnouncements();
+          }
+        },
+        onUserTranscript: (text) => {
+          if (!startIsCurrent()) return;
+          void queueCodexRealtimeTranscriptPersistence("user", text);
+        }
+      });
+      if (!startIsCurrent()) {
+        call.close();
+        return;
+      }
+      codexRealtimeCallRef.current = call;
+      codexRealtimeStatusRef.current = "starting";
+      setCodexRealtimeSession({
+        inputLevel: 0,
+        muted: false,
+        model: secret.model,
+        researchSessionId: researchSession.id,
+        sessionId,
+        status: "starting"
+      });
+      await call.connect(secret);
+      if (!startIsCurrent()) return;
+      const startedAtMs = Date.now();
+      setCodexRealtimeSession((current) => current?.sessionId === sessionId && !current.expiresAtMs ? {
+        ...current,
+        expiresAtMs: startedAtMs + OPENAI_REALTIME_SESSION_DURATION_MS,
+        startedAtMs
+      } : current);
+    } catch (error) {
+      call?.close();
+      if (codexRealtimeCallRef.current === call) codexRealtimeCallRef.current = null;
+      if (!startIsCurrent()) return;
+      codexRealtimeStatusRef.current = "error";
+      setCodexRealtimeSession((current) => ({
+        error: error instanceof Error ? error.message : "Could not start OpenAI Realtime.",
+        inputLevel: 0,
+        muted: false,
+        model: current?.model ?? configuredCodexRealtimeModel,
+        researchSessionId: current?.researchSessionId ?? codexRealtimeResearchSessionIdRef.current,
+        sessionId: current?.sessionId ?? "error",
+        status: "error"
+      }));
+    }
+  }, [
+    chatModelRequest,
+    chatProvider,
+    bundle?.runs,
+    configuredCodexRealtimeModel,
+    codexRealtimeMode,
+    createResearchChat,
+    handleCodexRealtimeFunctionCall,
+    queueCodexRealtimeTranscriptPersistence,
+    researchScope,
+    rootPath,
+    scheduleCodexRealtimeAnnouncements,
+    selected,
+    stopSpeechCapture,
+    stopTtsPlayback,
+    voiceSettings?.codexRealtime.includeStartupContext,
+    voiceSettings?.codexRealtime.outputModality,
+    voiceSettings?.codexRealtime.voice
+  ]);
+
+  const rolloverCodexRealtimeCall = useCallback(async () => {
+    if (codexRealtimeRolloverInFlightRef.current) return;
+    const researchSessionId = codexRealtimeResearchSessionIdRef.current;
+    if (!researchSessionId || selectedResearchSessionId !== researchSessionId) {
+      await stopCodexRealtimeCall();
+      return;
+    }
+    codexRealtimeRolloverInFlightRef.current = true;
+    const rolloverGeneration = codexRealtimeStartGenerationRef.current + 1;
+    codexRealtimeStartGenerationRef.current = rolloverGeneration;
+    codexRealtimeCallRef.current?.close();
+    codexRealtimeCallRef.current = null;
+    codexRealtimeStatusRef.current = "reconnecting";
+    setCodexRealtimeRolloverDue(null);
+    setCodexRealtimeSession((current) => current ? {
+      ...current,
+      expiresAtMs: undefined,
+      inputLevel: 0,
+      startedAtMs: undefined,
+      status: "reconnecting"
+    } : current);
+    try {
+      await codexRealtimeTranscriptPersistenceRef.current;
+      if (
+        codexRealtimeStartGenerationRef.current !== rolloverGeneration
+        || codexRealtimeResearchSessionIdRef.current !== researchSessionId
+        || selectedResearchSessionId !== researchSessionId
+      ) return;
+      await startCodexRealtimeCall();
+    } finally {
+      codexRealtimeRolloverInFlightRef.current = false;
+    }
+  }, [selectedResearchSessionId, startCodexRealtimeCall, stopCodexRealtimeCall]);
+
+  useEffect(() => {
+    const researchSessionId = codexRealtimeResearchSessionIdRef.current;
+    if (!codexRealtimeCallActive || !researchSessionId || selectedResearchSessionId === researchSessionId) return;
+    void stopCodexRealtimeCall();
+  }, [codexRealtimeCallActive, selectedResearchSessionId, stopCodexRealtimeCall]);
+
+  useEffect(() => {
+    if (!codexRealtimeCallActive || !codexRealtimeSession?.expiresAtMs) return;
+    const sessionId = codexRealtimeSession.sessionId;
+    const timeoutId = window.setTimeout(
+      () => setCodexRealtimeRolloverDue(sessionId),
+      Math.max(0, codexRealtimeSession.expiresAtMs - Date.now() - 10_000)
+    );
+    return () => window.clearTimeout(timeoutId);
+  }, [codexRealtimeCallActive, codexRealtimeSession?.expiresAtMs, codexRealtimeSession?.sessionId]);
+
+  useEffect(() => {
+    if (
+      !codexRealtimeCallActive
+      || codexRealtimeRolloverDue !== codexRealtimeSession?.sessionId
+      || codexRealtimeSession.status !== "listening"
+    ) return;
+    void rolloverCodexRealtimeCall();
+  }, [
+    codexRealtimeCallActive,
+    codexRealtimeRolloverDue,
+    codexRealtimeSession?.sessionId,
+    codexRealtimeSession?.status,
+    rolloverCodexRealtimeCall
+  ]);
+
+  useEffect(() => {
+    if (!codexRealtimeCallActive || !codexRealtimeSession?.expiresAtMs) return;
+    const timeoutId = window.setTimeout(
+      () => void rolloverCodexRealtimeCall(),
+      Math.max(0, codexRealtimeSession.expiresAtMs - Date.now() - 1_000)
+    );
+    return () => window.clearTimeout(timeoutId);
+  }, [codexRealtimeCallActive, codexRealtimeSession?.expiresAtMs, rolloverCodexRealtimeCall]);
+
+  useEffect(() => {
+    if (codexRealtimeMode) return;
+    if (!codexRealtimeSession || codexRealtimeSession.status === "ended") return;
+    void stopCodexRealtimeCall();
+  }, [codexRealtimeMode, codexRealtimeSession, stopCodexRealtimeCall]);
+
+  useEffect(() => () => {
+    if (codexRealtimeAnnouncementTimerRef.current !== null) {
+      window.clearTimeout(codexRealtimeAnnouncementTimerRef.current);
+      codexRealtimeAnnouncementTimerRef.current = null;
+    }
+    codexRealtimeCallRef.current?.close();
+    codexRealtimeCallRef.current = null;
+  }, []);
+
+  useEffect(() => {
+    if (!window.archicode?.onRealtimeResearchTask) return;
+    return window.archicode.onRealtimeResearchTask((task) => {
+      if (task.projectRoot !== rootPath) return;
+      setRealtimeResearchTasks((current) => {
+        const next = { ...current, [task.taskId]: task };
+        realtimeResearchTasksRef.current = next;
+        return next;
+      });
+      if (task.researchSessionId !== codexRealtimeResearchSessionIdRef.current) return;
+      if (
+        task.status === "running"
+        && task.activityKind === "subagent"
+        && task.activityRunId
+        && (task.activityStatus === "completed" || task.activityStatus === "blocked" || task.activityStatus === "failed")
+      ) {
+        enqueueCodexRealtimeEvent(`subagent:${task.activityRunId}:${task.activityStatus}`, [
+          `A coordinated subagent step, ${task.activityTitle ?? task.activityRunId}, ${task.activityStatus}.`,
+          task.activity ? `Update: ${task.activity}` : "",
+          "Give a brief progress update if this changes what the user should know now; make clear that the broader Research task may still be running."
+        ].filter(Boolean).join("\n"));
+      }
+      if (task.status === "completed" || task.status === "failed" || task.status === "cancelled") {
+        enqueueCodexRealtimeEvent(`task:${task.taskId}:${task.status}`, [
+          `Background Research task ${task.taskId} returned with terminal status ${task.status}.`,
+          task.activity ? `Host-verified outcome: ${task.activity}` : "",
+          task.resultSummary ? `Result now visible in the shared Research chat:\n${task.resultSummary}` : "",
+          task.error ? `Error: ${task.error}` : ""
+        ].filter(Boolean).join("\n\n"));
+      }
+    });
+  }, [enqueueCodexRealtimeEvent, rootPath]);
+
+  useEffect(() => {
+    const researchSessionId = codexRealtimeResearchSessionIdRef.current;
+    if (!codexRealtimeCallActive || !selected || selected.id !== researchSessionId) return;
+    const snapshots = codexRealtimeMessageSnapshotsRef.current;
+    for (const message of selected.messages) {
+      const previous = snapshots.get(message.id);
+      snapshots.set(message.id, message);
+      const delivery = researchMessageDelivery(message);
+      if (delivery === "realtime" || message.role !== "assistant") continue;
+      if (delivery === "background-research") continue;
+      if (!previous) {
+        if (isResearchThinkingPhrase(message.content)) continue;
+        const awaitingSubagents = message.subagentRuns.filter((run) => run.status === "awaiting-approval");
+        const attention = [
+          message.mcpApprovalRequest
+            ? `Approval is required for ${message.mcpApprovalRequest.toolName}; its approval card is visible in the AI Assistant message.`
+            : "",
+          awaitingSubagents.length
+            ? `Approval is required for ${awaitingSubagents.map((run) => run.title).join(", ")}; ${awaitingSubagents.length === 1 ? "its card is" : "their cards are"} visible in the AI Assistant message.`
+            : "",
+          message.changeSet && !message.changeSet.reviewedAt
+            ? researchChangeSetActionKind(message.changeSet) === "run-app"
+              ? `Approval is required to launch Run App: "${message.changeSet.summary}". Its action card is visible in the AI Assistant message.`
+              : researchChangeSetActionKind(message.changeSet) === "implementation"
+                ? `Approval is required to queue AI Implement: "${message.changeSet.summary}". Its action card is visible in the AI Assistant message.`
+                : `Approval is required for the graph proposal "${message.changeSet.summary}"; its review card is visible in the AI Assistant message.`
+            : ""
+        ].filter(Boolean).join("\n");
+        enqueueCodexRealtimeEvent(`message:${message.id}`, [
+          "The classical AI Assistant added a detailed result to the shared chat.",
+          attention,
+          `Message summary source:\n${message.content.slice(0, 2_000)}`,
+          "Summarize this update rather than reading the AI Assistant bubble verbatim."
+        ].filter(Boolean).join("\n\n"));
+        continue;
+      }
+      if (!previous.mcpApprovalRequest && message.mcpApprovalRequest) {
+        enqueueCodexRealtimeEvent(`approval:${message.id}:${message.createdAt}`, [
+          "The AI Assistant is waiting for an approval in the visible chat.",
+          `Tool: ${message.mcpApprovalRequest.toolName}.`,
+          `Tell the user explicitly that approval is required for ${message.mcpApprovalRequest.toolName} and that they must review its visible card in chat.`
+        ].join("\n"));
+      }
+      const previousRuns = new Map((previous.subagentRuns ?? []).map((run) => [run.id, run.status]));
+      for (const run of message.subagentRuns ?? []) {
+        if (previousRuns.get(run.id) === run.status) continue;
+        if (run.status !== "completed" && run.status !== "blocked" && run.status !== "failed" && run.status !== "awaiting-approval") continue;
+        enqueueCodexRealtimeEvent(`subagent:${run.id}:${run.status}`, [
+          `Subagent step ${run.title} is now ${run.status}.`,
+          run.resultSummary ? `Result: ${run.resultSummary.slice(0, 1_200)}` : "",
+          run.error ? `Error: ${run.error}` : "",
+          run.status === "awaiting-approval" ? `Tell the user explicitly that approval is required for ${run.title} and that its card is visible in chat.` : ""
+        ].filter(Boolean).join("\n"));
+      }
+      if (!previous.changeSet?.reviewedAt && message.changeSet?.reviewedAt) {
+        const actionKind = researchChangeSetActionKind(message.changeSet);
+        enqueueCodexRealtimeEvent(`action-review:${message.changeSet.id}:${message.changeSet.reviewedAt}`, [
+          actionKind === "run-app"
+            ? `The Run App launch request "${message.changeSet.summary}" was reviewed. Do not call it a graph change or implementation job.`
+            : actionKind === "implementation"
+              ? `The AI Implement queue request "${message.changeSet.summary}" was reviewed.`
+              : `The graph proposal ${message.changeSet.id} was reviewed.`,
+          "Briefly acknowledge the review. Do not claim the underlying run completed until its own status event confirms that."
+        ].join("\n"));
+      }
+    }
+  }, [codexRealtimeCallActive, enqueueCodexRealtimeEvent, selected, selected?.updatedAt]);
+
+  useEffect(() => {
+    if (!window.archicode?.onResearchSubagentProgress) return;
+    return window.archicode.onResearchSubagentProgress((progress) => {
+      if (
+        progress.projectRoot !== rootPath
+        || progress.sessionId !== codexRealtimeResearchSessionIdRef.current
+        || (progress.status !== "completed" && progress.status !== "blocked" && progress.status !== "failed")
+      ) return;
+      enqueueCodexRealtimeEvent(`subagent:${progress.runId}:${progress.status}`, [
+        `Subagent step ${progress.title} ${progress.status}.`,
+        progress.message ? `Update: ${progress.message}` : "",
+        "Give a brief progress update and say whether broader work is still continuing when known."
+      ].filter(Boolean).join("\n"));
+    });
+  }, [enqueueCodexRealtimeEvent, rootPath]);
+
+  useEffect(() => {
+    if (!window.archicode?.onRunUpdated) return;
+    return window.archicode.onRunUpdated(({ projectRoot, run }) => {
+      if (projectRoot !== rootPath || !codexRealtimeResearchSessionIdRef.current) return;
+      const previousStatus = codexRealtimeRunStatusesRef.current.get(run.id);
+      codexRealtimeRunStatusesRef.current.set(run.id, run.status);
+      if (previousStatus === run.status) return;
+      const isRunApp = Boolean(run.runProfileId);
+      const runLabel = isRunApp ? `Run App target ${run.runProfileId}` : `Project run ${run.id}`;
+      if (
+        run.status === "needs-permission"
+        || run.status === "awaiting-plan-review"
+        || run.status === "awaiting-code-review"
+      ) {
+        enqueueCodexRealtimeEvent(`run:${run.id}:${run.status}`, [
+          `${runLabel} is waiting at ${run.status}.`,
+          `Purpose: ${run.promptSummary}.`,
+          isRunApp ? "Tell the user that Run App needs review or permission in the run interface; do not call it implementation." : "Tell the user that review or permission is needed in the run interface."
+        ].join("\n"));
+        return;
+      }
+      if (run.status === "succeeded" || run.status === "failed" || run.status === "cancelled") {
+        enqueueCodexRealtimeEvent(`run:${run.id}:${run.status}`, [
+          `${runLabel} ${run.status}.`,
+          `Purpose: ${run.promptSummary}.`,
+          isRunApp ? "This was a Run App lifecycle, not coding, build, or verification." : `Final phase: ${run.stoppedAtPhase ?? run.phase}.`,
+          "Give a concise outcome update and suggest the relevant next step."
+        ].join("\n"));
+        return;
+      }
+      codexRealtimeCallRef.current?.appendDeveloperContext(
+        isRunApp
+          ? `Live activity update: Run App target ${run.runProfileId} moved to ${run.status}. Purpose: ${run.promptSummary}. This is runtime launch, not implementation. Keep this as silent monitoring context unless the user asks.`
+          : `Live activity update: project run ${run.id} moved to ${run.status} (${run.phase}). Purpose: ${run.promptSummary}. Keep this as silent monitoring context unless the user asks.`
+      );
+    });
+  }, [enqueueCodexRealtimeEvent, rootPath]);
+
+  useEffect(() => {
+    if (!window.archicode?.onExternalProjectUpdated) return;
+    return window.archicode.onExternalProjectUpdated((update) => {
+      if (update.projectRoot !== rootPath || !codexRealtimeResearchSessionIdRef.current) return;
+      codexRealtimeCallRef.current?.appendDeveloperContext([
+        `Silent project-monitoring update: ${update.source} performed ${update.action}.`,
+        update.refreshedEdges !== undefined ? `Refreshed edges: ${update.refreshedEdges}.` : "",
+        update.unresolvedEdges !== undefined ? `Unresolved edges: ${update.unresolvedEdges}.` : "",
+        update.policyViolations !== undefined ? `Policy violations: ${update.policyViolations}.` : "",
+        "The project may have changed. Use archicode_refresh_project_context before making detailed claims; do not speak solely because of this event."
+      ].filter(Boolean).join("\n"));
+    });
+  }, [rootPath]);
 
   const activeTtsMessageId = useCallback((fallbackMessageId: string, playbackRunId: number): string => {
     const streamingState = streamingAutoplayRef.current;
@@ -1921,7 +2885,7 @@ export const ResearchPanel = memo(function ResearchPanel({
   }, [flushTtsSpeechJobs]);
 
   const playMessageSpeech = useCallback(async (messageId: string, content: string) => {
-    if (!ttsSettings?.enabled) {
+    if (!localTtsEnabled) {
       setTtsError("Voice output is disabled for this project.");
       return;
     }
@@ -2003,7 +2967,7 @@ export const ResearchPanel = memo(function ResearchPanel({
     startTtsDebugLog,
     stopTtsPlayback,
     ttsBusyMessageId,
-    ttsSettings?.enabled,
+    localTtsEnabled,
     ttsSettings?.speed,
     ttsSettings?.voiceId,
     writeTtsDebugEvent
@@ -2140,16 +3104,16 @@ export const ResearchPanel = memo(function ResearchPanel({
   }, [refreshSpeechStatus]);
 
   useEffect(() => {
-    if (!ttsSettings?.enabled) {
+    if (!localTtsEnabled) {
       stopTtsPlayback();
       return;
     }
     void refreshTtsStatus().then((status) => {
       const model = status?.models.find((item) => item.id === selectedTtsModelId);
       if (!model?.downloaded) return;
-      void window.archicode.warmTtsModel(selectedTtsModelId, ttsSettings.voiceId).catch(() => undefined);
+      void window.archicode.warmTtsModel(selectedTtsModelId, ttsSettings?.voiceId ?? "af_heart").catch(() => undefined);
     });
-  }, [refreshTtsStatus, selectedTtsModelId, stopTtsPlayback, ttsSettings?.enabled, ttsSettings?.voiceId]);
+  }, [refreshTtsStatus, selectedTtsModelId, stopTtsPlayback, localTtsEnabled, ttsSettings?.voiceId]);
 
   useEffect(() => {
     stopTtsPlayback();
@@ -2161,7 +3125,7 @@ export const ResearchPanel = memo(function ResearchPanel({
   }, [selected?.id, stopTtsPlayback]);
 
   useEffect(() => {
-    if (!ttsSettings?.enabled || !ttsSettings.autoplay || !selected) return;
+    if (!localTtsEnabled || !ttsSettings?.autoplay || !selected) return;
     const currentState = streamingAutoplayRef.current;
 
     if (researchBusy && streamingAssistantMessage) {
@@ -2292,13 +3256,13 @@ export const ResearchPanel = memo(function ResearchPanel({
     streamingAssistantContentKey,
     streamingAssistantMessage,
     ttsSettings?.autoplay,
-    ttsSettings?.enabled,
+    localTtsEnabled,
     ttsStatus,
     writeTtsDebugEvent
   ]);
 
   useEffect(() => {
-    if (!ttsSettings?.enabled || !ttsSettings.autoplay || researchBusy || !selected) return;
+    if (!localTtsEnabled || !ttsSettings?.autoplay || researchBusy || !selected) return;
     const lastAssistantMessage = [...selected.messages].reverse().find((message) =>
       message.role === "assistant" && !message.error && !message.id.startsWith("research-waiting")
     );
@@ -2310,7 +3274,7 @@ export const ResearchPanel = memo(function ResearchPanel({
     }
     lastAutoplayMessageIdRef.current = lastAssistantMessage.id;
     void playMessageSpeech(lastAssistantMessage.id, lastAssistantMessage.content);
-  }, [playMessageSpeech, researchBusy, selected, selected?.updatedAt, ttsSettings?.autoplay, ttsSettings?.enabled]);
+  }, [playMessageSpeech, researchBusy, selected, selected?.updatedAt, ttsSettings?.autoplay, localTtsEnabled]);
 
   useEffect(() => {
     if (!window.archicode?.onSpeechModelDownloadProgress) return undefined;
@@ -2484,6 +3448,12 @@ export const ResearchPanel = memo(function ResearchPanel({
     clearResearchDraft();
     const attached = attachmentPaths;
     clearStagedAttachments();
+    if (codexRealtimeCallActive && codexRealtimeCallRef.current && attached.length === 0) {
+      researchRevealSubmittedMessageRef.current = true;
+      void queueCodexRealtimeTranscriptPersistence("user", message);
+      codexRealtimeCallRef.current.appendText(message);
+      return;
+    }
     const rememberedMcpServerIds = selected ? [...(rememberedMcpByChat[selected.id] ?? new Set<string>())] : [];
     // An in-flight session queues the new message outside the transcript. A
     // normal send appends an optimistic user message immediately, so mark that
@@ -2778,6 +3748,7 @@ export const ResearchPanel = memo(function ResearchPanel({
   const currentScopeLabel = scopeLabel(scope, bundle);
   const historyVisible = focusMode ? focusHistoryOpen : showHistory;
   const beginNewChat = () => {
+    if (codexRealtimeCallRef.current) void stopCodexRealtimeCall();
     setShowHistory(false);
     setComposingNewChat(true);
     if (defaultScope) setResearchScope(defaultScope);
@@ -2786,6 +3757,9 @@ export const ResearchPanel = memo(function ResearchPanel({
     if (focusMode && window.innerWidth <= 900) setFocusHistoryOpen(false);
   };
   const selectHistorySession = (sessionId: string | null) => {
+    if (codexRealtimeCallRef.current && sessionId !== codexRealtimeResearchSessionIdRef.current) {
+      void stopCodexRealtimeCall();
+    }
     setComposingNewChat(false);
     selectResearchChat(sessionId);
     setShowHistory(false);
@@ -2989,6 +3963,7 @@ export const ResearchPanel = memo(function ResearchPanel({
               <div className="research-message-list">
                 {selected ? selected.messages.map((message, messageIndex) => {
                   if (isChangeSetReviewMessage(message)) return null;
+                  const delivery = researchMessageDelivery(message);
                   const isStreamingMessage = researchBusy && message.id.startsWith("research-waiting");
                   const streamKind = researchStreamStates[message.id]?.kind;
                   const isThinkingDraft = isStreamingMessage && streamKind === "thinking";
@@ -3039,10 +4014,14 @@ export const ResearchPanel = memo(function ResearchPanel({
                     .filter((call) => !(message.mcpApprovalRequest && call.status === "approval-required"))
                     .sort((left, right) => left.createdAt.localeCompare(right.createdAt));
                   return (
-                  <div key={message.id} className={`research-message research-message-${message.role}${isThinkingDraft ? " research-message-thinking-draft" : ""}${hasSubagentCards ? " research-message-has-subagents" : ""}${hasTimelineActivity ? " research-message-has-activity" : ""}`}>
+                  <div key={message.id} className={`research-message research-message-${message.role}${delivery === "realtime" ? " research-message-realtime" : ""}${delivery === "background-research" ? " research-message-background-research" : ""}${isThinkingDraft ? " research-message-thinking-draft" : ""}${hasSubagentCards ? " research-message-has-subagents" : ""}${hasTimelineActivity ? " research-message-has-activity" : ""}`}>
                     <div className="research-message-head">
                       <div className="research-message-meta">
-                        <strong>{message.role === "assistant" ? "AI Assistant" : message.role === "user" ? "You" : "System"}</strong>
+                        {message.role === "assistant" && delivery === "realtime" ? <Mic size={13} aria-hidden="true" /> : null}
+                        <strong>{message.role === "assistant"
+                          ? delivery === "realtime" ? "Realtime" : "AI Assistant"
+                          : message.role === "user" ? "You" : "System"}</strong>
+                        {message.role === "assistant" && delivery === "background-research" ? <Badge tone="neutral">Research</Badge> : null}
                         {isThinkingDraft ? <Badge tone="neutral">Thinking</Badge> : null}
                         {message.error ? <Badge tone="danger">Error</Badge> : null}
                         {messageAttachmentCount ? <Badge tone="accent">{messageAttachmentCount} attachment{messageAttachmentCount === 1 ? "" : "s"}</Badge> : null}
@@ -3055,7 +4034,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                         ) : null}
                       </div>
                       <div className="research-message-actions">
-                        {ttsSettings?.enabled && message.role === "assistant" ? (
+                        {localTtsEnabled && message.role === "assistant" ? (
                           <IconButton
                             className={speakingMessageId === message.id ? "research-copy-button is-speaking" : "research-copy-button"}
                             title={isThinkingDraft ? "Waiting for final answer text" : speakingMessageId === message.id ? "Stop playback" : selectedTtsModel?.downloaded ? "Read message aloud" : "Open voice output settings"}
@@ -3848,8 +4827,65 @@ export const ResearchPanel = memo(function ResearchPanel({
                 </IconButton>
               </div>
             ) : null}
+            {activeRealtimeResearchTasks.length ? (
+              <ResearchBackgroundStatus tasks={activeRealtimeResearchTasks} />
+            ) : null}
+            {codexRealtimeSession ? (
+              <div className={`research-live-status${codexRealtimeSession.error ? " has-error" : ""}`} role="status" aria-live="polite">
+                {codexRealtimeSession.status === "preparing" || codexRealtimeSession.status === "starting" || codexRealtimeSession.status === "reconnecting"
+                  ? <Loader2 size={15} className="is-spinning" />
+                  : codexRealtimeSession.muted ? <MicOff size={15} /> : <Mic size={15} />}
+                <strong>Archi live</strong>
+                <span>{codexRealtimeSession.error ?? (codexRealtimeSession.muted
+                  ? "muted"
+                  : codexRealtimeSession.status === "preparing" ? "preparing context" : codexRealtimeSession.status)}</span>
+                {codexRealtimeCallActive && codexRealtimeSession.expiresAtMs ? (
+                  <ResearchLiveCountdown expiresAtMs={codexRealtimeSession.expiresAtMs} />
+                ) : null}
+                {(codexRealtimeSession.status === "hearing" || codexRealtimeSession.status === "listening") && !codexRealtimeSession.muted ? (
+                  <span className="research-live-meter" aria-label="Microphone input level">
+                    {[0.04, 0.12, 0.24, 0.42].map((threshold) => (
+                      <span key={threshold} className={codexRealtimeSession.inputLevel >= threshold ? "is-active" : ""} />
+                    ))}
+                  </span>
+                ) : null}
+              </div>
+            ) : null}
             <div className="research-composer-actions">
               <div className="research-composer-primary-actions">
+                {codexRealtimeMode ? (
+                  <>
+                    <Tooltip
+                      content={codexRealtimeDisabledReason ?? (codexRealtimeCallActive ? "End OpenAI live audio" : "Start OpenAI live audio")}
+                      disabled={!codexRealtimeDisabledReason}
+                    >
+                      <span className="research-live-button-anchor">
+                        <Button
+                          type="button"
+                          variant={codexRealtimeCallActive ? "danger" : "primary"}
+                          disabled={Boolean(codexRealtimeDisabledReason)}
+                          onClick={() => {
+                            if (codexRealtimeCallActive) void stopCodexRealtimeCall();
+                            else void startCodexRealtimeCall();
+                          }}
+                        >
+                          {codexRealtimeCallActive ? <Square size={15} /> : <Mic size={15} />}
+                          <span>{codexRealtimeCallActive ? "End live" : "Live"}</span>
+                        </Button>
+                      </span>
+                    </Tooltip>
+                    {codexRealtimeCallActive ? (
+                      <IconButton
+                        className={codexRealtimeSession?.muted ? "research-live-mute is-muted" : "research-live-mute"}
+                        title={codexRealtimeSession?.muted ? "Unmute microphone" : "Mute microphone"}
+                        aria-pressed={Boolean(codexRealtimeSession?.muted)}
+                        onClick={toggleCodexRealtimeMute}
+                      >
+                        {codexRealtimeSession?.muted ? <MicOff size={15} /> : <Mic size={15} />}
+                      </IconButton>
+                    ) : null}
+                  </>
+                ) : null}
                 {recordingSpeech ? (
                   <Button
                     type="button"
@@ -3881,7 +4917,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                   >
                     <Square size={15} />
                   </Button>
-                ) : speechSettings?.enabled ? (
+                ) : localSpeechEnabled ? (
                   <IconButton
                     title={speechButtonTitle}
                     className="research-speech-button"
@@ -3971,15 +5007,26 @@ export const ResearchPanel = memo(function ResearchPanel({
                     </MenuItem>
                   </MenuContent>
                 </MenuRoot>
-                <ChatModelPicker
-                  value={chatModelValue}
-                  options={chatModelOptions}
-                  disabled={!chatProvider || chatProvider.kind === "offline-manual" || mcpApprovalPending}
-                  onValueChange={selectChatModel}
-                />
+                {codexRealtimeCallActive && codexRealtimeSession ? (
+                  <div
+                    className="research-live-model-indicator"
+                    title={`Realtime model: ${codexRealtimeSession.model}`}
+                    aria-label={`Realtime model: ${codexRealtimeSession.model}`}
+                  >
+                    <Mic size={13} aria-hidden="true" />
+                    <span>{codexRealtimeSession.model}</span>
+                  </div>
+                ) : (
+                  <ChatModelPicker
+                    value={chatModelValue}
+                    options={chatModelOptions}
+                    disabled={!chatProvider || chatProvider.kind === "offline-manual" || mcpApprovalPending}
+                    onValueChange={selectChatModel}
+                  />
+                )}
               </div>
             </div>
-            {speechSettings?.enabled && speechNotice ? (
+            {localSpeechEnabled && speechNotice ? (
               <small
                 className={speechError ? "research-speech-status has-error" : "research-speech-status"}
                 aria-live="polite"
@@ -3994,7 +5041,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                 <span>{speechNotice}</span>
               </small>
             ) : null}
-            {ttsSettings?.enabled && ttsError ? (
+            {localTtsEnabled && ttsError ? (
               <small className="research-speech-status has-error" aria-live="polite">
                 <span>{ttsError}</span>
               </small>

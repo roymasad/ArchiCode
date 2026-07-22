@@ -22,7 +22,7 @@ import { approveRun, cancelRun, dismissRunError, rejectRun, removeRunFromQueue, 
 import { setRunUpdatePublisher } from "./storage/runLogs";
 import { listRuntimeServices, restartRuntimeService, shutdownRuntimeServices, startRuntimeService, stopRuntimeService } from "./storage/runtimeServices";
 import { listChatArtifacts, listProjectMemoryNotes, readChatArtifact, updateProjectMemoryNote } from "./storage/researchKnowledge";
-import { setWebSearchSecretResolver } from "./internalTools";
+import { callArchicodeInternalTool, setWebSearchSecretResolver } from "./internalTools";
 import {
   clearSemanticIndex,
   getSemanticCodeFileContexts,
@@ -57,17 +57,19 @@ import {
   providerSettingsSchema,
   speechSettingsSchema,
   ttsSettingsSchema,
+  voiceSettingsSchema,
   type ProjectBundle,
   type ProjectSettings,
   type ResearchChatSession,
   type Run,
   type SpeechSettings,
-  type TtsSettings
+  type TtsSettings,
+  type VoiceSettings
 } from "../shared/schema";
 import { createSeedProject } from "../shared/fixtures";
 import { checkForAppUpdate } from "./updater";
-import { applyResearchGraphChangeSet, type CodebaseMappingProgress, cancelResearchChatMessage, mapExistingCodebase, resyncExistingCodebase, respondToSubagentRun, resumeResearchGoalsForRunUpdate, sendResearchChatMessage, summarizeResearchChat, setGlobalResearchPersonalityResolver, setGlobalResearchVerbosityResolver } from "./research";
-import { archiveResearchChat, createResearchChat, forkResearchChat, listResearchChats, renameResearchChat, updateResearchChatAutoApproval, setResearchStorageRoot } from "./research/chatStore";
+import { applyResearchGraphChangeSet, type CodebaseMappingProgress, cancelResearchChatMessage, mapExistingCodebase, prepareResearchChatForContextPlan, resyncExistingCodebase, respondToSubagentRun, resumeResearchGoalsForRunUpdate, sendResearchChatMessage, summarizeResearchChat, setGlobalResearchPersonalityResolver, setGlobalResearchVerbosityResolver } from "./research";
+import { appendResearchChatTranscript, archiveResearchChat, createResearchChat, forkResearchChat, listResearchChats, renameResearchChat, updateResearchChatAutoApproval, setResearchStorageRoot } from "./research/chatStore";
 import {
   getExternalMcpHostStatus,
   regenerateExternalMcpHostAuth,
@@ -113,7 +115,12 @@ import {
   synthesizeSpeech,
   warmTtsModel
 } from "./tts";
-import { parseGlobalResearchPersonality, parseGlobalResearchVerbosity, type GlobalResearchPersonality, type GlobalResearchVerbosity } from "../shared/researchPersonality";
+import { parseGlobalResearchPersonality, parseGlobalResearchVerbosity, researchPersonalityPrompt, type GlobalResearchPersonality, type GlobalResearchVerbosity } from "../shared/researchPersonality";
+import { createCodexRealtimeClientSecret, getCodexRealtimeStatus, type CodexRealtimeStartInput } from "./codexRealtime";
+import { buildCompactResearchContext, buildResearchChatHistoryToolResult, buildResearchPreviousChatsToolResult } from "./research/contextAssembly";
+import { buildResearchRealtimePrompt } from "./research/realtimePrompt";
+import { deriveResearchChatContextPlanForModel } from "../shared/contextBudget";
+import { cancelRealtimeResearchTask, getRealtimeResearchTask, startRealtimeResearchTask, type RealtimeResearchTaskEvent, type StartRealtimeResearchTaskInput } from "./research/realtimeTasks";
 import { shutdownLocalProviderProcesses } from "./providers/localCli";
 import { projectStatePath, readJson, safeFileName, sha256File, writeJson } from "./storage/persistence";
 import { setDelphiToolCacheRoot } from "./testing/toolCache";
@@ -301,10 +308,12 @@ type AppState = {
   globalResearchVerbosity?: GlobalResearchVerbosity;
   providerSecrets?: Record<string, string>;
   webSearchSecrets?: Record<string, string>;
+  codexRealtimeSecrets?: Record<"openAiApiKey", string>;
   migrations?: Record<string, boolean>;
   keybindings?: Record<string, StoredKeyChord>;
   speech?: SpeechSettings;
   tts?: TtsSettings;
+  voice?: VoiceSettings;
   semanticModelPreference?: SemanticModelPreferenceId;
   // Sanitized (secret-free) server configs; auth material lives encrypted in
   // mcpServerSecrets, keyed by server id, the same split providers/apiKeys use.
@@ -688,6 +697,114 @@ async function rememberWebSearchSecrets(
   };
 }
 
+async function codexRealtimeApiKey(): Promise<string | undefined> {
+  const state = await readAppState();
+  return decryptSecret(state.codexRealtimeSecrets?.openAiApiKey);
+}
+
+async function codexRealtimeSecretStatus(): Promise<Record<"openAiApiKey", boolean>> {
+  const state = await readAppState();
+  return {
+    openAiApiKey: Boolean(state.codexRealtimeSecrets?.openAiApiKey)
+  };
+}
+
+async function codexRealtimeResearchPrompt(input: CodexRealtimeStartInput): Promise<string | null> {
+  const explicitPrompt = input.prompt?.trim();
+  if (explicitPrompt) return explicitPrompt;
+  const projectRoot = input.projectRoot?.trim();
+  const researchSessionId = input.researchSessionId?.trim();
+  if (!projectRoot || !researchSessionId) return null;
+
+  const contextPlan = deriveResearchChatContextPlanForModel(input.model ?? undefined);
+  const [bundle, personality, verbosity] = await Promise.all([
+    loadProject(projectRoot),
+    globalResearchPersonality(),
+    globalResearchVerbosity()
+  ]);
+  const researchSession = await prepareResearchChatForContextPlan({
+    projectRoot,
+    sessionId: researchSessionId,
+    contextPlan
+  });
+  const compactContext = await buildCompactResearchContext(projectRoot, bundle, researchSession.scope);
+  return buildResearchRealtimePrompt({
+    compactContext,
+    contextPlan,
+    personalityPrompt: researchPersonalityPrompt(personality),
+    researchVerbosity: verbosity,
+    session: researchSession
+  });
+}
+
+const codexRealtimeDirectProjectTools = new Set([
+  "archicode_project_list_files",
+  "archicode_project_search_files",
+  "archicode_project_read_file"
+]);
+
+async function callCodexRealtimeReadTool(input: {
+  argumentsJson: string;
+  model?: string;
+  projectRoot: string;
+  providerToolName: string;
+  researchSessionId: string;
+}): Promise<string> {
+  const contextPlan = deriveResearchChatContextPlanForModel(input.model);
+  if (input.providerToolName === "archicode_read_chat_history") {
+    const session = await prepareResearchChatForContextPlan({
+      projectRoot: input.projectRoot,
+      sessionId: input.researchSessionId,
+      contextPlan
+    });
+    return buildResearchChatHistoryToolResult(session.messages, contextPlan.recentMessageLimit, input.argumentsJson);
+  }
+  if (input.providerToolName === "archicode_search_previous_chats") {
+    return buildResearchPreviousChatsToolResult(
+      await listResearchChats(input.projectRoot),
+      input.researchSessionId,
+      input.argumentsJson
+    );
+  }
+  if (!codexRealtimeDirectProjectTools.has(input.providerToolName)) {
+    throw new Error(`Realtime read tool ${input.providerToolName} is not allowed.`);
+  }
+  const bundle = await loadProject(input.projectRoot);
+  const result = await callArchicodeInternalTool({
+    projectRoot: input.projectRoot,
+    settings: bundle.project.settings,
+    loadProject: () => loadProject(input.projectRoot),
+    readArtifactText: (artifactPath) => readArtifactText(input.projectRoot, artifactPath)
+  }, {
+    providerToolName: input.providerToolName,
+    argumentsJson: input.argumentsJson
+  });
+  return result.resultText;
+}
+
+async function rememberCodexRealtimeSecrets(
+  secrets: { openAiApiKey?: string },
+  options: { preserveMissingSecrets?: boolean } = {}
+): Promise<Record<"openAiApiKey", boolean>> {
+  const state = await readAppState();
+  const nextSecrets = { ...(state.codexRealtimeSecrets ?? {}) } as Record<"openAiApiKey", string | undefined>;
+  const rawKey = secrets.openAiApiKey?.trim();
+  if (rawKey) {
+    const encrypted = encryptSecret(rawKey);
+    if (encrypted) nextSecrets.openAiApiKey = encrypted;
+    else delete nextSecrets.openAiApiKey;
+  } else if (!options.preserveMissingSecrets) {
+    delete nextSecrets.openAiApiKey;
+  }
+  await writeAppState({
+    ...state,
+    codexRealtimeSecrets: nextSecrets.openAiApiKey ? { openAiApiKey: nextSecrets.openAiApiKey } : undefined
+  });
+  return {
+    openAiApiKey: Boolean(nextSecrets.openAiApiKey)
+  };
+}
+
 async function rememberGlobalProviders(
   providers: ProjectSettings["providers"],
   options: { preserveMissingSecrets?: boolean } = {}
@@ -847,6 +964,20 @@ function publishResearchChatSessionUpdated(projectRoot: string, session: Researc
   }
 }
 
+const realtimeResearchSleepBlockers = new Map<string, () => void>();
+
+function publishRealtimeResearchTask(payload: RealtimeResearchTaskEvent): void {
+  if (payload.status === "running" && !realtimeResearchSleepBlockers.has(payload.taskId)) {
+    realtimeResearchSleepBlockers.set(payload.taskId, beginSleepBlockingTask(`realtime-research:${payload.projectRoot}:${payload.taskId}`));
+  } else if (payload.status === "completed" || payload.status === "failed") {
+    realtimeResearchSleepBlockers.get(payload.taskId)?.();
+    realtimeResearchSleepBlockers.delete(payload.taskId);
+  }
+  for (const win of BrowserWindow.getAllWindows()) {
+    win.webContents.send("archicode:realtime-research-task", payload);
+  }
+}
+
 function publishResearchSubagentProgress(payload: ResearchSubagentProgressPayload): void {
   for (const win of BrowserWindow.getAllWindows()) {
     win.webContents.send("archicode:research-subagent-progress", payload);
@@ -950,7 +1081,7 @@ function contentSecurityPolicy(): string {
       "img-src 'self' data: blob: https:",
       "media-src 'self' blob:",
       "font-src 'self' data:",
-      "connect-src 'self' ws://localhost:* http://localhost:* ws://127.0.0.1:* http://127.0.0.1:*",
+      "connect-src 'self' https://api.openai.com ws://localhost:* http://localhost:* ws://127.0.0.1:* http://127.0.0.1:*",
       "object-src 'none'",
       "base-uri 'none'",
       "frame-ancestors 'none'"
@@ -964,7 +1095,7 @@ function contentSecurityPolicy(): string {
     "img-src 'self' data: blob: https:",
     "media-src 'self' blob:",
     "font-src 'self' data:",
-    "connect-src 'self'",
+    "connect-src 'self' https://api.openai.com",
     "object-src 'none'",
     "base-uri 'none'",
     "frame-ancestors 'none'"
@@ -1326,6 +1457,21 @@ async function rememberGlobalTtsSettings(settings: TtsSettings): Promise<TtsSett
   await writeAppState({
     ...state,
     tts: nextSettings
+  });
+  return nextSettings;
+}
+
+async function globalVoiceSettings(): Promise<VoiceSettings> {
+  const state = await readAppState();
+  return voiceSettingsSchema.parse(state.voice);
+}
+
+async function rememberGlobalVoiceSettings(settings: VoiceSettings): Promise<VoiceSettings> {
+  const state = await readAppState();
+  const nextSettings = voiceSettingsSchema.parse(settings);
+  await writeAppState({
+    ...state,
+    voice: nextSettings
   });
   return nextSettings;
 }
@@ -2092,12 +2238,16 @@ function registerIpc(): void {
   );
   ipcMain.handle("archicode:get-global-provider-secret-status", () => globalProviderSecretStatus());
   ipcMain.handle("archicode:get-web-search-secret-status", () => webSearchSecretStatus());
+  ipcMain.handle("archicode:get-codex-realtime-secret-status", () => codexRealtimeSecretStatus());
   ipcMain.handle("archicode:save-global-providers", async (_event, providers: ProjectSettings["providers"], options?: { preserveMissingSecrets?: boolean; includeSecrets?: boolean }) => {
     await rememberGlobalProviders(providers, options);
     return globalProviders({ includeSecrets: options?.includeSecrets ?? true });
   });
   ipcMain.handle("archicode:save-web-search-secrets", async (_event, secrets: { braveApiKey?: string }, options?: { preserveMissingSecrets?: boolean }) =>
     rememberWebSearchSecrets(secrets ?? {}, options)
+  );
+  ipcMain.handle("archicode:save-codex-realtime-secrets", async (_event, secrets: { openAiApiKey?: string }, options?: { preserveMissingSecrets?: boolean }) =>
+    rememberCodexRealtimeSecrets(secrets ?? {}, options)
   );
   ipcMain.handle("archicode:save-global-research-personality", async (_event, personality: GlobalResearchPersonality) =>
     rememberGlobalResearchPersonality(personality)
@@ -2112,6 +2262,10 @@ function registerIpc(): void {
   ipcMain.handle("archicode:get-global-tts-settings", () => globalTtsSettings());
   ipcMain.handle("archicode:save-global-tts-settings", async (_event, settings: TtsSettings) =>
     rememberGlobalTtsSettings(settings)
+  );
+  ipcMain.handle("archicode:get-global-voice-settings", () => globalVoiceSettings());
+  ipcMain.handle("archicode:save-global-voice-settings", async (_event, settings: VoiceSettings) =>
+    rememberGlobalVoiceSettings(settings)
   );
   ipcMain.handle("archicode:ensure-project", async (_event, projectRoot: string) =>
     syncBundleExternalMcpHost(syncBundleSleepBlocker(await ensureProject(projectRoot)))
@@ -2565,6 +2719,47 @@ function registerIpc(): void {
   );
   ipcMain.handle("archicode:delete-tts-model", async (_event, modelId) => deleteTtsModel(modelId));
   ipcMain.handle("archicode:warm-tts-model", async (_event, modelId, voiceId) => warmTtsModel(modelId, voiceId));
+  ipcMain.handle("archicode:get-codex-realtime-status", async (_event, model?: string) =>
+    getCodexRealtimeStatus(await codexRealtimeApiKey(), model?.trim() || undefined)
+  );
+  ipcMain.handle("archicode:codex-realtime-start", async (_event, input: CodexRealtimeStartInput) => {
+    const [apiKey, prompt] = await Promise.all([
+      codexRealtimeApiKey(),
+      codexRealtimeResearchPrompt(input)
+    ]);
+    if (!apiKey) throw new Error("Add and save an OpenAI API key in Project Settings > Advanced > Voice mode.");
+    if (!prompt) throw new Error("ArchiCode could not assemble the selected Research chat context for Live.");
+    return createCodexRealtimeClientSecret({ ...input, apiKey, prompt });
+  });
+  ipcMain.handle("archicode:get-codex-realtime-context", async (_event, input: { model?: string; projectRoot: string; researchSessionId: string }) => {
+    const prompt = await codexRealtimeResearchPrompt({
+      projectRoot: input.projectRoot,
+      researchSessionId: input.researchSessionId,
+      model: input.model,
+      voice: "marin"
+    });
+    if (!prompt) throw new Error("ArchiCode could not refresh the selected Research chat context.");
+    return prompt;
+  });
+  ipcMain.handle("archicode:call-codex-realtime-read-tool", (_event, input: {
+    argumentsJson: string;
+    model?: string;
+    projectRoot: string;
+    providerToolName: string;
+    researchSessionId: string;
+  }) => callCodexRealtimeReadTool(input));
+  ipcMain.handle("archicode:start-realtime-research-task", (_event, input: StartRealtimeResearchTaskInput) =>
+    startRealtimeResearchTask(input, {
+      onEvent: publishRealtimeResearchTask,
+      onSessionUpdated: (session) => publishResearchChatSessionUpdated(input.projectRoot, session)
+    })
+  );
+  ipcMain.handle("archicode:get-realtime-research-task-status", (_event, input: { projectRoot: string; taskId: string }) =>
+    getRealtimeResearchTask(input.taskId, input.projectRoot)
+  );
+  ipcMain.handle("archicode:cancel-realtime-research-task", (_event, input: { projectRoot: string; researchSessionId: string; taskId: string }) =>
+    cancelRealtimeResearchTask(input)
+  );
   ipcMain.handle("archicode:synthesize-speech", async (_event, input) =>
     withSleepBlocked("speech-synthesis", () => synthesizeSpeech(input))
   );
@@ -2683,6 +2878,16 @@ ipcMain.handle("archicode:retry-run", async (_event, projectRoot, runId, guidanc
   ipcMain.handle("archicode:update-research-chat-auto-approval", async (_event, input) =>
     updateResearchChatAutoApproval(input)
   );
+  ipcMain.handle("archicode:append-research-chat-transcript", async (_event, input: {
+    projectRoot: string;
+    sessionId: string;
+    role: "user" | "assistant";
+    text: string;
+  }) => {
+    const session = await appendResearchChatTranscript(input);
+    publishResearchChatSessionUpdated(input.projectRoot, session);
+    return session;
+  });
   ipcMain.handle("archicode:send-research-chat-message", async (_event, input) =>
     withSleepBlocked(`research-chat:${input.projectRoot}:${input.sessionId}`, () => sendResearchChatMessage({
       ...input,

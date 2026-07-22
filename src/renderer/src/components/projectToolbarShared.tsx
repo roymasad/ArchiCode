@@ -40,7 +40,7 @@ import {
   X
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type WheelEvent } from "react";
-import { defaultPhaseModelPolicies, runTargetProfileSchema, type LlmPhase, type ProjectSettings, type RunEffort, type RunScope, type RuntimeService, type SpeechSettings, type TtsSettings } from "@shared/schema";
+import { defaultCodexRealtimeModel, defaultCodexRealtimeV2Voice, defaultPhaseModelPolicies, runTargetProfileSchema, type LlmPhase, type ProjectSettings, type RunEffort, type RunScope, type RuntimeService, type SpeechSettings, type TtsSettings, type VoiceSettings } from "@shared/schema";
 import { deriveContextBudgetPlan } from "@shared/contextBudget";
 import { isSubflowIgnored } from "@shared/graph";
 import { providerHasCompletedCapabilityCheck, providerImageInputSupportStatus } from "@shared/providerCapabilities";
@@ -162,6 +162,16 @@ export const defaultTtsSettings: TtsSettings = {
   voiceId: "af_heart",
   speed: 1,
   autoplay: false
+};
+
+export const defaultVoiceSettings: VoiceSettings = {
+  mode: "local",
+  codexRealtime: {
+    voice: defaultCodexRealtimeV2Voice,
+    outputModality: "audio",
+    model: defaultCodexRealtimeModel,
+    includeStartupContext: true
+  }
 };
 
 export const projectSettingsTabs = new Set<ProjectSettingsTab>([

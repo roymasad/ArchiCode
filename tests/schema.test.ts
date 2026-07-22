@@ -1,9 +1,41 @@
 import { describe, expect, it } from "vitest";
-import { applyNodePatch, flowSchema, llmPatchProposalSchema, projectSchema, researchCanvasActionSchema, researchChatSessionSchema, researchGraphChangeSetSchema, runGuidanceSchema, runImplementationTaskSchema, runSchema, type ArchicodeNode } from "../src/shared/schema";
+import { applyNodePatch, defaultCodexRealtimeModel, flowSchema, llmPatchProposalSchema, projectSchema, researchCanvasActionSchema, researchChatSessionSchema, researchGraphChangeSetSchema, runGuidanceSchema, runImplementationTaskSchema, runSchema, voiceSettingsSchema, type ArchicodeNode } from "../src/shared/schema";
 import flowFixture from "../fixtures/sample-project/.archicode/flows/flow-main.json";
 import projectFixture from "../fixtures/sample-project/.archicode/project.json";
 
 describe("ArchiCode JSON schemas", () => {
+  it("defaults voice mode to local and migrates the legacy Codex realtime mode", () => {
+    expect(voiceSettingsSchema.parse(undefined)).toEqual({
+      mode: "local",
+      codexRealtime: {
+        voice: "marin",
+        outputModality: "audio",
+        model: defaultCodexRealtimeModel,
+        includeStartupContext: true
+      }
+    });
+    expect(voiceSettingsSchema.parse({
+      mode: "off",
+      codexRealtime: undefined
+    }).mode).toBe("local");
+    expect(voiceSettingsSchema.parse({
+      mode: "codex-realtime",
+      codexRealtime: {
+        model: null,
+        voice: "juniper"
+      }
+    })).toMatchObject({ mode: "openai-realtime", codexRealtime: { model: defaultCodexRealtimeModel } });
+    expect(voiceSettingsSchema.parse({
+      mode: "codex-realtime",
+      codexRealtime: {
+        voice: "cove",
+        outputModality: "audio",
+        model: "gpt-realtime",
+        includeStartupContext: false
+      }
+    }).codexRealtime.voice).toBe("cove");
+  });
+
   it("validates reversible research canvas actions", () => {
     expect(researchCanvasActionSchema.parse({
       flowId: "flow-main",

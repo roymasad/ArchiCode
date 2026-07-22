@@ -9,7 +9,7 @@ const productionRendererCsp = [
   "img-src 'self' data: blob: https:",
   "media-src 'self' blob:",
   "font-src 'self' data:",
-  "connect-src 'self'",
+  "connect-src 'self' https://api.openai.com",
   "object-src 'none'",
   "base-uri 'none'"
 ].join("; ");

@@ -16,8 +16,8 @@ import { authorAcceptanceTestsScoped, runNodeAcceptanceChecks } from "../storage
 import { recordGraphChange } from "../storage/ledgers";
 import { addNote, deleteNote, updateNoteResolved } from "../storage/notes";
 import { loadProject, saveFlow, updateNode, updateProjectMetadata, updateProjectSettings } from "../storage/projectStore";
-import { retryRun, startAgentRun, startDebuggingRun, startIncidentDebugRun, startRunProfile, startRuntimeDebugRun } from "../storage/runEngine";
-import { listRuntimeServices, restartRuntimeService, stopRuntimeService } from "../storage/runtimeServices";
+import { retryRun, startAgentRun, startDebuggingRun, startIncidentDebugRun, startRuntimeDebugRun } from "../storage/runEngine";
+import { listRuntimeServices, restartRuntimeService, startRuntimeService, stopRuntimeService } from "../storage/runtimeServices";
 import { id, iso, layoutResearchCreatedNodes } from "../research";
 
 export type ResearchOperation = NonNullable<ResearchChatMessage["changeSet"]>["operations"][number];
@@ -227,16 +227,18 @@ export async function applyResearchOperation(projectRoot: string, operation: Res
     });
     return `Queued AI Implement run ${runId} with ${gaiaAgent.title}.`;
   } else if (operation.kind === "start-run-profile") {
-    const { runId } = await startRunProfile({
+    const services = await startRuntimeService({
       projectRoot,
-      flowId: operation.flowId,
-      providerId: await researchOperationProviderId(projectRoot),
       profileId: operation.profileId,
-      targetId: operation.targetId,
-      allowShell: operation.allowShell,
-      reusableApproval: operation.reusableApproval
+      targetId: operation.targetId
     });
-    return `Queued run profile ${operation.profileId} as run ${runId}.`;
+    const service = services.find((item) => item.profileId === operation.profileId
+      && (!operation.targetId || item.targetId === operation.targetId));
+    if (!service) throw new Error(`Run App profile ${operation.profileId} did not return a runtime service.`);
+    if (service.status === "failed") {
+      throw new Error(service.logs.at(-1)?.text || `Run App profile ${operation.profileId} failed to start.`);
+    }
+    return `Started runtime service ${service.label} (${service.id}) directly${service.url ? ` at ${service.url}` : ""}.`;
   } else if (operation.kind === "stop-runtime-service") {
     const service = (await listRuntimeServices(projectRoot)).find((item) => item.id === operation.serviceId);
     if (!service) throw new Error(`Runtime service ${operation.serviceId} was not found.`);

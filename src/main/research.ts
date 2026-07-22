@@ -13,7 +13,7 @@ import { readArtifactText } from "./storage/patches";
 import { hydrateProviderForUse, loadProject, saveFlow, saveFlows, updateNode, updateProjectMetadata, updateProjectSettings } from "./storage/projectStore";
 import { retryRun, runInternalConsoleCommand, startAgentRun, startDebuggingRun, startIncidentDebugRun, startRunProfile, startRuntimeDebugRun } from "./storage/runEngine";
 import { listRuntimeServices } from "./storage/runtimeServices";
-import { callResearchProvider, inferModelCapabilityProfile, isExplicitDelphiAuditRequest, resolvePhaseModelPolicy, type Provider, type ProviderTokenKind, type ResearchProviderContinuation } from "./providers";
+import { callResearchProvider, inferModelCapabilityProfile, resolvePhaseModelPolicy, type Provider, type ProviderTokenKind, type ResearchProviderContinuation } from "./providers";
 import { selectedSkillsPrompt } from "./skills";
 import { callMcpTool, providerMcpTools, type ProviderMcpTool } from "./mcp";
 import {
@@ -94,7 +94,7 @@ import { runCodebaseResync } from "./importer/resync";
 import type { ResyncProgress, ResyncResult, ResyncScope } from "./importer/resyncTypes";
 import { extractArchicodeResearch } from "../shared/researchExtraction";
 import { parseGlobalResearchPersonality, parseGlobalResearchVerbosity, pickRandomResearchThinkingPhrase, researchPersonalityPrompt, type GlobalResearchPersonality, type GlobalResearchVerbosity } from "../shared/researchPersonality";
-import { deriveResearchChatContextPlan, estimateTextTokens } from "../shared/contextBudget";
+import { deriveResearchChatContextPlan, estimateTextTokens, type ResearchChatContextPlan } from "../shared/contextBudget";
 import { mergeReasoningReplayStates } from "../shared/llmPricing";
 import { providerImageInputSupportStatus, type ProviderImageInputSupportStatus } from "../shared/providerCapabilities";
 import { compactImplementationScope, implementationScopeAdvisory, semanticRetrievalAdvisory } from "../shared/implementationScope";
@@ -524,34 +524,6 @@ export function visibleResearchAnswer(answer: string): string {
   return visible;
 }
 
-function isInternalOutcomeBookkeepingNarration(answer: string): boolean {
-  const normalized = answer.replace(/\s+/g, " ").trim();
-  if (!normalized || normalized.length > 900) return false;
-  return /\b(?:need to|let me|now i (?:need to|will)) (?:make|update|record|checkpoint)\b.{0,100}\b(?:memory|goal|checkpoint)\b/i.test(normalized)
-    || /\b(?:goal )?checkpoint (?:is|has been) recorded\b.{0,160}\b(?:memory|decision|update)\b/i.test(normalized);
-}
-
-function hostOutcomeReportFromContinuation(content: string): string | undefined {
-  const match = content.match(/The approved Delphi audit finished\.\s*([\s\S]*?)(?:\n\nThe host outcome above is the complete evidence packet|$)/i);
-  const report = match?.[1]?.trim();
-  return report ? `Delphi audit finished.\n\n${report}` : undefined;
-}
-
-function claimsPreparedGraphReviewCard(answer: string): boolean {
-  const normalized = answer.replace(/\s+/g, " ").trim().toLowerCase();
-  if (!normalized.includes("review card")) return false;
-  if (
-    /\bno (?:valid )?(?:graph )?review card\b/.test(normalized) ||
-    /\b(?:did not|didn't|could not|couldn't|cannot|can't|was not|wasn't|is not|isn't)\s+(?:prepare|create|submit|produce|generate)\b/.test(normalized) ||
-    /\b(?:graph )?review card (?:was|is|has) not\b/.test(normalized)
-  ) return false;
-  return (
-    /\b(?:prepared|created|submitted|produced|generated)\b.{0,100}\b(?:graph )?review card\b/.test(normalized) ||
-    /\b(?:graph )?review card\b.{0,100}\b(?:has been|was|is) (?:prepared|created|submitted|produced|generated|ready|available)\b/.test(normalized) ||
-    /\b(?:here is|here's)\b.{0,100}\b(?:graph )?review card\b/.test(normalized)
-  );
-}
-
 export function validateResearchCanvasAction(
   bundle: ProjectBundle,
   input: unknown,
@@ -604,6 +576,8 @@ type SendResearchChatMessageInput = {
   projectRoot: string;
   sessionId: string;
   content: string;
+  /** Host-classified action intent for detached orchestration turns. */
+  actionIntent?: "general" | "run-app" | "implementation" | "verification";
   providerId?: string;
   /** Explicit model for this chat turn. Null clears a prior per-chat selection. */
   modelId?: string | null;
@@ -647,6 +621,28 @@ function researchProviderWithModel(provider: Provider, modelId?: string): Provid
       }
     }
   };
+}
+
+export async function prepareResearchChatForContextPlan(input: {
+  projectRoot: string;
+  sessionId: string;
+  contextPlan: ResearchChatContextPlan;
+}): Promise<ResearchChatSession> {
+  return withResearchSessionLock(input.projectRoot, input.sessionId, async () => {
+    const [store, bundle] = await Promise.all([
+      readChatsForMutation(input.projectRoot),
+      loadProject(input.projectRoot)
+    ]);
+    const session = store.sessions.find((item) => item.id === input.sessionId);
+    if (!session) throw new Error(`Research chat ${input.sessionId} was not found.`);
+    const configuredProvider = bundle.project.settings.providers.find((provider) => provider.enabled)
+      ?? bundle.project.settings.providers.find((provider) => provider.id === session.providerId);
+    if (!configuredProvider || configuredProvider.kind === "offline-manual") return session;
+    const provider = researchProviderWithModel(configuredProvider, session.modelId ?? undefined);
+    const prepared = await compactResearchMemoryIfNeeded(input.projectRoot, provider, session, input.contextPlan);
+    if (prepared.updatedAt !== session.updatedAt) await persistResearchSession(input.projectRoot, prepared);
+    return prepared;
+  });
 }
 
 // Keyed by research chat session id so a stop button can cancel the one
@@ -1040,7 +1036,8 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
   const mergeResolutionToolEnabled = subagentSettings?.mergeConflictResolution ?? true;
   const graphReconciliationToolEnabled = subagentSettings?.graphReconciliation ?? true;
   const sherlockResearchToolEnabled = subagentSettings?.sherlockResearch ?? true;
-  const delphiTestingToolEnabled = subagentSettings?.delphiTesting ?? true;
+  const delphiSuppressedByActionIntent = input.actionIntent === "run-app" || input.actionIntent === "implementation";
+  const delphiTestingToolEnabled = !delphiSuppressedByActionIntent && (subagentSettings?.delphiTesting ?? true);
   const delphiModelPreflight = effectiveDelphiModelPreflight(provider);
   const subagentTools = researchSubagentTools({ mergeResolutionToolEnabled, graphReconciliationToolEnabled, sherlockResearchToolEnabled, delphiTestingToolEnabled });
   // Goal state and the decision to leave memory unchanged are host-owned.
@@ -1303,10 +1300,10 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
       // accept this mechanical checkpoint. No provider repair call is made.
     }
   };
-  const explicitDelphiDelegationRequired = turnPolicy.enforceExplicitDelphiDelegation && !resumeContinuation && isExplicitDelphiAuditRequest(content) &&
+  const structuredVerificationDelegationRequired = input.actionIntent === "verification" && !resumeContinuation &&
     researchMcpTools.some((tool) => isResearchSpawnDelphiTool(tool.providerToolName));
   const existingGoalStatus = capturedOrchestration.goal?.status;
-  if (explicitDelphiDelegationRequired && (!existingGoalStatus || existingGoalStatus === "completed" || existingGoalStatus === "cancelled")) {
+  if (structuredVerificationDelegationRequired && (!existingGoalStatus || existingGoalStatus === "completed" || existingGoalStatus === "cancelled")) {
     capturedOrchestration = startResearchGoal(capturedOrchestration, {
       objective: "Run the requested test/runtime audit and report evidence-backed findings.",
       successCriteria: [
@@ -1401,10 +1398,11 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
     delphiTestingToolEnabled
       ? `DELPHI MODEL PREFLIGHT: ${delphiVisionPreflightText(delphiModelPreflight)} When the user names a specific page, route, screen, or flow, preserve that exact target in spawn_delphi's objective and acceptance criteria instead of broadening it to a generic project audit.`
       : "",
-    explicitDelphiDelegationRequired
+    structuredVerificationDelegationRequired
       ? "EXPLICIT TEST OBJECTIVE: The user asked for executable test or runtime-audit work. Own the investigation and choose useful preliminary actions yourself, but do not finish or claim coverage until you have delegated the executable audit to archicode_spawn_delphi. Put the full requested scope and acceptance criteria in that delegation."
       : "",
     "Goal progress and Research memory are host-observed state. Do not spend tool calls updating or narrating them.",
+    "ARCHICODE ACTION VOCABULARY: AI Implement/implementation job means coding work that changes source files. Run App/runtime target means launching a configured app or dev server for the user to interact with. Verification audit means Delphi executes checks and inspects behavior; it is not a substitute for launching Run App. npm run build is a shell command, not a Run App target. If bare 'run' is ambiguous, ask whether the user means Run App, AI Implement, or verification. 'Run it so I can test it' means launch Run App and must not be broadened into a build or Delphi audit unless the user also asks for verification.",
     "PROJECT KNOWLEDGE: Session research memory above keeps this chat coherent. Separately, use archicode_project_remember_note only for small important knowledge that should be available to future chats in this project. Use archicode_chat_create_artifact for large reports, raw research, detailed plans, comparisons, or working journals that belong to this chat. Do not duplicate ordinary conversation into either surface.",
     "GRAPH LAYOUT: For exact planning-graph node positions, sizes, spacing, or collision checks, call archicode_read_graph_layout. It reads the current loaded project graph directly. Do not inspect, list, search, or read persisted .archicode flow JSON files to recover canvas geometry.",
     "JAVASCRIPT SCRATCHPAD: Use archicode_scratchpad_repl when arithmetic, statistics, data shaping, or a small helper function would make the answer more reliable. Write standard JavaScript. Each call uses a fresh isolated runtime with no Node.js globals, project files, packages, imports, network APIs, or persistent state.",
@@ -1458,24 +1456,12 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
         budgetedPrompt.tools.some((tool) => tool.providerToolName === providerToolName) && isResearchSinkTool(providerToolName),
       terminalToolCompletesTurn: (providerToolName) =>
         isResearchChangeSetTool(providerToolName) || isResearchCanvasControlTool(providerToolName),
-      validateFinalAnswer: (candidateText) => {
-        const candidate = extractArchicodeResearch(candidateText).response;
-        const validChangeSet = buildResearchTurnChangeSet(capturedChangeSet, candidate?.changeSet, bundle);
-        const failedPicasso = subagentRuns.some((run) => run.kind === "graph-reconciliation" && run.status === "failed");
-        if (explicitDelphiDelegationRequired && !subagentRuns.some((run) => run.kind === "delphi-testing")) {
+      validateFinalAnswer: (_candidateText) => {
+        if (structuredVerificationDelegationRequired && !subagentRuns.some((run) => run.kind === "delphi-testing")) {
           return [
             "The user explicitly requested executable test/runtime-audit work, but this trajectory has not delegated that work to Delphi.",
             "Continue this same trajectory and call archicode_spawn_delphi with the requested scope and acceptance criteria. You may use other tools when useful, but source inspection or CLI metadata alone cannot complete the executable audit."
           ].join("\n\n");
-        }
-        if (!failedPicasso && !validChangeSet && claimsPreparedGraphReviewCard(candidate?.answer ?? candidateText)) {
-          return [
-            "Your answer says a graph review card was prepared, but no valid graph change-set sink call exists in this trajectory.",
-            "Continue in this same trajectory: call archicode_propose_graph_change_set with the supported operations if the evidence is sufficient, or answer honestly that no card was created. Do not claim a card exists without the tool result."
-          ].join("\n\n");
-        }
-        if (turnKind === "outcome-finalization" && isInternalOutcomeBookkeepingNarration(visibleResearchAnswer(candidate?.answer ?? candidateText))) {
-          return "The host already owns goal and memory bookkeeping. Return the self-contained user-facing evidence report now; do not narrate internal state updates.";
         }
         return undefined;
       },
@@ -1997,9 +1983,6 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
           "Nothing was applied. You can retry the same request after correcting the proposal contract."
         ].join("\n\n")
       : visibleResearchAnswer(parsed?.answer ?? output);
-    if (turnKind === "outcome-finalization" && isInternalOutcomeBookkeepingNarration(visibleAnswer)) {
-      visibleAnswer = hostOutcomeReportFromContinuation(content) ?? "Delphi finished, but the parent provider did not produce a usable user-facing report. Review the Delphi card above for the recorded checks and coverage limits.";
-    }
     const graphLockRunsAfterTurn = await activeGraphLockRunsNow();
     if (changeSet && graphLockRunsAfterTurn.length) {
       visibleAnswer = [
@@ -2863,10 +2846,6 @@ async function continueResearchGoalAfterOutcome(
   }
 }
 
-function isPrematureReportDeliveryEvidence(value: string): boolean {
-  return /(?:user-facing|final) report (?:was |has been )?(?:delivered|shared|reported)|(?:delivered|shared) (?:the )?(?:final )?report (?:to|with) the user/i.test(value);
-}
-
 function omitChatArtifactReadToolsFromContext(context: string): string {
   try {
     const parsed = JSON.parse(context) as { projectFiles?: { tools?: Array<{ name?: string }> } };
@@ -2889,14 +2868,6 @@ export function requestsRedundantOutcomeArtifactRead(providerToolName: string, a
   return typeof requestedPath === "string" && /(?:^|\/)\.archicode\/artifacts(?:\/|$)/i.test(requestedPath.trim().replaceAll("\\", "/"));
 }
 
-function removeStaleDelphiSummaryLines(summary: string): string {
-  return summary
-    .split(/(?<=[.!?])\s+|\n+/)
-    .filter((part) => !(/delphi/i.test(part) && /(?:awaiting|pending|not (?:yet )?run|blocked)/i.test(part)))
-    .join(" ")
-    .trim();
-}
-
 export async function reconcileResearchOutcomeReportState(
   projectRoot: string,
   reportedSession: ResearchChatSession,
@@ -2912,6 +2883,9 @@ export async function reconcileResearchOutcomeReportState(
     if (researchSessionHasPendingReview(latest)) return latest;
     const reportMessage = [...latest.messages].reverse().find((message) => message.role === "assistant");
     if (!reportMessage) return latest;
+    const outcomeMessage = options.outcomeRunId
+      ? latest.messages.find((message) => message.subagentRuns.some((run) => run.id === options.outcomeRunId))
+      : undefined;
     const updatedAt = iso();
     const persistedEvidence = `Final evidence-backed report persisted in chat message ${reportMessage.id}.`;
     const goal = latest.orchestration.goal;
@@ -2938,32 +2912,23 @@ export async function reconcileResearchOutcomeReportState(
       ? {
           ...hostFinalizedGoal,
           checkpointSummary: `Goal completed. ${persistedEvidence}`,
-          completionEvidence: [...new Set([
-            ...hostFinalizedGoal.completionEvidence.filter((entry) => !isPrematureReportDeliveryEvidence(entry)),
-            persistedEvidence
-          ])],
-          steps: hostFinalizedGoal.steps.map((step) => ({
-            ...step,
-            evidence: step.evidence.filter((entry) => !isPrematureReportDeliveryEvidence(entry))
-          })),
+          completionEvidence: [...new Set([...hostFinalizedGoal.completionEvidence, persistedEvidence])],
           updatedAt
         }
       : hostFinalizedGoal;
-    const delphiMemoryMatch = (value: string | undefined): boolean => /delphi|test(?:ing)?\s*(?:\/|and)?\s*runtime audit/i.test(value ?? "");
     const delphiOutcomeStatus = options.outcomeStatus ?? "completed";
     const delphiSummaryLine = `Delphi audit finished with status ${delphiOutcomeStatus}; its final evidence-backed report is persisted in this chat.`;
-    const retainedDelphiSummary = removeStaleDelphiSummaryLines(latest.memory.summary);
     const memory = isDelphi
       ? researchMemorySchema.parse({
           ...latest.memory,
-          summary: retainedDelphiSummary.includes(delphiSummaryLine)
-            ? retainedDelphiSummary
-            : [retainedDelphiSummary, delphiSummaryLine].filter(Boolean).join("\n"),
-          todos: latest.memory.todos.map((todo) => delphiMemoryMatch(`${todo.title} ${todo.notes ?? ""}`) && todo.status !== "cancelled"
+          summary: latest.memory.summary.split("\n").includes(delphiSummaryLine)
+            ? latest.memory.summary
+            : [latest.memory.summary, delphiSummaryLine].filter(Boolean).join("\n"),
+          todos: latest.memory.todos.map((todo) => outcomeMessage && todo.sourceMessageIds.includes(outcomeMessage.id) && todo.status !== "cancelled"
             ? { ...todo, status: delphiBlocked ? "blocked" : "done", notes: delphiBlocked ? "Delphi audit finished with unresolved coverage; final report persisted in chat." : "Delphi audit completed; final report persisted in chat.", updatedAt }
             : todo),
           runRefs: latest.memory.runRefs.map((runRef) => (
-            runRef.runId === options.outcomeRunId || runRef.runId === "delphi-testing" || delphiMemoryMatch(`${runRef.title ?? ""} ${runRef.note ?? ""}`)
+            runRef.runId === options.outcomeRunId
           ) ? { ...runRef, status: delphiOutcomeStatus, note: "Audit finished; final report persisted in chat.", updatedAt } : runRef),
           lastUpdateError: undefined,
           updatedAt

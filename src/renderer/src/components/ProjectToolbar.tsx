@@ -44,7 +44,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type WheelEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { defaultPhaseModelPolicies, defaultSubagentModelPolicies, runTargetProfileSchema, type DebugIncident, type LlmPhase, type PhaseModelPolicy, type ProjectSettings, type RunEffort, type RunScope, type RuntimeService, type SpeechSettings, type SubagentModelProfile, type TtsSettings } from "@shared/schema";
+import { codexRealtimeModels, codexRealtimeV2Voices, defaultCodexRealtimeModel, defaultCodexRealtimeV2Voice, defaultPhaseModelPolicies, defaultSubagentModelPolicies, runTargetProfileSchema, type CodexRealtimeModel, type CodexRealtimeVoice, type DebugIncident, type LlmPhase, type PhaseModelPolicy, type ProjectSettings, type RunEffort, type RunScope, type RuntimeService, type SpeechSettings, type SubagentModelProfile, type TtsSettings, type VoiceSettings } from "@shared/schema";
 import { gaiaAgent, pandoraAgent } from "@shared/agentIdentities";
 import { deriveContextBudgetPlan } from "@shared/contextBudget";
 import { isSubflowIgnored } from "@shared/graph";
@@ -109,7 +109,7 @@ import {
 } from "./ui";
 
 
-import { RuntimeUrlLinks, contextBudgetSourceLabel, contextLabel, defaultSpeechSettings, defaultTtsSettings, encodeWav, formatBytes, formatTokenCount, isMacRuntime, mcpRegistryCategoryLabel, mcpRegistryCategoryOptions, mcpRegistryInitials, mcpRegistrySortOptions, modelHint, modelOptionLabel, modelOptionsForProvider, normalizeSpeechLanguage, openAiEndpointHint, openAiEndpointLabel, openRuntimeUrl, projectSettingsTabs, providerCheckHint, providerDescription, providerSupportsImages, renderRuntimeInsightDetail, renderRuntimeTextWithLinks, runtimeCwdLabel, runtimeUrls, selectedModelImageHint, speechLanguageOptions, mergeAudioChunks } from "./projectToolbarShared";
+import { RuntimeUrlLinks, contextBudgetSourceLabel, contextLabel, defaultSpeechSettings, defaultTtsSettings, defaultVoiceSettings, encodeWav, formatBytes, formatTokenCount, isMacRuntime, mcpRegistryCategoryLabel, mcpRegistryCategoryOptions, mcpRegistryInitials, mcpRegistrySortOptions, modelHint, modelOptionLabel, modelOptionsForProvider, normalizeSpeechLanguage, openAiEndpointHint, openAiEndpointLabel, openRuntimeUrl, projectSettingsTabs, providerCheckHint, providerDescription, providerSupportsImages, renderRuntimeInsightDetail, renderRuntimeTextWithLinks, runtimeCwdLabel, runtimeUrls, selectedModelImageHint, speechLanguageOptions, mergeAudioChunks } from "./projectToolbarShared";
 
 const ARCHICODE_RELEASES_URL = "https://github.com/roymasad/ArchiCode/releases";
 
@@ -245,8 +245,10 @@ export function ProjectToolbar({
     openProjectInVsCode,
     globalSpeechSettings,
     globalTtsSettings,
+    globalVoiceSettings,
     updateGlobalSpeechSettings,
-    updateGlobalTtsSettings
+    updateGlobalTtsSettings,
+    updateGlobalVoiceSettings
   } = useArchicodeStore(useShallow((state) => ({
     bundle: state.bundle,
     rootPath: state.rootPath,
@@ -302,13 +304,16 @@ export function ProjectToolbar({
     openProjectInVsCode: state.openProjectInVsCode,
     globalSpeechSettings: state.globalSpeechSettings,
     globalTtsSettings: state.globalTtsSettings,
+    globalVoiceSettings: state.globalVoiceSettings,
     updateGlobalSpeechSettings: state.updateGlobalSpeechSettings,
-    updateGlobalTtsSettings: state.updateGlobalTtsSettings
+    updateGlobalTtsSettings: state.updateGlobalTtsSettings,
+    updateGlobalVoiceSettings: state.updateGlobalVoiceSettings
   })));
   const [detailsDraft, setDetailsDraft] = useState({ name: "" });
   const [draft, setDraft] = useState<ProjectSettings | null>(null);
   const [speechDraft, setSpeechDraft] = useState<SpeechSettings>(defaultSpeechSettings);
   const [ttsDraft, setTtsDraft] = useState<TtsSettings>(defaultTtsSettings);
+  const [voiceDraft, setVoiceDraft] = useState<VoiceSettings>(defaultVoiceSettings);
   const [globalResearchPersonality, setGlobalResearchPersonality] = useState<GlobalResearchPersonality>("default");
   const [globalResearchVerbosity, setGlobalResearchVerbosity] = useState<GlobalResearchVerbosity>("default");
   const [runProfilesDraft, setRunProfilesDraft] = useState("[]");
@@ -359,6 +364,9 @@ export function ProjectToolbar({
   const [visibleBraveApiKey, setVisibleBraveApiKey] = useState(false);
   const [savedWebSearchSecrets, setSavedWebSearchSecrets] = useState<Record<"brave", boolean>>({ brave: false });
   const [webSearchSecretsDraft, setWebSearchSecretsDraft] = useState<{ braveApiKey: string }>({ braveApiKey: "" });
+  const [visibleCodexRealtimeApiKey, setVisibleCodexRealtimeApiKey] = useState(false);
+  const [savedCodexRealtimeSecrets, setSavedCodexRealtimeSecrets] = useState<Record<"openAiApiKey", boolean>>({ openAiApiKey: false });
+  const [codexRealtimeSecretsDraft, setCodexRealtimeSecretsDraft] = useState<{ openAiApiKey: string }>({ openAiApiKey: "" });
   const [pendingProviderRevealId, setPendingProviderRevealId] = useState<string | null>(null);
   const [pendingModelCheckIds, setPendingModelCheckIds] = useState<Set<string>>(() => new Set());
   const [settingsSaveBusy, setSettingsSaveBusy] = useState(false);
@@ -378,6 +386,9 @@ export function ProjectToolbar({
   const [ttsDownloadingModelId, setTtsDownloadingModelId] = useState<TtsSettings["modelId"] | null>(null);
   const [ttsDeletingModelId, setTtsDeletingModelId] = useState<TtsSettings["modelId"] | null>(null);
   const [ttsTestBusy, setTtsTestBusy] = useState(false);
+  const [codexRealtimeStatus, setCodexRealtimeStatus] = useState<Awaited<ReturnType<typeof window.archicode.getCodexRealtimeStatus>> | null>(null);
+  const [codexRealtimeBusy, setCodexRealtimeBusy] = useState(false);
+  const [codexRealtimeNotice, setCodexRealtimeNotice] = useState<string | null>(null);
   const [externalMcpHostStatus, setExternalMcpHostStatus] = useState<Awaited<ReturnType<typeof window.archicode.getExternalMcpHostStatus>> | null>(null);
   const [externalMcpHostNotice, setExternalMcpHostNotice] = useState<string | null>(null);
   const [externalMcpHostBusy, setExternalMcpHostBusy] = useState(false);
@@ -453,7 +464,20 @@ export function ProjectToolbar({
     if (!settingsOpen) return;
     setSpeechDraft(globalSpeechSettings ?? defaultSpeechSettings);
     setTtsDraft(globalTtsSettings ?? defaultTtsSettings);
-  }, [settingsOpen, globalSpeechSettings, globalTtsSettings]);
+    setCodexRealtimeSecretsDraft({ openAiApiKey: "" });
+    setVisibleCodexRealtimeApiKey(false);
+    const nextVoiceSettings = globalVoiceSettings ?? defaultVoiceSettings;
+    setVoiceDraft({
+      ...nextVoiceSettings,
+      codexRealtime: {
+        ...nextVoiceSettings.codexRealtime,
+        model: nextVoiceSettings.codexRealtime.model?.trim() || defaultCodexRealtimeModel,
+        voice: (codexRealtimeV2Voices as readonly CodexRealtimeVoice[]).includes(nextVoiceSettings.codexRealtime.voice)
+          ? nextVoiceSettings.codexRealtime.voice
+          : defaultCodexRealtimeV2Voice
+      }
+    });
+  }, [settingsOpen, globalSpeechSettings, globalTtsSettings, globalVoiceSettings]);
 
   useEffect(() => {
     const handleOpenProjectSettings = (event: Event) => {
@@ -562,11 +586,23 @@ export function ProjectToolbar({
     return status;
   }, []);
 
+  const refreshCodexRealtimeSecretStatus = useCallback(async (): Promise<Record<"openAiApiKey", boolean>> => {
+    if (!window.archicode?.getCodexRealtimeSecretStatus) {
+      const next = { openAiApiKey: false };
+      setSavedCodexRealtimeSecrets(next);
+      return next;
+    }
+    const status = await window.archicode.getCodexRealtimeSecretStatus();
+    setSavedCodexRealtimeSecrets(status);
+    return status;
+  }, []);
+
   useEffect(() => {
     if (!settingsOpen) return;
     void refreshSavedApiKeyStatus();
     void refreshWebSearchSecretStatus();
-  }, [refreshSavedApiKeyStatus, refreshWebSearchSecretStatus, settingsOpen]);
+    void refreshCodexRealtimeSecretStatus();
+  }, [refreshCodexRealtimeSecretStatus, refreshSavedApiKeyStatus, refreshWebSearchSecretStatus, settingsOpen]);
 
   useEffect(() => {
     if (!settingsOpen || !rootPath || settingsTab !== "agent-memory") return;
@@ -957,6 +993,34 @@ export function ProjectToolbar({
     }
   }, [ttsDraft.modelId]);
 
+  const refreshCodexRealtimeStatus = useCallback(async () => {
+    if (!window.archicode?.getCodexRealtimeStatus) return null;
+    setCodexRealtimeBusy(true);
+    setCodexRealtimeNotice(null);
+    try {
+      const status = await window.archicode.getCodexRealtimeStatus(voiceDraft.codexRealtime.model);
+      setCodexRealtimeStatus(status);
+      setCodexRealtimeNotice(status.message);
+      if (status.realtimeAvailable && !(codexRealtimeV2Voices as readonly CodexRealtimeVoice[]).includes(voiceDraft.codexRealtime.voice)) {
+        setVoiceDraft((current) => ({
+          ...current,
+          codexRealtime: {
+            ...current.codexRealtime,
+            voice: defaultCodexRealtimeV2Voice
+          }
+        }));
+      }
+      return status;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "Could not check OpenAI Realtime audio.";
+      setCodexRealtimeStatus(null);
+      setCodexRealtimeNotice(message);
+      return null;
+    } finally {
+      setCodexRealtimeBusy(false);
+    }
+  }, [voiceDraft.codexRealtime.model, voiceDraft.codexRealtime.voice]);
+
   const updateTtsModelStatus = useCallback((modelStatus: Awaited<ReturnType<typeof window.archicode.downloadTtsModel>>) => {
     setTtsStatus((current) => current ? {
       ...current,
@@ -1056,6 +1120,11 @@ export function ProjectToolbar({
     if (!settingsOpen || settingsTab !== "advanced") return;
     void refreshTtsStatus(ttsDraft.modelId);
   }, [ttsDraft.modelId, refreshTtsStatus, settingsOpen, settingsTab]);
+
+  useEffect(() => {
+    if (!settingsOpen || settingsTab !== "advanced") return;
+    void refreshCodexRealtimeStatus();
+  }, [refreshCodexRealtimeStatus, settingsOpen, settingsTab]);
 
   const refreshExternalMcpHostStatus = useCallback(async () => {
     if (!rootPath || !window.archicode?.getExternalMcpHostStatus) {
@@ -1737,6 +1806,22 @@ export function ProjectToolbar({
   const ttsVoiceOptions = (ttsStatus?.voices.length ? ttsStatus.voices : [{ id: "af_heart", label: "Heart" }]).map((voice) => ({
     value: voice.id,
     label: voice.label
+  }));
+  const codexRealtimeVoiceOptions = codexRealtimeV2Voices.map((voice) => ({
+    value: voice,
+    label: voice
+  }));
+  const codexRealtimeModelLabels: Record<(typeof codexRealtimeModels)[number], string> = {
+    "gpt-realtime-2.1-mini": "gpt-realtime-2.1-mini - cheaper / faster",
+    "gpt-realtime-2.1": "gpt-realtime-2.1 - smarter / current",
+    "gpt-realtime-2": "gpt-realtime-2 - previous smart",
+    "gpt-realtime-1.5": "gpt-realtime-1.5 - older voice",
+    "gpt-realtime-mini": "gpt-realtime-mini - legacy cheap",
+    "gpt-realtime": "gpt-realtime - legacy"
+  };
+  const codexRealtimeModelOptions = codexRealtimeModels.map((model) => ({
+    value: model,
+    label: codexRealtimeModelLabels[model]
   }));
   const ttsTestDisabled = !ttsDraft.enabled || !activeTtsModel?.downloaded || ttsTestBusy || Boolean(ttsDownloadingModelId) || Boolean(ttsDeletingModelId);
   const localEnvironment = draft?.localEnvironment ?? {
@@ -4223,6 +4308,106 @@ export function ProjectToolbar({
                 <section className="speech-settings-panel">
                   <div className="speech-settings-head">
                     <div>
+                      <strong>Voice mode</strong>
+                      <small>Choose one audio owner for Research chat.</small>
+                    </div>
+                    <Badge tone={voiceDraft.mode === "openai-realtime" && codexRealtimeStatus?.realtimeAvailable ? "success" : "neutral"}>
+                      {voiceDraft.mode === "openai-realtime" ? "OpenAI realtime" : "Local"}
+                    </Badge>
+                  </div>
+                  <div className="settings-two-col">
+                    <Field label="Mode" hint="OpenAI Realtime uses the separately saved OpenAI API key and is independent of the normal chat provider.">
+                      <Select
+                        value={voiceDraft.mode}
+                        onValueChange={(value) => {
+                          const mode = value as VoiceSettings["mode"];
+                          setVoiceDraft({ ...voiceDraft, mode });
+                          if (mode === "openai-realtime") {
+                            setSpeechDraft((current) => ({ ...current, enabled: false }));
+                            setTtsDraft((current) => ({ ...current, enabled: false, autoplay: false }));
+                          }
+                        }}
+                        options={[
+                          { value: "local", label: "Local STT/TTS" },
+                          { value: "openai-realtime", label: "OpenAI Realtime" }
+                        ]}
+                      />
+                    </Field>
+                    <Field
+                      label="OpenAI realtime voice"
+                      hint={voiceDraft.mode === "openai-realtime"
+                        ? "Used by direct OpenAI Realtime WebRTC sessions."
+                        : "Available when OpenAI Realtime is selected."}
+                    >
+                      <Select
+                        disabled={voiceDraft.mode !== "openai-realtime"}
+                        value={voiceDraft.codexRealtime.voice}
+                        onValueChange={(value) => setVoiceDraft({
+                          ...voiceDraft,
+                          codexRealtime: {
+                            ...voiceDraft.codexRealtime,
+                            voice: value as CodexRealtimeVoice
+                          }
+                        })}
+                        options={codexRealtimeVoiceOptions}
+                      />
+                    </Field>
+                    <Field
+                      label="OpenAI realtime model"
+                      hint={voiceDraft.mode === "openai-realtime"
+                        ? "Used only for live audio sessions, not normal chat responses."
+                        : "Available when OpenAI Realtime is selected."}
+                    >
+                      <Select
+                        disabled={voiceDraft.mode !== "openai-realtime"}
+                        value={voiceDraft.codexRealtime.model || defaultCodexRealtimeModel}
+                        onValueChange={(value) => setVoiceDraft({
+                          ...voiceDraft,
+                          codexRealtime: {
+                            ...voiceDraft.codexRealtime,
+                            model: value as CodexRealtimeModel
+                          }
+                        })}
+                        options={codexRealtimeModelOptions}
+                      />
+                    </Field>
+                    <Field
+                      label="OpenAI realtime API key"
+                      hint="Stored by ArchiCode in the main process and used only to mint short-lived Realtime client credentials."
+                    >
+                      <div className="secret-input-row">
+                        <TextInput
+                          type={visibleCodexRealtimeApiKey ? "text" : "password"}
+                          autoComplete="off"
+                          spellCheck={false}
+                          placeholder={savedCodexRealtimeSecrets.openAiApiKey ? "Saved API key" : "sk-..."}
+                          disabled={voiceDraft.mode !== "openai-realtime"}
+                          value={codexRealtimeSecretsDraft.openAiApiKey}
+                          onChange={(event) => setCodexRealtimeSecretsDraft({ openAiApiKey: event.target.value })}
+                        />
+                        <IconButton
+                          title={visibleCodexRealtimeApiKey ? "Hide API key" : "Show API key"}
+                          disabled={voiceDraft.mode !== "openai-realtime"}
+                          onClick={() => setVisibleCodexRealtimeApiKey((current) => !current)}
+                        >
+                          {visibleCodexRealtimeApiKey ? <EyeOff size={14} /> : <Eye size={14} />}
+                        </IconButton>
+                      </div>
+                    </Field>
+                  </div>
+                  <div className="speech-test-actions">
+                    <Button type="button" size="sm" disabled={codexRealtimeBusy} onClick={() => void refreshCodexRealtimeStatus()}>
+                      {codexRealtimeBusy ? <Loader2 size={14} className="is-spinning" /> : <RefreshCw size={14} />}
+                      <span>Check OpenAI realtime</span>
+                    </Button>
+                    <small>
+                      {codexRealtimeNotice ?? "Check availability before using OpenAI Realtime."}
+                    </small>
+                  </div>
+                </section>
+                <section className="speech-settings-panel">
+                  <div className="speech-settings-head">
+                    <div>
                       <strong>Voice input (STT)</strong>
                       <small>Local speech-to-text uses a downloadable Transformers.js Whisper base model.</small>
                     </div>
@@ -4234,10 +4419,13 @@ export function ProjectToolbar({
                   </div>
                   <Switch
                     checked={speechDraft.enabled}
-                    onCheckedChange={(checked) => setSpeechDraft({
-                      ...speechDraft,
-                      enabled: checked
-                    })}
+                    onCheckedChange={(checked) => {
+                      setSpeechDraft({
+                        ...speechDraft,
+                        enabled: checked
+                      });
+                      if (checked) setVoiceDraft((current) => ({ ...current, mode: "local" }));
+                    }}
                     label="Enable voice input"
                     tooltip="Shows the microphone action in scoped research chat and allows local speech transcription."
                   />
@@ -4370,10 +4558,13 @@ export function ProjectToolbar({
                   </div>
                   <Switch
                     checked={ttsDraft.enabled}
-                    onCheckedChange={(checked) => setTtsDraft({
-                      ...ttsDraft,
-                      enabled: checked
-                    })}
+                    onCheckedChange={(checked) => {
+                      setTtsDraft({
+                        ...ttsDraft,
+                        enabled: checked
+                      });
+                      if (checked) setVoiceDraft((current) => ({ ...current, mode: "local" }));
+                    }}
                     label="Enable voice output"
                     tooltip="Shows speaker actions on assistant messages and allows local text-to-speech playback."
                   />
@@ -4584,6 +4775,14 @@ export function ProjectToolbar({
                       await window.archicode.saveGlobalResearchVerbosity(globalResearchVerbosity);
                       await updateGlobalSpeechSettings(speechDraft);
                       await updateGlobalTtsSettings(ttsDraft);
+                      await updateGlobalVoiceSettings(voiceDraft);
+                      if (window.archicode?.saveCodexRealtimeSecrets) {
+                        await window.archicode.saveCodexRealtimeSecrets(codexRealtimeSecretsDraft, { preserveMissingSecrets: true });
+                        setCodexRealtimeSecretsDraft({ openAiApiKey: "" });
+                        await refreshCodexRealtimeSecretStatus();
+                        setCodexRealtimeStatus(null);
+                        setCodexRealtimeNotice(null);
+                      }
                       if (window.archicode?.saveWebSearchSecrets) {
                         await window.archicode.saveWebSearchSecrets(webSearchSecretsDraft, { preserveMissingSecrets: true });
                         await refreshWebSearchSecretStatus();

@@ -1366,6 +1366,16 @@ async function openUrl(env: InternalToolEnvironment, args: Record<string, unknow
   if (!env.settings.webSearch.enabled) return { enabled: false, text: "", message: "Web access is disabled in project settings." };
   const rawUrl = typeof args.url === "string" ? args.url.trim() : "";
   if (!/^https?:\/\//i.test(rawUrl)) throw new Error("Only http and https URLs are supported.");
+  const parsedUrl = new URL(rawUrl);
+  const host = parsedUrl.hostname.toLowerCase().replace(/^www\./, "");
+  const searchResultsPage = (
+    ((host === "google.com" || host.endsWith(".google.com")) && parsedUrl.pathname === "/search")
+    || ((host === "bing.com" || host.endsWith(".bing.com")) && parsedUrl.pathname === "/search")
+    || ((host === "duckduckgo.com" || host.endsWith(".duckduckgo.com")) && Boolean(parsedUrl.searchParams.get("q")))
+  );
+  if (searchResultsPage) {
+    throw new Error("Search-engine results pages cannot be opened as source documents. Use the configured web-search capability, then open the actual source URLs it returns.");
+  }
   const maxChars = clampInteger(args.maxChars, 20_000, 500, TOOL_MAX_READ_CHARS);
   const page = await fetchText(rawUrl, 12_000);
   return { url: rawUrl, status: page.status, contentType: page.contentType, text: stripHtml(page.text).slice(0, maxChars), truncated: stripHtml(page.text).length > maxChars };

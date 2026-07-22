@@ -2,9 +2,10 @@ import { createHash } from "node:crypto";
 import { copyFile, mkdir, readdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { researchChatScopeSchema, researchChatSessionSchema, subagentRunSchema } from "../../shared/schema";
-import type { ResearchChatScope, ResearchChatSession, SubagentRun, SubagentRunStatus } from "../../shared/schema";
+import type { ResearchChatMessage, ResearchChatScope, ResearchChatSession, SubagentRun, SubagentRunStatus } from "../../shared/schema";
 import { loadProject, updateProjectSettings } from "../storage/projectStore";
 import { defaultTitleForScope, id, iso } from "../research";
+import { supersedePriorUnreviewedChangeSets, trackResearchChangeSetTodo } from "./memoryFold";
 
 export let researchStorageRoot = process.cwd();
 
@@ -444,4 +445,139 @@ export async function updateResearchChatAutoApproval(input: {
     await writeChats(input.projectRoot, sessions);
     return updated;
   });
+}
+
+export async function appendResearchChatTranscript(input: {
+  projectRoot: string;
+  sessionId: string;
+  role: "user" | "assistant";
+  text: string;
+}): Promise<ResearchChatSession> {
+  const text = input.text.trim();
+  if (!text) throw new Error("Realtime transcript cannot be empty.");
+  return withResearchSessionLock(input.projectRoot, input.sessionId, () =>
+    withProjectChatsLock(input.projectRoot, async () => {
+      const store = await readChatsForMutation(input.projectRoot);
+      let updated: ResearchChatSession | null = null;
+      const sessions = store.sessions.map((session) => {
+        if (session.id !== input.sessionId) return session;
+        const timestamp = iso();
+        updated = researchChatSessionSchema.parse({
+          ...session,
+          messages: [
+            ...session.messages,
+            {
+              id: id("research-live"),
+              role: input.role,
+              delivery: "realtime",
+              content: text,
+              createdAt: timestamp,
+              attachmentIds: [],
+              webUsed: false,
+              mcpToolCalls: [],
+              subagentRuns: []
+            }
+          ],
+          updatedAt: timestamp
+        });
+        return updated;
+      });
+      if (!updated) throw new Error(`Research chat ${input.sessionId} was not found.`);
+      await writeChats(input.projectRoot, sessions);
+      return updated;
+    })
+  );
+}
+
+export async function createDetachedResearchWorkerSession(input: {
+  projectRoot: string;
+  sourceSessionId: string;
+  workerSessionId: string;
+}): Promise<ResearchChatSession> {
+  return withProjectChatsLock(input.projectRoot, async () => {
+    const store = await readChatsForMutation(input.projectRoot);
+    const source = store.sessions.find((session) => session.id === input.sourceSessionId);
+    if (!source) throw new Error(`Research chat ${input.sourceSessionId} was not found.`);
+    const timestamp = iso();
+    const worker = researchChatSessionSchema.parse({
+      ...source,
+      id: input.workerSessionId,
+      title: `${source.title} (background worker)`,
+      archived: true,
+      createdAt: timestamp,
+      updatedAt: timestamp
+    });
+    await writeChats(input.projectRoot, [worker, ...store.sessions.filter((session) => session.id !== worker.id)]);
+    return worker;
+  });
+}
+
+export async function removeDetachedResearchWorkerSession(projectRoot: string, workerSessionId: string): Promise<void> {
+  await withProjectChatsLock(projectRoot, async () => {
+    const store = await readChatsForMutation(projectRoot);
+    await writeChats(projectRoot, store.sessions.filter((session) => session.id !== workerSessionId));
+  });
+}
+
+export async function appendDetachedResearchResult(input: {
+  projectRoot: string;
+  sessionId: string;
+  message: ResearchChatSession["messages"][number];
+  summary?: string;
+  memory?: ResearchChatSession["memory"];
+}): Promise<ResearchChatSession> {
+  return withResearchSessionLock(input.projectRoot, input.sessionId, () =>
+    withProjectChatsLock(input.projectRoot, async () => {
+      const store = await readChatsForMutation(input.projectRoot);
+      let updated: ResearchChatSession | null = null;
+      const sessions = store.sessions.map((session) => {
+        if (session.id !== input.sessionId) return session;
+        const timestamp = iso();
+        const message: ResearchChatMessage = {
+          ...input.message,
+          id: id("research-background"),
+          delivery: "background-research" as const,
+          createdAt: timestamp
+        };
+        let priorMessages = session.messages;
+        let orchestration = session.orchestration;
+        const supersedeMessages: ResearchChatMessage[] = [];
+        if (message.changeSet) {
+          const superseded = supersedePriorUnreviewedChangeSets(session, message.changeSet.id, timestamp);
+          priorMessages = superseded.messages;
+          orchestration = trackResearchChangeSetTodo(
+            superseded.orchestration,
+            message.changeSet,
+            message.id,
+            timestamp
+          );
+          if (superseded.supersededCount) {
+            supersedeMessages.push({
+              id: id("research-background"),
+              role: "system",
+              delivery: "background-research",
+              content: `Superseded ${superseded.supersededCount} earlier graph proposal${superseded.supersededCount === 1 ? "" : "s"} in this chat. Only the latest review card can be applied.`,
+              createdAt: timestamp,
+              attachmentIds: [],
+              webUsed: false,
+              mcpToolCalls: [],
+              subagentRuns: []
+            });
+          }
+        }
+        updated = researchChatSessionSchema.parse({
+          ...session,
+          summary: input.summary?.trim() || session.summary,
+          memory: input.memory ?? session.memory,
+          orchestration,
+          messages: [...priorMessages, ...supersedeMessages, message],
+          updatedAt: timestamp
+        });
+        return updated;
+      });
+      if (!updated) throw new Error(`Research chat ${input.sessionId} was not found.`);
+      await writeChats(input.projectRoot, sessions);
+      return updated;
+    })
+  );
 }

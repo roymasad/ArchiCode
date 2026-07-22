@@ -6,7 +6,6 @@ export type ResearchTurnPolicy = {
   includeProjectContext: boolean;
   includeConversationHistory: boolean;
   includeSelectedSkills: boolean;
-  enforceExplicitDelphiDelegation: boolean;
 };
 
 const RESEARCH_TURN_POLICIES: Record<ResearchTurnKind, ResearchTurnPolicy> = {
@@ -15,32 +14,28 @@ const RESEARCH_TURN_POLICIES: Record<ResearchTurnKind, ResearchTurnPolicy> = {
     includeExternalRetrieval: true,
     includeProjectContext: true,
     includeConversationHistory: true,
-    includeSelectedSkills: true,
-    enforceExplicitDelphiDelegation: true
+    includeSelectedSkills: true
   },
   "goal-continuation": {
     kind: "goal-continuation",
     includeExternalRetrieval: true,
     includeProjectContext: true,
     includeConversationHistory: true,
-    includeSelectedSkills: true,
-    enforceExplicitDelphiDelegation: false
+    includeSelectedSkills: true
   },
   "outcome-finalization": {
     kind: "outcome-finalization",
     includeExternalRetrieval: false,
     includeProjectContext: true,
     includeConversationHistory: true,
-    includeSelectedSkills: false,
-    enforceExplicitDelphiDelegation: false
+    includeSelectedSkills: false
   },
   "approval-resume": {
     kind: "approval-resume",
     includeExternalRetrieval: true,
     includeProjectContext: true,
     includeConversationHistory: true,
-    includeSelectedSkills: true,
-    enforceExplicitDelphiDelegation: false
+    includeSelectedSkills: true
   }
 };
 

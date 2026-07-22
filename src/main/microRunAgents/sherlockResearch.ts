@@ -43,14 +43,6 @@ function validateOutput(output: unknown, toolCalls: MicroRunToolInvocation[], in
     if (!dossier.blockers.length) {
       return "Sherlock marked the investigation blocked without naming a concrete evidence or access blocker.";
     }
-    const claimedUnavailableTool = dossier.blockers.some((blocker) =>
-      /\b(?:tool|tools|project reader|project search|structured research).{0,120}\b(?:unavailable|not available|not accessible|not provided)\b/i.test(blocker) ||
-      /\b(?:unavailable|not available|not accessible|not provided)\b.{0,120}\b(?:tool|tools|project reader|project search|structured research)\b/i.test(blocker)
-    );
-    const encounteredToolFailure = toolCalls.some((call) => call.succeeded === false);
-    if (claimedUnavailableTool && !encounteredToolFailure) {
-      return "Sherlock claimed an available investigation tool was unavailable without a failed tool invocation. Continue the same investigation and call the relevant listed read, search, web, or guarded CLI tool before reporting a blocker.";
-    }
     return undefined;
   }
   if (dossier.blockers.length > 0) {

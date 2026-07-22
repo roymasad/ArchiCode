@@ -33,6 +33,15 @@ export function investigationToolProgressMessage(providerToolName: string, args:
   if (providerToolName === "archicode_scratchpad_repl") {
     return "Calculating in the ephemeral scratchpad";
   }
+  if (providerToolName === "archicode_project_start_runtime_service") {
+    return `Starting Run App profile ${text("profileId") || "unspecified"}`;
+  }
+  if (providerToolName === "archicode_project_stop_runtime_service") {
+    return `Stopping Run App service ${text("serviceId") || "unspecified"}`;
+  }
+  if (providerToolName === "archicode_project_restart_runtime_service") {
+    return `Restarting Run App service ${text("serviceId") || "unspecified"}`;
+  }
   return `Using ${providerToolName}`;
 }
 

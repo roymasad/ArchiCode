@@ -139,6 +139,14 @@ function runHeadline(run: Run, openQuestionCount = 0, runs: Run[] = []): string 
   if (isRunErrorResolved(run, runs)) return "Run error resolved";
   const failure = runFailureDetails(run, runs);
   if (failure) return failure.title;
+  if (run.runProfileId) {
+    if (run.status === "needs-permission") return "Run App needs approval";
+    if (run.status === "queued" || run.status === "preparing") return "Run App waiting in queue";
+    if (run.status === "running" || run.status === "coding") return "Launching Run App";
+    if (run.status === "succeeded") return "Run App started";
+    if (run.status === "failed") return "Run App failed";
+    if (run.status === "cancelled") return "Run App cancelled";
+  }
   if (implementationFallbackReason(run) && run.status === "succeeded") return "Completed with planning fallback";
   if (hasProblemNoSourceChanges(run)) return "Run produced no code changes";
   if (run.status === "preparing") return "Preparing the run";
@@ -159,10 +167,21 @@ function runHeadline(run: Run, openQuestionCount = 0, runs: Run[] = []): string 
 }
 
 function activeRunAgentTitle(run: Run): string | null {
+  if (run.runProfileId) return "Run App";
   if (run.status === "debugging" || run.phase === "debugging") return pandoraAgent.title;
   if (run.purpose === "run-discovery") return null;
   if (run.status === "planning" || run.status === "coding" || run.phase === "planning" || run.phase === "coding") return gaiaAgent.title;
   return null;
+}
+
+function runAppStage(run: Run): { label: string; tone: RunStageTone; detail: string } {
+  if (run.status === "needs-permission") return { label: "Run App", tone: "warning", detail: "approval needed" };
+  if (run.status === "queued" || run.status === "preparing") return { label: "Run App", tone: "neutral", detail: "waiting" };
+  if (run.status === "running" || run.status === "coding") return { label: "Run App", tone: "accent", detail: "launching" };
+  if (run.status === "succeeded") return { label: "Run App", tone: "success", detail: "started" };
+  if (run.status === "failed") return { label: "Run App", tone: "danger", detail: "failed" };
+  if (run.status === "cancelled") return { label: "Run App", tone: "danger", detail: "cancelled" };
+  return { label: "Run App", tone: "neutral", detail: run.status };
 }
 
 function runSummary(run: Run, runs: Run[] = []): string {
@@ -575,10 +594,14 @@ export function RunConsole() {
   const selectedPromptText = selected ? runSummary(selected, runs) : null;
   const selectedHasGeneratedPlan = selected ? runHasGeneratedPlan(selected, bundle?.artifacts ?? []) : false;
   const progressItems = selected ? runProgressItems(selected, 7) : [];
-  const stageItems = selected ? runStageItems(selected, {
-    planningReviewMode: bundle?.project.settings.planningReviewMode,
-    codeReviewMode: bundle?.project.settings.codeReviewMode
-  }) : [];
+  const stageItems = selected
+    ? selected.runProfileId
+      ? [runAppStage(selected)]
+      : runStageItems(selected, {
+          planningReviewMode: bundle?.project.settings.planningReviewMode,
+          codeReviewMode: bundle?.project.settings.codeReviewMode
+        })
+    : [];
   const selectedImplementationCounter = selected ? implementationCounter(selected) : null;
   const selectedSubject = selected ? runSubject(bundle, selected) : "";
   const selectedContextIndicator = selected ? runContextIndicator(selected) : null;
@@ -1122,8 +1145,8 @@ export function RunConsole() {
               <small><b className="run-label-accent">Subject</b>{selectedSubject}</small>
               <small><b className="run-label-accent">Updated</b>{runLastUpdatedLabel(selected)}</small>
               {selected.status !== "awaiting-plan-review" ? <small><b className="run-label-success">Status</b>{selectedPromptText ?? workflowSummary(selected, selectedOpenQuestionCount, runs)}</small> : null}
-              <small><b className="run-label-accent">Effort</b>{runEffortLabel(selected)}</small>
-              <small><b className="run-label-accent">Cost</b>{runCostLabel(selected)}</small>
+              {!selected.runProfileId ? <small><b className="run-label-accent">Effort</b>{runEffortLabel(selected)}</small> : null}
+              {!selected.runProfileId ? <small><b className="run-label-accent">Cost</b>{runCostLabel(selected)}</small> : null}
               {selected.mcp ? (
                 <small><b className={selected.mcp.decision === "allowed" ? "run-label-accent" : selected.mcp.decision === "pending" ? "run-label-warning" : undefined}>MCP</b>{`${selected.mcp.decision}${selected.mcp.pendingToolCall ? ` · pending ${selected.mcp.pendingToolCall.serverLabel}/${selected.mcp.pendingToolCall.toolName}` : selected.mcp.pendingServerIds.length ? ` · pending ${selected.mcp.pendingServerIds.join(", ")}` : ""}`}</small>
               ) : null}

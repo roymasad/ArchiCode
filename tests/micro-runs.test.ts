@@ -1206,6 +1206,9 @@ describe("Sherlock and Picasso contracts", () => {
     const input = { suggestedTestDir: ".archicode/tests/example", writeAuthorizedByUser: false };
     const noApprovalContext = { projectRoot, bundle: fakeBundle(), provider: fakeAnthropicProvider() };
     const unauthorizedTools = testAuthoringAgent.tools(noApprovalContext, input);
+    const approvalRequest = await unauthorizedTools.find((tool) => tool.providerToolName === "request_test_write_authorization")!
+      .handler({ reason: "Create one scoped acceptance test." });
+    expect(approvalRequest).toMatchObject({ status: "approval-required" });
     const unauthorizedWrite = unauthorizedTools.find((tool) => tool.providerToolName === "write_test_file")!;
     await expect(unauthorizedWrite.handler({
       filePath: ".archicode/tests/example/example.test.ts",
@@ -1214,13 +1217,10 @@ describe("Sherlock and Picasso contracts", () => {
       testCommand: "npm test"
     })).rejects.toThrow(/explicit user authorization/i);
 
-    const approvedContext = {
-      ...noApprovalContext,
-      onClarification: vi.fn().mockResolvedValue("Yes, write those tests.")
-    };
-    const approvedTools = testAuthoringAgent.tools(approvedContext, input);
-    await approvedTools.find((tool) => tool.providerToolName === "request_test_write_authorization")!
-      .handler({ reason: "Create one scoped acceptance test." });
+    const approvedTools = testAuthoringAgent.tools(noApprovalContext, {
+      ...input,
+      writeAuthorizedByUser: true
+    });
     const result = await approvedTools.find((tool) => tool.providerToolName === "write_test_file")!.handler({
       filePath: ".archicode/tests/example/example.test.ts",
       content: "test('example', () => {})",
@@ -1234,7 +1234,6 @@ describe("Sherlock and Picasso contracts", () => {
       checks: [],
       testCommand: "npm test"
     })).resolves.toMatchObject({ success: false, error: expect.stringContaining("outside this agent's assigned test directory") });
-    expect(approvedContext.onClarification).toHaveBeenCalledTimes(1);
   });
 
   it("parses Sherlock's compact evidence dossier", () => {
@@ -1309,7 +1308,7 @@ describe("Sherlock and Picasso contracts", () => {
     )).toContain("without any structured findings");
   });
 
-  it("accepts concrete subagent blockers while rejecting unsupported Picasso completion contracts", () => {
+  it("accepts structured subagent blockers without interpreting their prose", () => {
     const blockedSherlock = sherlockResearchAgent.parseOutput(JSON.stringify({
       status: "blocked",
       blockers: ["تعذّر الوصول إلى ملف المصدر المطلوب"],
@@ -1325,7 +1324,7 @@ describe("Sherlock and Picasso contracts", () => {
       { objective: "Audit the source", mode: "codebase" }
     )).toBeUndefined();
 
-    const falseToolBlocker = sherlockResearchAgent.parseOutput(JSON.stringify({
+    const toolBlocker = sherlockResearchAgent.parseOutput(JSON.stringify({
       status: "blocked",
       blockers: ["The structured research tools were not available beyond the initial directory listing."],
       summary: "The source review could not continue.",
@@ -1335,13 +1334,8 @@ describe("Sherlock and Picasso contracts", () => {
       recommendedNextSteps: []
     }));
     expect(sherlockResearchAgent.validateOutput?.(
-      falseToolBlocker,
+      toolBlocker,
       [{ providerToolName: "archicode_project_list_files", argumentsJson: "{}", succeeded: true }],
-      { objective: "Audit the source", mode: "codebase" }
-    )).toContain("without a failed tool invocation");
-    expect(sherlockResearchAgent.validateOutput?.(
-      falseToolBlocker,
-      [{ providerToolName: "archicode_project_read_file", argumentsJson: JSON.stringify({ path: "src/router.ts" }), succeeded: false, error: "Permission denied" }],
       { objective: "Audit the source", mode: "codebase" }
     )).toBeUndefined();
 

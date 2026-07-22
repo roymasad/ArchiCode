@@ -974,6 +974,35 @@ describe("renderer UI system", () => {
     expect(store).toContain("Graph editing is locked while a run is active or waiting for review.");
   });
 
+  it("presents Run App profiles as runtime work instead of Gaia implementation", () => {
+    const consolePanel = readFileSync(resolve(repoRoot, "src/renderer/src/components/RunConsole.tsx"), "utf8");
+    const researchPanel = readFileSync(resolve(repoRoot, "src/renderer/src/components/ResearchPanel.tsx"), "utf8");
+
+    expect(consolePanel).toContain('if (run.runProfileId) return "Run App"');
+    expect(consolePanel).toContain("selected.runProfileId");
+    expect(consolePanel).toContain("runAppStage(selected)");
+    expect(researchPanel).toContain("const runAppRuns = recentRuns.filter((run) => Boolean(run.runProfileId))");
+    expect(researchPanel).toContain("This was a Run App lifecycle, not coding, build, or verification.");
+    expect(researchPanel).toContain("Do not call it a graph change or implementation job.");
+  });
+
+  it("starts Realtime Run App requests as direct runtime services", () => {
+    const researchPanel = readFileSync(resolve(repoRoot, "src/renderer/src/components/ResearchPanel.tsx"), "utf8");
+    const realtimeMain = readFileSync(resolve(repoRoot, "src/main/codexRealtime.ts"), "utf8");
+
+    const directHandler = researchPanel.slice(
+      researchPanel.indexOf('if (call.name === "archicode_launch_run_app")'),
+      researchPanel.indexOf('const dedicatedDeliverable = call.name === "archicode_queue_implementation"')
+    );
+    expect(directHandler).toContain("window.archicode.startRuntimeService");
+    expect(directHandler).toContain("window.archicode.stopRuntimeService");
+    expect(directHandler).toContain("window.archicode.restartRuntimeService");
+    expect(directHandler).toContain("useArchicodeStore.setState({ runtimeServices, error: null })");
+    expect(directHandler).not.toContain("startRealtimeResearchTask");
+    expect(directHandler).not.toContain("startRunProfile");
+    expect(realtimeMain).toContain("does not create a Research task, approval card, Activity run");
+  });
+
   it("lets node-level run warnings be dismissed from the inspector", () => {
     const inspector = readNodeInspectorSource();
     const css = readFileSync(resolve(repoRoot, "src/renderer/src/styles/app.css"), "utf8");
@@ -1886,6 +1915,8 @@ describe("renderer UI system", () => {
     expect(css).toContain(".research-memory-popover");
     expect(css).toContain(".research-work-capsule");
     expect(css).toContain(".research-work-capsule > svg");
+    expect(css).toContain(".research-background-tooltip-activity");
+    expect(css).toContain("width: min(420px, 100%);");
     expect(css).toContain("color: var(--text);");
     expect(css).toContain(".research-todo-popover");
     expect(css).toContain(".research-status-cluster");

@@ -191,6 +191,83 @@ export const ttsSettingsSchema = z.object({
   autoplay: false
 });
 
+export const voiceModeSchema = z.preprocess(
+  (value) => value === "off" ? "local" : value === "codex-realtime" ? "openai-realtime" : value,
+  z.enum(["local", "openai-realtime"]).default("local")
+);
+export const codexRealtimeVoices = [
+  "alloy",
+  "arbor",
+  "ash",
+  "ballad",
+  "breeze",
+  "cedar",
+  "coral",
+  "cove",
+  "echo",
+  "ember",
+  "juniper",
+  "maple",
+  "marin",
+  "sage",
+  "shimmer",
+  "sol",
+  "spruce",
+  "vale",
+  "verse"
+] as const;
+export const codexRealtimeV2Voices = [
+  "alloy",
+  "ash",
+  "ballad",
+  "coral",
+  "echo",
+  "sage",
+  "shimmer",
+  "verse",
+  "marin",
+  "cedar"
+] as const;
+export const defaultCodexRealtimeV2Voice = "marin";
+export const codexRealtimeModels = [
+  "gpt-realtime-2.1-mini",
+  "gpt-realtime-2.1",
+  "gpt-realtime-2",
+  "gpt-realtime-1.5",
+  "gpt-realtime-mini",
+  "gpt-realtime"
+] as const;
+export const defaultCodexRealtimeModel = "gpt-realtime-2.1-mini";
+export const codexRealtimeVoiceSchema = z.enum(codexRealtimeVoices);
+export const codexRealtimeModelSchema = z.preprocess(
+  (value) => value === null ? undefined : value,
+  z.string().trim().min(1).default(defaultCodexRealtimeModel)
+);
+export const codexRealtimeOutputModalitySchema = z.enum(["text", "audio"]);
+export const codexRealtimeSettingsSchema = z.object({
+  voice: codexRealtimeVoiceSchema.default(defaultCodexRealtimeV2Voice),
+  outputModality: codexRealtimeOutputModalitySchema.default("audio"),
+  model: codexRealtimeModelSchema,
+  includeStartupContext: z.boolean().default(true)
+}).default({
+  voice: defaultCodexRealtimeV2Voice,
+  outputModality: "audio",
+  model: defaultCodexRealtimeModel,
+  includeStartupContext: true
+});
+export const voiceSettingsSchema = z.object({
+  mode: voiceModeSchema,
+  codexRealtime: codexRealtimeSettingsSchema
+}).default({
+  mode: "local",
+  codexRealtime: {
+    voice: defaultCodexRealtimeV2Voice,
+    outputModality: "audio",
+    model: defaultCodexRealtimeModel,
+    includeStartupContext: true
+  }
+});
+
 export const projectSkillSettingsSchema = z.object({
   enabledSkillIds: z.array(z.string()).default([])
 }).default({ enabledSkillIds: [] });
@@ -1499,6 +1576,7 @@ export type DelphiTestPlatform = z.infer<typeof delphiTestPlatformSchema>;
 export const delphiTestingInputSchema = z.object({
   objective: z.string().min(1),
   mode: z.enum(["plan", "audit", "retest", "setup"]).default("audit"),
+  visualInspection: z.enum(["none", "capture", "pixel"]).default("none"),
   scope: z.string().optional(),
   codePaths: z.array(z.string()).default([]),
   platforms: z.array(delphiTestPlatformSchema).default([]),
@@ -2436,6 +2514,8 @@ export const researchCanvasActionSchema = z.object({
 export const researchChatMessageSchema = z.object({
   id: z.string(),
   role: z.enum(["user", "assistant", "system"]),
+  /** Identifies which conversational surface produced the persisted bubble. */
+  delivery: z.enum(["classical", "realtime", "background-research"]).optional(),
   content: z.string(),
   createdAt: z.string(),
   attachmentIds: z.array(z.string()).default([]),
@@ -2570,6 +2650,12 @@ export type TtsModelId = z.infer<typeof ttsModelIdSchema>;
 export type TtsVoiceId = z.infer<typeof ttsVoiceIdSchema>;
 export type SpeechSettings = z.infer<typeof speechSettingsSchema>;
 export type TtsSettings = z.infer<typeof ttsSettingsSchema>;
+export type VoiceMode = z.infer<typeof voiceModeSchema>;
+export type CodexRealtimeVoice = z.infer<typeof codexRealtimeVoiceSchema>;
+export type CodexRealtimeModel = z.infer<typeof codexRealtimeModelSchema>;
+export type CodexRealtimeOutputModality = z.infer<typeof codexRealtimeOutputModalitySchema>;
+export type CodexRealtimeSettings = z.infer<typeof codexRealtimeSettingsSchema>;
+export type VoiceSettings = z.infer<typeof voiceSettingsSchema>;
 export type RunTargetProfile = z.infer<typeof runTargetProfileSchema>;
 export type RuntimeService = z.infer<typeof runtimeServiceSchema>;
 export type RunEvidenceKind = z.infer<typeof runEvidenceKindSchema>;

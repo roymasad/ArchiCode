@@ -8,7 +8,7 @@ import type { MicroRunResult } from "../microRuns";
 import { RESEARCH_SCRATCHPAD_MAX_CODE_CHARS, runResearchJavaScript } from "./scratchpad";
 import { readArtifactText } from "../storage/patches";
 import { loadProject } from "../storage/projectStore";
-import { discoverRuntimeProfileTargets, listRuntimeServices } from "../storage/runtimeServices";
+import { discoverRuntimeProfileTargets, listRuntimeServices, restartRuntimeService, startRuntimeService, stopRuntimeService } from "../storage/runtimeServices";
 import {
   createChatArtifact,
   createProjectMemoryNote,
@@ -706,6 +706,7 @@ export function researchSubagentTools(options: {
         properties: {
           objective: { type: "string", description: "The behavior, flow, regression, or visual/runtime concern to audit." },
           mode: { type: "string", enum: ["plan", "audit", "retest"] },
+          visualInspection: { type: "string", enum: ["none", "capture", "pixel"], description: "Explicit visual coverage contract. Use pixel only when the user requested model inspection of appearance/layout; capture collects human-review screenshots without authorizing pixel-level conclusions." },
           scope: { type: "string", description: "Optional bounded audit scope." },
           codePaths: { type: "array", items: { type: "string" } },
           platforms: { type: "array", items: { type: "string", enum: ["web", "electron", "flutter", "android", "ios", "generic"] } },
@@ -1040,6 +1041,52 @@ export function researchProjectFileTools(): ProviderMcpTool[] {
       }
     },
     {
+      providerToolName: "archicode_project_start_runtime_service",
+      serverId: RESEARCH_PROJECT_FILE_SERVER_ID,
+      serverLabel: "Project Files",
+      toolName: "start_runtime_service",
+      description: "Directly start one existing configured Run App profile when the user explicitly asks to launch, open, or run the app for interactive use. This reversible runtime action does not create a review card, Activity run, implementation job, build, test, or verification audit. Use the exact profile id from list_runtime_services; include targetId only for an exact discovered device/emulator/simulator target.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["profileId"],
+        properties: {
+          profileId: { type: "string", minLength: 1 },
+          targetId: { type: "string", minLength: 1 }
+        }
+      }
+    },
+    {
+      providerToolName: "archicode_project_stop_runtime_service",
+      serverId: RESEARCH_PROJECT_FILE_SERVER_ID,
+      serverLabel: "Project Files",
+      toolName: "stop_runtime_service",
+      description: "Directly stop one exact live Run App runtime service when the user explicitly asks to shut down or stop it. Read list_runtime_services first and supply its exact serviceId. This reversible action does not create a review card or Activity run.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["serviceId"],
+        properties: {
+          serviceId: { type: "string", minLength: 1 }
+        }
+      }
+    },
+    {
+      providerToolName: "archicode_project_restart_runtime_service",
+      serverId: RESEARCH_PROJECT_FILE_SERVER_ID,
+      serverLabel: "Project Files",
+      toolName: "restart_runtime_service",
+      description: "Directly restart one exact Run App runtime service when the user explicitly asks to restart it. Read list_runtime_services first and supply its exact serviceId. This reversible action does not create a review card or Activity run.",
+      inputSchema: {
+        type: "object",
+        additionalProperties: false,
+        required: ["serviceId"],
+        properties: {
+          serviceId: { type: "string", minLength: 1 }
+        }
+      }
+    },
+    {
       providerToolName: "archicode_project_discover_run_targets",
       serverId: RESEARCH_PROJECT_FILE_SERVER_ID,
       serverLabel: "Project Files",
@@ -1096,6 +1143,9 @@ export async function callResearchProjectFileTool(
   else if (tool.toolName === "update_chat_artifact") result = await researchToolUpdateChatArtifact(projectRoot, args, context.sessionId);
   else if (tool.toolName === "scratchpad_repl") result = await runResearchJavaScript(requiredToolString(args, "code"));
   else if (tool.toolName === "list_runtime_services") result = await researchToolListRuntimeServices(projectRoot, args);
+  else if (tool.toolName === "start_runtime_service") result = await researchToolStartRuntimeService(projectRoot, args);
+  else if (tool.toolName === "stop_runtime_service") result = await researchToolStopRuntimeService(projectRoot, args);
+  else if (tool.toolName === "restart_runtime_service") result = await researchToolRestartRuntimeService(projectRoot, args);
   else if (tool.toolName === "discover_run_targets") result = await researchToolDiscoverRunTargets(projectRoot, args);
   else throw new Error(`Project file tool ${tool.toolName} is not implemented.`);
   return {
@@ -2110,7 +2160,90 @@ export async function researchToolListRuntimeServices(projectRoot: string, args:
       logs: service.logs.slice(-maxLogs),
       omittedLogs: Math.max(0, service.logs.length - maxLogs)
     })),
-    note: "Starting, stopping, and restarting are review-card actions. Use discover_run_targets only when a profile advertises target discovery."
+    note: "Explicit user requests can start, stop, or restart exact Run App runtime services directly. These controls do not create Activity runs or review cards. Use discover_run_targets only when a profile advertises target discovery."
+  };
+}
+
+export async function researchToolStartRuntimeService(projectRoot: string, args: Record<string, unknown>): Promise<unknown> {
+  const profileId = requiredToolString(args, "profileId");
+  const targetId = typeof args.targetId === "string" && args.targetId.trim() ? args.targetId.trim() : undefined;
+  const bundle = await loadProject(projectRoot);
+  const profile = bundle.project.settings.runTargetProfiles.find((item) => item.id === profileId);
+  if (!profile) throw new Error(`Run App profile ${profileId} was not found.`);
+  const services = await startRuntimeService({ projectRoot, profileId, targetId });
+  const service = services.find((item) => item.profileId === profileId && (!targetId || item.targetId === targetId));
+  if (!service) throw new Error(`Run App did not return a runtime service for ${profile.label}.`);
+  return {
+    action: "run-app",
+    direct: true,
+    service: {
+      id: service.id,
+      profileId: service.profileId,
+      label: service.label,
+      kind: service.kind,
+      status: service.status,
+      url: service.url,
+      targetId: service.targetId,
+      runTargetId: service.runTargetId,
+      startedAt: service.startedAt,
+      stoppedAt: service.stoppedAt,
+      recentLogs: service.logs.slice(-10)
+    },
+    note: service.status === "running"
+      ? `Run App started directly${service.url ? ` at ${service.url}` : ""}. No Activity run or approval card was created.`
+      : `Run App returned status ${service.status}. No Activity run or approval card was created.`
+  };
+}
+
+export async function researchToolStopRuntimeService(projectRoot: string, args: Record<string, unknown>): Promise<unknown> {
+  const serviceId = requiredToolString(args, "serviceId");
+  const existing = (await listRuntimeServices(projectRoot)).find((service) => service.id === serviceId);
+  if (!existing) throw new Error(`Runtime service ${serviceId} was not found.`);
+  const services = await stopRuntimeService(projectRoot, serviceId);
+  const service = services.find((item) => item.id === serviceId);
+  if (!service) throw new Error(`Runtime service ${existing.label} did not return stopped state.`);
+  return {
+    action: "stop-run-app",
+    direct: true,
+    service: {
+      id: service.id,
+      profileId: service.profileId,
+      label: service.label,
+      status: service.status,
+      stoppedAt: service.stoppedAt,
+      recentLogs: service.logs.slice(-10)
+    },
+    note: `Run App stopped directly with status ${service.status}. No Activity run or approval card was created.`
+  };
+}
+
+export async function researchToolRestartRuntimeService(projectRoot: string, args: Record<string, unknown>): Promise<unknown> {
+  const serviceId = requiredToolString(args, "serviceId");
+  const existing = (await listRuntimeServices(projectRoot)).find((service) => service.id === serviceId);
+  if (!existing) throw new Error(`Runtime service ${serviceId} was not found.`);
+  const services = await restartRuntimeService(projectRoot, serviceId);
+  const service = services.find((item) => item.id === serviceId && item.status === "running")
+    ?? services.find((item) => item.status === "running"
+      && item.profileId === existing.profileId
+      && item.targetId === existing.targetId
+      && item.relativeCwd === existing.relativeCwd)
+    ?? services.find((item) => item.id === serviceId);
+  if (!service) throw new Error(`Runtime service ${existing.label} did not return restarted state.`);
+  return {
+    action: "restart-run-app",
+    direct: true,
+    service: {
+      id: service.id,
+      profileId: service.profileId,
+      label: service.label,
+      status: service.status,
+      url: service.url,
+      targetId: service.targetId,
+      runTargetId: service.runTargetId,
+      startedAt: service.startedAt,
+      recentLogs: service.logs.slice(-10)
+    },
+    note: `Run App restarted directly with status ${service.status}. No Activity run or approval card was created.`
   };
 }
 
