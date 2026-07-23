@@ -653,20 +653,31 @@ describe("renderer UI system", () => {
     expect(css).toContain(".error-details-pre");
   });
 
-  it("exposes a project action to open the workspace in Visual Studio Code", () => {
+  it("exposes a project action to open the workspace in the selected code IDE", () => {
     const toolbar = readProjectToolbarSource();
     const store = readStoreSource();
     const preload = readFileSync(resolve(repoRoot, "src/preload/index.ts"), "utf8");
     const main = readFileSync(resolve(repoRoot, "src/main/index.ts"), "utf8");
 
-    expect(toolbar).toContain("Open in VS Code");
-    expect(toolbar).toContain("openProjectInVsCode");
-    expect(store).toContain("openProjectInVsCode");
-    expect(preload).toContain("archicode:open-project-in-vscode");
-    expect(main).toContain("openProjectInVsCode");
-    expect(main).toContain("com.microsoft.VSCode");
-    expect(main).toContain("Microsoft VS Code");
-    expect(main).toContain("code.cmd");
+    expect(toolbar).toContain("Default code app");
+    expect(toolbar).toContain("Choose another application…");
+    expect(toolbar).toContain("ArchiCode opens project folders with this app.");
+    expect(toolbar).not.toContain("Used by Open in Code App for every project.");
+    expect(toolbar).toContain('TabsContent value="general"');
+    expect(toolbar).not.toContain('TabsTrigger value="app"');
+    expect(toolbar).toContain("pickCodeIdeApplication");
+    expect(toolbar).toContain("installedCodeIdeApplications");
+    expect(toolbar).toContain("Open in {selectedCodeIdeLabel}");
+    expect(toolbar).toContain("openProjectInCodeIde");
+    expect(store).toContain("openProjectInCodeIde");
+    expect(preload).toContain("archicode:open-project-in-code-ide");
+    expect(preload).toContain("archicode:list-installed-code-ide-applications");
+    expect(preload).toContain("archicode:pick-code-ide-application");
+    expect(main).toContain("openProjectInCodeIde");
+    expect(main).toContain("installedCodeIdeApplications");
+    expect(main).toContain("pickCodeIdeApplication");
+    expect(main).toContain("dialog.showOpenDialog");
+    expect(main).not.toContain("com.microsoft.VSCode");
   });
 
   it("offers recent projects from the sidebar open menu", () => {

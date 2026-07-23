@@ -66,7 +66,7 @@ import type { ComposerMention, ComposerSegment, QueuedResearchMessage, ShellProm
 import { uid, uniqueNodeIds, selectedNodeIdsFor, appendEdgeLabelHistory, directUndoNotice, offerGitAttributesSetup, now, runInputKey, runProfileKey, isSameRunRequest, isSameRunProfileRequest, runArtifactIds, runHasQuestionRefreshSignal, shouldRefreshQuestionsForRun, hasActiveRun, editingLockedMessage, notifyJobFinished, notifyReviewRequired, createOptimisticRun, createOptimisticRunProfile, defaultNodeHalfSize, getInitialTheme, getInitialUiScale, projectUiKey, projectScopedUiKey, readStoredWorkbenchView, readProjectFileBrowserState, isFiniteNumber, readStoredViewport, isVisualQaPreview, createFallbackBundle, createVisualQaResearchSessions, projectScopedResetState, clearProjectStateForBranchChange, reloadProjectStateAfterBranchChange, isBuildLikeAgentRun, getActiveFlow, getSelectedNode, getSelectedEdge, defaultResearchScope, normalizeComposerSegments, addResearchBusySession, removeResearchBusySession, selectedResearchSessionOrFallback, nextGraphNavigationRequestId, nextFilePreviewRequestId } from "./helpers";
 import { readStoredGraphLocation, resolveGraphLocation } from "./graphLocation";
 
-export const createProjectSlice = (set: StoreSet, get: StoreGet): Pick<ArchicodeState, "load" | "reload" | "openProjectFolder" | "cloneGitRepository" | "openRecentProject" | "revealProjectFolder" | "openProjectInVsCode" | "createProjectFromTemplate" | "handleExternalProjectUpdated" | "setShellPrompt" | "dismissCodebaseOnboarding" | "openInitialCodebaseImportReport" | "openProjectSettings" | "clearProjectSettingsRequest" | "startCodebaseOnboardingRun" | "cancelCodebaseOnboardingRun" | "importFlow" | "importDrawioFlow" | "exportActiveFlow" | "exportActiveDrawioFlow" | "exportProjectBundle" | "exportProjectDocument" | "repairProject" | "deleteProjectState" | "updateSettings" | "updateProjectDetails"> => ({
+export const createProjectSlice = (set: StoreSet, get: StoreGet): Pick<ArchicodeState, "load" | "reload" | "openProjectFolder" | "cloneGitRepository" | "openRecentProject" | "revealProjectFolder" | "openProjectInCodeIde" | "createProjectFromTemplate" | "handleExternalProjectUpdated" | "setShellPrompt" | "dismissCodebaseOnboarding" | "openInitialCodebaseImportReport" | "openProjectSettings" | "clearProjectSettingsRequest" | "startCodebaseOnboardingRun" | "cancelCodebaseOnboardingRun" | "importFlow" | "importDrawioFlow" | "exportActiveFlow" | "exportActiveDrawioFlow" | "exportProjectBundle" | "exportProjectDocument" | "repairProject" | "deleteProjectState" | "updateSettings" | "updateProjectDetails"> => ({
   load: async () => {
     try {
       set({ loading: true, error: null });
@@ -452,15 +452,15 @@ export const createProjectSlice = (set: StoreSet, get: StoreGet): Pick<Archicode
     }
   },
 
-  openProjectInVsCode: async () => {
+  openProjectInCodeIde: async () => {
     const { rootPath } = get();
     if (!rootPath) return;
-    if (!window.archicode?.openProjectInVsCode) {
-      set({ error: "Opening the project in Visual Studio Code is available in the Electron app." });
+    if (!window.archicode?.openProjectInCodeIde) {
+      set({ error: "Opening the project in a code IDE is available in the Electron app." });
       return;
     }
     try {
-      await window.archicode.openProjectInVsCode(rootPath);
+      await window.archicode.openProjectInCodeIde(rootPath);
       set({ error: null });
     } catch (error) {
       set({ error: error instanceof Error ? error.message : String(error) });

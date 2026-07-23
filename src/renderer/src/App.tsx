@@ -483,6 +483,7 @@ export function App() {
     loadGlobalSpeechSettings,
     loadGlobalTtsSettings,
     loadGlobalVoiceSettings,
+    loadGlobalCodeIdeSettings,
     historicalInspection
   } = useArchicodeStore(useShallow((state) => ({
     load: state.load,
@@ -514,6 +515,7 @@ export function App() {
     loadGlobalSpeechSettings: state.loadGlobalSpeechSettings,
     loadGlobalTtsSettings: state.loadGlobalTtsSettings,
     loadGlobalVoiceSettings: state.loadGlobalVoiceSettings,
+    loadGlobalCodeIdeSettings: state.loadGlobalCodeIdeSettings,
     historicalInspection: state.historicalInspection
   })));
   const [activityOpen, setActivityOpen] = useState(true);
@@ -554,7 +556,8 @@ export function App() {
     void loadGlobalSpeechSettings();
     void loadGlobalTtsSettings();
     void loadGlobalVoiceSettings();
-  }, [loadGlobalSpeechSettings, loadGlobalTtsSettings, loadGlobalVoiceSettings]);
+    void loadGlobalCodeIdeSettings();
+  }, [loadGlobalCodeIdeSettings, loadGlobalSpeechSettings, loadGlobalTtsSettings, loadGlobalVoiceSettings]);
 
   useEffect(() => {
     const onOpenPreferences = () => window.dispatchEvent(new CustomEvent("archicode:open-project-settings", { detail: { tab: "shortcuts" } }));

@@ -1,9 +1,17 @@
 import { describe, expect, it } from "vitest";
-import { applyNodePatch, defaultCodexRealtimeModel, flowSchema, llmPatchProposalSchema, projectSchema, researchCanvasActionSchema, researchChatSessionSchema, researchGraphChangeSetSchema, runGuidanceSchema, runImplementationTaskSchema, runSchema, voiceSettingsSchema, type ArchicodeNode } from "../src/shared/schema";
+import { applyNodePatch, codeIdeSettingsSchema, defaultCodexRealtimeModel, flowSchema, llmPatchProposalSchema, projectSchema, researchCanvasActionSchema, researchChatSessionSchema, researchGraphChangeSetSchema, runGuidanceSchema, runImplementationTaskSchema, runSchema, voiceSettingsSchema, type ArchicodeNode } from "../src/shared/schema";
 import flowFixture from "../fixtures/sample-project/.archicode/flows/flow-main.json";
 import projectFixture from "../fixtures/sample-project/.archicode/project.json";
 
 describe("ArchiCode JSON schemas", () => {
+  it("does not assume a default code application and stores a picked application", () => {
+    expect(codeIdeSettingsSchema.parse(undefined)).toEqual({ applicationName: "", applicationPath: "" });
+    expect(codeIdeSettingsSchema.parse({ applicationName: "My Editor", applicationPath: "/Applications/My Editor.app" })).toEqual({
+      applicationName: "My Editor",
+      applicationPath: "/Applications/My Editor.app"
+    });
+  });
+
   it("defaults voice mode to local and migrates the legacy Codex realtime mode", () => {
     expect(voiceSettingsSchema.parse(undefined)).toEqual({
       mode: "local",

@@ -44,7 +44,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type WheelEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { codexRealtimeModels, codexRealtimeV2Voices, defaultCodexRealtimeModel, defaultCodexRealtimeV2Voice, defaultPhaseModelPolicies, defaultSubagentModelPolicies, runTargetProfileSchema, type CodexRealtimeModel, type CodexRealtimeVoice, type DebugIncident, type LlmPhase, type PhaseModelPolicy, type ProjectSettings, type RunEffort, type RunScope, type RuntimeService, type SpeechSettings, type SubagentModelProfile, type TtsSettings, type VoiceSettings } from "@shared/schema";
+import { codexRealtimeModels, codexRealtimeV2Voices, defaultCodexRealtimeModel, defaultCodexRealtimeV2Voice, defaultPhaseModelPolicies, defaultSubagentModelPolicies, runTargetProfileSchema, type CodeIdeApplication, type CodeIdeSettings, type CodexRealtimeModel, type CodexRealtimeVoice, type DebugIncident, type LlmPhase, type PhaseModelPolicy, type ProjectSettings, type RunEffort, type RunScope, type RuntimeService, type SpeechSettings, type SubagentModelProfile, type TtsSettings, type VoiceSettings } from "@shared/schema";
 import { gaiaAgent, pandoraAgent } from "@shared/agentIdentities";
 import { deriveContextBudgetPlan } from "@shared/contextBudget";
 import { isSubflowIgnored } from "@shared/graph";
@@ -112,6 +112,7 @@ import {
 import { RuntimeUrlLinks, contextBudgetSourceLabel, contextLabel, defaultSpeechSettings, defaultTtsSettings, defaultVoiceSettings, encodeWav, formatBytes, formatTokenCount, isMacRuntime, mcpRegistryCategoryLabel, mcpRegistryCategoryOptions, mcpRegistryInitials, mcpRegistrySortOptions, modelHint, modelOptionLabel, modelOptionsForProvider, normalizeSpeechLanguage, openAiEndpointHint, openAiEndpointLabel, openRuntimeUrl, projectSettingsTabs, providerCheckHint, providerDescription, providerSupportsImages, renderRuntimeInsightDetail, renderRuntimeTextWithLinks, runtimeCwdLabel, runtimeUrls, selectedModelImageHint, speechLanguageOptions, mergeAudioChunks } from "./projectToolbarShared";
 
 const ARCHICODE_RELEASES_URL = "https://github.com/roymasad/ArchiCode/releases";
+const CHOOSE_CODE_APPLICATION_OPTION_VALUE = "__choose_code_application__";
 
 type AppUpdateStatus = Awaited<ReturnType<Window["archicode"]["checkForUpdates"]>>;
 
@@ -242,13 +243,15 @@ export function ProjectToolbar({
     clearProjectSettingsRequest,
     workbenchView,
     setWorkbenchView,
-    openProjectInVsCode,
+    openProjectInCodeIde,
     globalSpeechSettings,
     globalTtsSettings,
     globalVoiceSettings,
+    globalCodeIdeSettings,
     updateGlobalSpeechSettings,
     updateGlobalTtsSettings,
-    updateGlobalVoiceSettings
+    updateGlobalVoiceSettings,
+    updateGlobalCodeIdeSettings
   } = useArchicodeStore(useShallow((state) => ({
     bundle: state.bundle,
     rootPath: state.rootPath,
@@ -301,19 +304,24 @@ export function ProjectToolbar({
     clearProjectSettingsRequest: state.clearProjectSettingsRequest,
     workbenchView: state.workbenchView,
     setWorkbenchView: state.setWorkbenchView,
-    openProjectInVsCode: state.openProjectInVsCode,
+    openProjectInCodeIde: state.openProjectInCodeIde,
     globalSpeechSettings: state.globalSpeechSettings,
     globalTtsSettings: state.globalTtsSettings,
     globalVoiceSettings: state.globalVoiceSettings,
+    globalCodeIdeSettings: state.globalCodeIdeSettings,
     updateGlobalSpeechSettings: state.updateGlobalSpeechSettings,
     updateGlobalTtsSettings: state.updateGlobalTtsSettings,
-    updateGlobalVoiceSettings: state.updateGlobalVoiceSettings
+    updateGlobalVoiceSettings: state.updateGlobalVoiceSettings,
+    updateGlobalCodeIdeSettings: state.updateGlobalCodeIdeSettings
   })));
   const [detailsDraft, setDetailsDraft] = useState({ name: "" });
   const [draft, setDraft] = useState<ProjectSettings | null>(null);
   const [speechDraft, setSpeechDraft] = useState<SpeechSettings>(defaultSpeechSettings);
   const [ttsDraft, setTtsDraft] = useState<TtsSettings>(defaultTtsSettings);
   const [voiceDraft, setVoiceDraft] = useState<VoiceSettings>(defaultVoiceSettings);
+  const [codeIdeDraft, setCodeIdeDraft] = useState<CodeIdeSettings>({ applicationName: "", applicationPath: "" });
+  const [installedCodeIdeApplications, setInstalledCodeIdeApplications] = useState<CodeIdeApplication[]>([]);
+  const [codeIdeApplicationsBusy, setCodeIdeApplicationsBusy] = useState(false);
   const [globalResearchPersonality, setGlobalResearchPersonality] = useState<GlobalResearchPersonality>("default");
   const [globalResearchVerbosity, setGlobalResearchVerbosity] = useState<GlobalResearchVerbosity>("default");
   const [runProfilesDraft, setRunProfilesDraft] = useState("[]");
@@ -464,6 +472,7 @@ export function ProjectToolbar({
     if (!settingsOpen) return;
     setSpeechDraft(globalSpeechSettings ?? defaultSpeechSettings);
     setTtsDraft(globalTtsSettings ?? defaultTtsSettings);
+    setCodeIdeDraft(globalCodeIdeSettings ?? { applicationName: "", applicationPath: "" });
     setCodexRealtimeSecretsDraft({ openAiApiKey: "" });
     setVisibleCodexRealtimeApiKey(false);
     const nextVoiceSettings = globalVoiceSettings ?? defaultVoiceSettings;
@@ -477,7 +486,26 @@ export function ProjectToolbar({
           : defaultCodexRealtimeV2Voice
       }
     });
-  }, [settingsOpen, globalSpeechSettings, globalTtsSettings, globalVoiceSettings]);
+  }, [settingsOpen, globalCodeIdeSettings, globalSpeechSettings, globalTtsSettings, globalVoiceSettings]);
+
+  useEffect(() => {
+    if (!settingsOpen || !window.archicode?.listInstalledCodeIdeApplications) return;
+    let cancelled = false;
+    setCodeIdeApplicationsBusy(true);
+    void window.archicode.listInstalledCodeIdeApplications()
+      .then((applications) => {
+        if (!cancelled) setInstalledCodeIdeApplications(applications);
+      })
+      .catch((error) => {
+        if (!cancelled) console.error("Failed to list installed code applications.", error);
+      })
+      .finally(() => {
+        if (!cancelled) setCodeIdeApplicationsBusy(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [settingsOpen]);
 
   useEffect(() => {
     const handleOpenProjectSettings = (event: Event) => {
@@ -1868,6 +1896,30 @@ export function ProjectToolbar({
             ? "Not configured"
             : "Ready";
   const updateIsWindowsStore = updateStatus?.updateChannel === "windows-store";
+  const availableCodeIdeApplications = [...installedCodeIdeApplications];
+  if (codeIdeDraft.applicationPath && !availableCodeIdeApplications.some((application) => application.path === codeIdeDraft.applicationPath)) {
+    availableCodeIdeApplications.unshift({
+      name: codeIdeDraft.applicationName || codeIdeDraft.applicationPath.split(/[\\/]/).pop() || "Selected application",
+      path: codeIdeDraft.applicationPath
+    });
+  }
+  const chooseCodeIdeApplication = async () => {
+    if (!window.archicode?.pickCodeIdeApplication) return;
+    setCodeIdeApplicationsBusy(true);
+    try {
+      const selected = await window.archicode.pickCodeIdeApplication();
+      if (!selected) return;
+      setInstalledCodeIdeApplications((current) => current.some((application) => application.path === selected.path)
+        ? current
+        : [...current, selected].sort((left, right) => left.name.localeCompare(right.name)));
+      setCodeIdeDraft({ applicationName: selected.name, applicationPath: selected.path });
+    } catch (error) {
+      console.error("Failed to choose a code application.", error);
+    } finally {
+      setCodeIdeApplicationsBusy(false);
+    }
+  };
+  const selectedCodeIdeLabel = globalCodeIdeSettings?.applicationName || "Code App";
 
   return (
     <>
@@ -2186,11 +2238,20 @@ export function ProjectToolbar({
                 <MenuSeparator />
                 <MenuLabel>App</MenuLabel>
                 <MenuItem
-                  disabled={!bundle}
-                  tooltip="Open the current project folder in Visual Studio Code when VS Code is installed."
-                  onSelect={() => void openProjectInVsCode()}
+                  tooltip="Choose the code IDE ArchiCode uses when opening a project."
+                  onSelect={() => {
+                    setSettingsTab("general");
+                    setSettingsOpen(true);
+                  }}
                 >
-                  <FileCode2 size={15} /> Open in VS Code
+                  <Settings size={15} /> App Settings
+                </MenuItem>
+                <MenuItem
+                  disabled={!bundle}
+                  tooltip={`Open the current project folder in ${selectedCodeIdeLabel}.`}
+                  onSelect={() => void openProjectInCodeIde()}
+                >
+                  <FileCode2 size={15} /> Open in {selectedCodeIdeLabel}
                 </MenuItem>
                 <MenuItem
                   tooltip={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
@@ -2831,6 +2892,34 @@ export function ProjectToolbar({
                   <TextInput
                     value={detailsDraft.name}
                     onChange={(event) => setDetailsDraft({ name: event.target.value })}
+                  />
+                </Field>
+                <Field label="Default code app" hint="ArchiCode opens project folders with this app.">
+                  <Select
+                    value={codeIdeDraft.applicationPath}
+                    placeholder={codeIdeApplicationsBusy ? "Finding installed coding apps…" : "Choose a code application"}
+                    disabled={codeIdeApplicationsBusy}
+                    ariaLabel="Default code app"
+                    onValueChange={(applicationPath) => {
+                      if (applicationPath === CHOOSE_CODE_APPLICATION_OPTION_VALUE) {
+                        void chooseCodeIdeApplication();
+                        return;
+                      }
+                      const application = availableCodeIdeApplications.find((candidate) => candidate.path === applicationPath);
+                      if (application) setCodeIdeDraft({ applicationName: application.name, applicationPath: application.path });
+                    }}
+                    options={[
+                      ...availableCodeIdeApplications.map((application) => ({
+                        value: application.path,
+                        label: application.name,
+                        hint: application.path
+                      })),
+                      {
+                        value: CHOOSE_CODE_APPLICATION_OPTION_VALUE,
+                        label: "Choose another application…"
+                      }
+                    ]}
+                    showScrollIndicator
                   />
                 </Field>
                 <Switch
@@ -4776,6 +4865,7 @@ export function ProjectToolbar({
                       await updateGlobalSpeechSettings(speechDraft);
                       await updateGlobalTtsSettings(ttsDraft);
                       await updateGlobalVoiceSettings(voiceDraft);
+                      await updateGlobalCodeIdeSettings(codeIdeDraft);
                       if (window.archicode?.saveCodexRealtimeSecrets) {
                         await window.archicode.saveCodexRealtimeSecrets(codexRealtimeSecretsDraft, { preserveMissingSecrets: true });
                         setCodexRealtimeSecretsDraft({ openAiApiKey: "" });

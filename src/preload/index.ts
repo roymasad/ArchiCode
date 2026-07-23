@@ -1,5 +1,5 @@
 import { clipboard, contextBridge, ipcRenderer, webFrame } from "electron";
-import type { Note, DebugIncident, Flow, LlmPatchProposal, NodePatch, PatchOperationDecision, PresentationPatchRequest, PresentationPatchResult, Project, ProjectBundle, ProjectSettings, ProjectMemoryNote, Artifact, PatchReviewRecord, Run, RunEffort, RunGuidance, RunScope, RuntimeService, ResearchCanvasAction, ResearchChatScope, ResearchChatSession, ResearchGraphChangeDecision, ResearchGraphChangeResult, ResearchMessageNodeReference } from "../shared/schema";
+import type { CodeIdeApplication, CodeIdeSettings, Note, DebugIncident, Flow, LlmPatchProposal, NodePatch, PatchOperationDecision, PresentationPatchRequest, PresentationPatchResult, Project, ProjectBundle, ProjectSettings, ProjectMemoryNote, Artifact, PatchReviewRecord, Run, RunEffort, RunGuidance, RunScope, RuntimeService, ResearchCanvasAction, ResearchChatScope, ResearchChatSession, ResearchGraphChangeDecision, ResearchGraphChangeResult, ResearchMessageNodeReference } from "../shared/schema";
 import type { SpeechModelId, SpeechSettings, TtsModelId, TtsSettings, TtsVoiceId, VoiceSettings } from "../shared/schema";
 import type { TtsModelDownloadProgress, TtsModelStatus, TtsRuntimeStatus, TtsSpeechStreamChunk, TtsSpeechStreamResult, TtsSynthesisResult } from "../main/tts";
 import type {
@@ -302,6 +302,11 @@ const api = {
   getGlobalVoiceSettings: (): Promise<VoiceSettings> => ipcRenderer.invoke("archicode:get-global-voice-settings"),
   saveGlobalVoiceSettings: (settings: VoiceSettings): Promise<VoiceSettings> =>
     ipcRenderer.invoke("archicode:save-global-voice-settings", settings),
+  getGlobalCodeIdeSettings: (): Promise<CodeIdeSettings> => ipcRenderer.invoke("archicode:get-global-code-ide-settings"),
+  saveGlobalCodeIdeSettings: (settings: CodeIdeSettings): Promise<CodeIdeSettings> =>
+    ipcRenderer.invoke("archicode:save-global-code-ide-settings", settings),
+  listInstalledCodeIdeApplications: (): Promise<CodeIdeApplication[]> => ipcRenderer.invoke("archicode:list-installed-code-ide-applications"),
+  pickCodeIdeApplication: (): Promise<CodeIdeApplication | null> => ipcRenderer.invoke("archicode:pick-code-ide-application"),
   getKeybindings: (): Promise<Record<string, { key: string; cmd?: boolean; ctrl?: boolean; shift?: boolean; alt?: boolean }>> =>
     ipcRenderer.invoke("archicode:get-keybindings"),
   saveKeybindings: (bindings: Record<string, { key: string; cmd?: boolean; ctrl?: boolean; shift?: boolean; alt?: boolean }>): Promise<Record<string, { key: string; cmd?: boolean; ctrl?: boolean; shift?: boolean; alt?: boolean }>> =>
@@ -324,7 +329,7 @@ const api = {
   openProjectFileWithApp: (projectRoot: string, relativePath: string): Promise<boolean> =>
     ipcRenderer.invoke("archicode:open-project-file-with-app", projectRoot, relativePath),
   maximizeWindow: (): Promise<boolean> => ipcRenderer.invoke("archicode:maximize-window"),
-  openProjectInVsCode: (projectRoot: string): Promise<boolean> => ipcRenderer.invoke("archicode:open-project-in-vscode", projectRoot),
+  openProjectInCodeIde: (projectRoot: string): Promise<boolean> => ipcRenderer.invoke("archicode:open-project-in-code-ide", projectRoot),
   openExternalUrl: (url: string): Promise<boolean> => ipcRenderer.invoke("archicode:open-external-url", url),
   openMicrosoftStoreUpdates: (): Promise<boolean> => ipcRenderer.invoke("archicode:open-microsoft-store-updates"),
   copyTextToClipboard: (text: string): boolean => {

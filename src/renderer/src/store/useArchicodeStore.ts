@@ -130,6 +130,7 @@ export const useArchicodeStore = create<ArchicodeState>((set, get) => {
   globalSpeechSettings: null,
   globalTtsSettings: null,
   globalVoiceSettings: null,
+  globalCodeIdeSettings: null,
   canvasViewport: null,
   canvasViewportCenter: null,
   lastAddNodePosition: null,

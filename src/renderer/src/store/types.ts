@@ -14,6 +14,7 @@ import type {
   PresentationNodeMutation,
   ProjectBundle,
   ProjectSettings,
+  CodeIdeSettings,
   ResearchChatScope,
   ResearchChatSession,
   ResearchCanvasAction,
@@ -344,6 +345,7 @@ export type ArchicodeState = {
   globalSpeechSettings: SpeechSettings | null;
   globalTtsSettings: TtsSettings | null;
   globalVoiceSettings: VoiceSettings | null;
+  globalCodeIdeSettings: CodeIdeSettings | null;
   canvasViewport: CanvasViewport | null;
   canvasViewportCenter: { x: number; y: number } | null;
   lastAddNodePosition: { x: number; y: number } | null;
@@ -379,7 +381,7 @@ export type ArchicodeState = {
   cloneGitRepository: (remoteUrl: string) => Promise<boolean>;
   openRecentProject: (projectRoot: string) => Promise<void>;
   revealProjectFolder: () => Promise<void>;
-  openProjectInVsCode: () => Promise<void>;
+  openProjectInCodeIde: () => Promise<void>;
   createProjectFromTemplate: (templateId: ProjectTemplateId) => Promise<void>;
   selectNode: (nodeId: string | null) => void;
   selectNodes: (nodeIds: string[], primaryNodeId?: string | null) => void;
@@ -567,6 +569,8 @@ export type ArchicodeState = {
   updateGlobalTtsSettings: (settings: TtsSettings) => Promise<void>;
   loadGlobalVoiceSettings: () => Promise<void>;
   updateGlobalVoiceSettings: (settings: VoiceSettings) => Promise<void>;
+  loadGlobalCodeIdeSettings: () => Promise<void>;
+  updateGlobalCodeIdeSettings: (settings: CodeIdeSettings) => Promise<void>;
 };
 
 export type StoreSet = StoreApi<ArchicodeState>["setState"];

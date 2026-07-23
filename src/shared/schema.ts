@@ -89,6 +89,14 @@ export const shellRiskSchema = z.enum(["low", "medium", "high"]);
 export const filesystemPolicySchema = z.enum(["read-only", "project-write", "full-access"]);
 export const canvasBackgroundSchema = z.enum(["neutral-gray", "graphite", "cool-mist", "soft-blue", "warm-paper", "deep-slate"]);
 export const canvasEdgeStyleSchema = z.enum(["current", "curved"]);
+export const codeIdeApplicationSchema = z.object({
+  name: z.string().trim().min(1).max(160),
+  path: z.string().trim().min(1).max(2048)
+});
+export const codeIdeSettingsSchema = z.object({
+  applicationName: z.string().trim().max(160).default(""),
+  applicationPath: z.string().trim().max(2048).default("")
+}).default({ applicationName: "", applicationPath: "" });
 // Retention window for resolved (implemented/obsolete) graph-change ledger
 // records. Once a resolved record is older than this, it is folded into a cold
 // archive on project load and dropped from the hot JSONL. Pending records are
@@ -2643,6 +2651,8 @@ export type Flow = z.infer<typeof flowSchema>;
 export type Project = z.infer<typeof projectSchema>;
 export type ProjectBundle = z.infer<typeof projectBundleSchema>;
 export type ProjectSettings = z.infer<typeof projectSettingsSchema>;
+export type CodeIdeApplication = z.infer<typeof codeIdeApplicationSchema>;
+export type CodeIdeSettings = z.infer<typeof codeIdeSettingsSchema>;
 export type ContextBuilderSettings = z.infer<typeof contextBuilderSettingsSchema>;
 export type SemanticIndexSettings = z.infer<typeof semanticIndexSettingsSchema>;
 export type SpeechModelId = z.infer<typeof speechModelIdSchema>;

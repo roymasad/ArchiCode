@@ -2,8 +2,8 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, Notification, pow
 import type { MenuItemConstructorOptions, OpenDialogOptions, SaveDialogOptions } from "electron";
 import { execFile, spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, watch as watchFs, type FSWatcher } from "node:fs";
-import { appendFile, mkdir, readFile, realpath, rename, stat, writeFile } from "node:fs/promises";
+import { existsSync, watch as watchFs, type Dirent, type FSWatcher } from "node:fs";
+import { appendFile, mkdir, readFile, readdir, realpath, rename, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as pty from "node-pty";
@@ -55,9 +55,12 @@ import type { ResyncProgress } from "./importer/resyncTypes";
 import {
   mcpSettingsSchema,
   providerSettingsSchema,
+  codeIdeSettingsSchema,
   speechSettingsSchema,
   ttsSettingsSchema,
   voiceSettingsSchema,
+  type CodeIdeApplication,
+  type CodeIdeSettings,
   type ProjectBundle,
   type ProjectSettings,
   type ResearchChatSession,
@@ -306,6 +309,7 @@ type AppState = {
   globalProviders?: ProjectSettings["providers"];
   globalResearchPersonality?: GlobalResearchPersonality;
   globalResearchVerbosity?: GlobalResearchVerbosity;
+  defaultCodeIde?: CodeIdeSettings;
   providerSecrets?: Record<string, string>;
   webSearchSecrets?: Record<string, string>;
   codexRealtimeSecrets?: Record<"openAiApiKey", string>;
@@ -1476,6 +1480,21 @@ async function rememberGlobalVoiceSettings(settings: VoiceSettings): Promise<Voi
   return nextSettings;
 }
 
+async function globalCodeIdeSettings(): Promise<CodeIdeSettings> {
+  const state = await readAppState();
+  return codeIdeSettingsSchema.parse(state.defaultCodeIde);
+}
+
+async function rememberGlobalCodeIdeSettings(settings: CodeIdeSettings): Promise<CodeIdeSettings> {
+  const state = await readAppState();
+  const nextSettings = codeIdeSettingsSchema.parse(settings);
+  await writeAppState({
+    ...state,
+    defaultCodeIde: nextSettings
+  });
+  return nextSettings;
+}
+
 type McpServerSettings = ProjectSettings["mcp"]["servers"][number];
 type McpSecretPayload = {
   env: Array<{ name: string; value: string }>;
@@ -1624,14 +1643,6 @@ function installApplicationMenu(): void {
   Menu.setApplicationMenu(null);
 }
 
-function windowsVsCodePaths(): string[] {
-  return [
-    process.env.LOCALAPPDATA ? path.join(process.env.LOCALAPPDATA, "Programs", "Microsoft VS Code", "Code.exe") : null,
-    process.env.PROGRAMFILES ? path.join(process.env.PROGRAMFILES, "Microsoft VS Code", "Code.exe") : null,
-    process.env["PROGRAMFILES(X86)"] ? path.join(process.env["PROGRAMFILES(X86)"], "Microsoft VS Code", "Code.exe") : null
-  ].filter((item): item is string => Boolean(item));
-}
-
 function launchDetached(command: string, args: string[]): Promise<{ ok: boolean; error?: string }> {
   return new Promise((resolve) => {
     let settled = false;
@@ -1658,34 +1669,185 @@ function launchDetached(command: string, args: string[]): Promise<{ ok: boolean;
   });
 }
 
-async function openProjectInVsCode(projectRoot: string): Promise<boolean> {
+function execFileOutput(command: string, args: string[]): Promise<string> {
+  return new Promise((resolve, reject) => {
+    execFile(command, args, { encoding: "utf8", maxBuffer: 8 * 1024 * 1024 }, (error, stdout) => {
+      if (error) reject(error);
+      else resolve(stdout);
+    });
+  });
+}
+
+const CODE_FILE_EXTENSIONS = new Set([
+  "c", "cc", "cpp", "cs", "css", "dart", "go", "h", "hpp", "html", "java", "js", "jsx", "json", "kt", "kts",
+  "lua", "md", "php", "pl", "py", "rb", "rs", "scala", "sh", "sql", "swift", "toml", "ts", "tsx", "vue", "xml", "yaml", "yml"
+]);
+const CODE_DOCUMENT_NAME_PATTERN = /\b(code|configuration|makefile|project|script|source|text|workspace)\b/i;
+const CODE_APPLICATION_NAME_PATTERN = /(code|editor|ide|studio)/i;
+
+type MacApplicationInfo = {
+  LSApplicationCategoryType?: unknown;
+  CFBundleDocumentTypes?: unknown;
+  CFBundleDisplayName?: unknown;
+  CFBundleName?: unknown;
+};
+
+function macApplicationCanEditCode(info: MacApplicationInfo): boolean {
+  if (info.LSApplicationCategoryType !== "public.app-category.developer-tools") return false;
+  const applicationName = typeof info.CFBundleDisplayName === "string"
+    ? info.CFBundleDisplayName
+    : typeof info.CFBundleName === "string"
+      ? info.CFBundleName
+      : "";
+  if (applicationName.toLocaleLowerCase() !== app.getName().toLocaleLowerCase() && CODE_APPLICATION_NAME_PATTERN.test(applicationName)) return true;
+  if (!Array.isArray(info.CFBundleDocumentTypes)) return false;
+  return info.CFBundleDocumentTypes.some((entry) => {
+    if (!entry || typeof entry !== "object") return false;
+    const document = entry as Record<string, unknown>;
+    if (document.CFBundleTypeRole !== "Editor") return false;
+    const extensions = Array.isArray(document.CFBundleTypeExtensions) ? document.CFBundleTypeExtensions : [];
+    if (extensions.some((extension) => typeof extension === "string" && CODE_FILE_EXTENSIONS.has(extension.toLowerCase()))) return true;
+    const contentTypes = Array.isArray(document.LSItemContentTypes) ? document.LSItemContentTypes : [];
+    if (contentTypes.some((contentType) => typeof contentType === "string" && CODE_DOCUMENT_NAME_PATTERN.test(contentType.replace(/[._-]+/g, " ")))) return true;
+    return typeof document.CFBundleTypeName === "string" && CODE_DOCUMENT_NAME_PATTERN.test(document.CFBundleTypeName);
+  });
+}
+
+async function collectMacApplicationBundles(directory: string, depth = 0): Promise<string[]> {
+  let entries: Dirent<string>[];
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const applications: string[] = [];
+  for (const entry of entries) {
+    if (entry.name.startsWith(".")) continue;
+    const entryPath = path.join(directory, entry.name);
+    if (entry.name.toLowerCase().endsWith(".app") && (entry.isDirectory() || entry.isSymbolicLink())) {
+      applications.push(entryPath);
+      continue;
+    }
+    if (entry.isDirectory() && depth < 1) {
+      applications.push(...await collectMacApplicationBundles(entryPath, depth + 1));
+    }
+  }
+  return applications;
+}
+
+async function macCodeIdeApplications(): Promise<CodeIdeApplication[]> {
+  const roots = ["/Applications", "/System/Applications", path.join(app.getPath("home"), "Applications")];
+  const applicationPaths = Array.from(new Set((await Promise.all(roots.map((root) => collectMacApplicationBundles(root)))).flat()));
+  const applications: CodeIdeApplication[] = [];
+  for (let index = 0; index < applicationPaths.length; index += 12) {
+    const batch = await Promise.all(applicationPaths.slice(index, index + 12).map(async (applicationPath) => {
+      try {
+        const infoPath = path.join(applicationPath, "Contents", "Info.plist");
+        const info = JSON.parse(await execFileOutput("/usr/bin/plutil", ["-convert", "json", "-o", "-", infoPath])) as MacApplicationInfo;
+        if (!macApplicationCanEditCode(info)) return null;
+        return { name: path.basename(applicationPath, path.extname(applicationPath)), path: applicationPath } satisfies CodeIdeApplication;
+      } catch {
+        return null;
+      }
+    }));
+    applications.push(...batch.filter((item): item is CodeIdeApplication => item !== null));
+  }
+  return applications.sort((left, right) => left.name.localeCompare(right.name));
+}
+
+function desktopEntryValue(content: string, key: string): string {
+  return content.match(new RegExp(`^${key}=(.*)$`, "m"))?.[1]?.trim() ?? "";
+}
+
+function desktopEntryExecutable(execValue: string): string {
+  const withoutPlaceholders = execValue.replace(/%[a-zA-Z]/g, "").trim();
+  const match = withoutPlaceholders.match(/^"([^"]+)"|^(\S+)/);
+  return match?.[1] ?? match?.[2] ?? "";
+}
+
+async function linuxCodeIdeApplications(): Promise<CodeIdeApplication[]> {
+  const roots = [
+    path.join(process.env.XDG_DATA_HOME ?? path.join(app.getPath("home"), ".local", "share"), "applications"),
+    "/usr/local/share/applications",
+    "/usr/share/applications"
+  ];
+  const applications = new Map<string, CodeIdeApplication>();
+  for (const root of roots) {
+    let entries: Dirent<string>[];
+    try {
+      entries = await readdir(root, { withFileTypes: true });
+    } catch {
+      continue;
+    }
+    for (const entry of entries) {
+      if (!entry.isFile() || !entry.name.endsWith(".desktop")) continue;
+      try {
+        const content = await readFile(path.join(root, entry.name), "utf8");
+        const categories = desktopEntryValue(content, "Categories").split(";");
+        const mimeTypes = desktopEntryValue(content, "MimeType").split(";");
+        const handlesCode = categories.includes("TextEditor") || mimeTypes.some((mimeType) => /(?:source|script|json|xml|yaml|toml|sql|text)/i.test(mimeType));
+        if (!categories.includes("Development") || !handlesCode) continue;
+        const name = desktopEntryValue(content, "Name");
+        const executable = desktopEntryExecutable(desktopEntryValue(content, "Exec"));
+        if (name && executable) applications.set(executable, { name, path: executable });
+      } catch {
+        // Ignore malformed or unreadable desktop entries.
+      }
+    }
+  }
+  return Array.from(applications.values()).sort((left, right) => left.name.localeCompare(right.name));
+}
+
+async function installedCodeIdeApplications(): Promise<CodeIdeApplication[]> {
+  if (process.platform === "darwin") return macCodeIdeApplications();
+  if (process.platform === "linux") return linuxCodeIdeApplications();
+  return [];
+}
+
+async function pickCodeIdeApplication(): Promise<CodeIdeApplication | null> {
+  const options: OpenDialogOptions = {
+    title: "Choose Code Application",
+    defaultPath: process.platform === "darwin"
+      ? "/Applications"
+      : process.platform === "win32"
+        ? process.env.PROGRAMFILES
+        : "/usr/bin",
+    properties: ["openFile"],
+    filters: process.platform === "darwin"
+      ? [{ name: "Applications", extensions: ["app"] }]
+      : process.platform === "win32"
+        ? [{ name: "Applications", extensions: ["exe", "cmd", "bat", "com"] }]
+        : undefined
+  };
+  const win = BrowserWindow.getFocusedWindow();
+  const result = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options);
+  if (result.canceled || !result.filePaths[0]) return null;
+  const applicationPath = result.filePaths[0];
+  if (process.platform === "darwin" && path.extname(applicationPath).toLowerCase() !== ".app") {
+    throw new Error("Choose a macOS application.");
+  }
+  return {
+    name: path.basename(applicationPath, path.extname(applicationPath)),
+    path: applicationPath
+  };
+}
+
+async function openProjectInCodeIde(projectRoot: string): Promise<boolean> {
   if (!projectRoot || !existsSync(projectRoot)) {
     throw new Error("Project folder was not found.");
   }
-  const candidates: Array<{ command: string; args: string[] }> = [];
-  if (process.platform === "darwin") {
-    candidates.push(
-      { command: "open", args: ["-b", "com.microsoft.VSCode", projectRoot] },
-      { command: "open", args: ["-a", "Visual Studio Code", projectRoot] },
-      { command: "code", args: [projectRoot] }
-    );
-  } else if (process.platform === "win32") {
-    candidates.push(
-      ...windowsVsCodePaths().filter((candidate) => existsSync(candidate)).map((command) => ({ command, args: [projectRoot] })),
-      { command: "code.cmd", args: [projectRoot] },
-      { command: "code", args: [projectRoot] }
-    );
-  } else {
-    candidates.push({ command: "code", args: [projectRoot] });
+  const settings = await globalCodeIdeSettings();
+  if (!settings.applicationPath) {
+    throw new Error("Choose a default code application in General settings first.");
   }
-
-  const errors: string[] = [];
-  for (const candidate of candidates) {
-    const result = await launchDetached(candidate.command, candidate.args);
-    if (result.ok) return true;
-    if (result.error) errors.push(`${candidate.command}: ${result.error}`);
+  if (!existsSync(settings.applicationPath) && path.isAbsolute(settings.applicationPath)) {
+    throw new Error(`${settings.applicationName || "The selected code application"} is no longer installed. Choose another application in General settings.`);
   }
-  throw new Error(`Visual Studio Code could not be opened. Install VS Code or enable the "code" command in PATH. ${errors.join(" ")}`.trim());
+  const result = process.platform === "darwin"
+    ? await launchDetached("open", ["-a", settings.applicationPath, projectRoot])
+    : await launchDetached(settings.applicationPath, [projectRoot]);
+  if (result.ok) return true;
+  throw new Error(`${settings.applicationName || "The selected code application"} could not be opened. ${result.error ?? "Choose another application in General settings."}`.trim());
 }
 
 const scheduledGraphEvidenceRefreshes = new Map<string, ReturnType<typeof setTimeout>>();
@@ -2267,6 +2429,12 @@ function registerIpc(): void {
   ipcMain.handle("archicode:save-global-voice-settings", async (_event, settings: VoiceSettings) =>
     rememberGlobalVoiceSettings(settings)
   );
+  ipcMain.handle("archicode:get-global-code-ide-settings", () => globalCodeIdeSettings());
+  ipcMain.handle("archicode:save-global-code-ide-settings", async (_event, settings: CodeIdeSettings) =>
+    rememberGlobalCodeIdeSettings(settings)
+  );
+  ipcMain.handle("archicode:list-installed-code-ide-applications", () => installedCodeIdeApplications());
+  ipcMain.handle("archicode:pick-code-ide-application", () => pickCodeIdeApplication());
   ipcMain.handle("archicode:ensure-project", async (_event, projectRoot: string) =>
     syncBundleExternalMcpHost(syncBundleSleepBlocker(await ensureProject(projectRoot)))
   );
@@ -2337,7 +2505,7 @@ function registerIpc(): void {
     win.focus();
     return true;
   });
-  ipcMain.handle("archicode:open-project-in-vscode", async (_event, projectRoot: string) => openProjectInVsCode(projectRoot));
+  ipcMain.handle("archicode:open-project-in-code-ide", async (_event, projectRoot: string) => openProjectInCodeIde(projectRoot));
   ipcMain.handle("archicode:open-external-url", async (_event, url: string) => {
     const parsed = new URL(url);
     if (!isExternalUrl(parsed.toString())) {
