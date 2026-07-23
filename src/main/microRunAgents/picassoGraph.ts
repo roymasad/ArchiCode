@@ -1,6 +1,8 @@
 import type { MicroRunAgent, MicroRunContext, MicroRunTool, MicroRunToolInvocation } from "../microRuns";
 import {
+  applyNodePatch,
   graphReconciliationInputSchema,
+  isProductionApproved,
   picassoGraphInputSchema,
   researchGraphChangeSetSchema,
   type GraphReconciliationInput,
@@ -731,6 +733,71 @@ function validatePicassoBatchReferences(
   return [...new Set(errors)];
 }
 
+function validatePicassoApplyPolicy(
+  context: MicroRunContext,
+  acceptedOperations: ResearchGraphOperation[],
+  batchOperations: ResearchGraphOperation[]
+): string[] {
+  const errors: string[] = [];
+  const nodesByFlow = new Map(context.bundle.flows.map((flow) => [
+    flow.id,
+    new Map(flow.nodes.map((node) => [node.id, structuredClone(node)]))
+  ]));
+
+  for (const operation of [...acceptedOperations, ...batchOperations]) {
+    const belongsToBatch = batchOperations.includes(operation);
+    if (operation.kind === "create-flow") {
+      const forbiddenNode = operation.flow.nodes.find((node) =>
+        node.ignored || node.locked || isProductionApproved(node) || node.flags.includes("user-approved")
+      );
+      if (forbiddenNode && belongsToBatch) {
+        errors.push("Research-created flows cannot contain approved, locked, or ignored graph items.");
+      }
+      nodesByFlow.set(operation.flow.id, new Map(operation.flow.nodes.map((node) => [node.id, structuredClone(node)])));
+      continue;
+    }
+    if (operation.kind === "create-node" && operation.node.id) {
+      const nodes = nodesByFlow.get(operation.flowId);
+      if (!nodes) continue;
+      if (
+        operation.node.ignored ||
+        operation.node.locked ||
+        isProductionApproved(operation.node) ||
+        operation.node.flags.includes("user-approved")
+      ) {
+        if (belongsToBatch) errors.push("Research-created nodes cannot be born approved, locked, or ignored.");
+        continue;
+      }
+      const position = operation.node.position && "x" in operation.node.position
+        ? operation.node.position
+        : { x: 0, y: 0 };
+      nodes.set(operation.node.id, { ...operation.node, position, updatedAt: "" } as ArchicodeNode);
+      continue;
+    }
+    if (operation.kind === "update-node") {
+      const nodes = nodesByFlow.get(operation.flowId);
+      const node = nodes?.get(operation.patch.id);
+      if (!node) continue;
+      try {
+        nodes?.set(node.id, applyNodePatch(node, operation.patch, "llm"));
+      } catch (error) {
+        if (belongsToBatch) errors.push(error instanceof Error ? error.message : String(error));
+      }
+      continue;
+    }
+    if (operation.kind === "delete-node") {
+      const nodes = nodesByFlow.get(operation.flowId);
+      const node = nodes?.get(operation.nodeId);
+      if (node && isProductionApproved(node)) {
+        if (belongsToBatch) errors.push(`Node "${node.title}" is approved and locked. Create a revision before deleting it.`);
+        continue;
+      }
+      nodes?.delete(operation.nodeId);
+    }
+  }
+  return [...new Set(errors)];
+}
+
 function validatePicassoBatch(
   args: { summary: string; operations: unknown[] },
   task: PicassoTask,
@@ -754,6 +821,10 @@ function validatePicassoBatch(
   const referenceErrors = validatePicassoBatchReferences(context, acceptedOperations, validated.data.operations);
   if (referenceErrors.length) {
     throw new Error(`Batch rejected before assembly: ${referenceErrors.slice(0, 8).join(" ")} Correct and resubmit only this batch; no operations from it were accepted.`);
+  }
+  const applyPolicyErrors = validatePicassoApplyPolicy(context, acceptedOperations, validated.data.operations);
+  if (applyPolicyErrors.length) {
+    throw new Error(`Batch rejected before assembly: ${applyPolicyErrors.slice(0, 8).join(" | ")} Correct and resubmit only this batch; no operations from it were accepted.`);
   }
   if (visualShapeRepairCount) {
     context.onProgress?.(`Normalized ${visualShapeRepairCount} safe visual-shape ${visualShapeRepairCount === 1 ? "alias" : "aliases"} in graph batch “${args.summary}”; semantic node types were preserved`);
@@ -902,6 +973,9 @@ function systemPrompt(input: unknown): string {
     : "";
   return [
     "You are Picasso, ArchiCode's master graph architect and updater.",
+    "Design as a professional systems architect or an experienced product manager—whichever lens is most appropriate for what each flow, section, group, or detail flow is meant to represent. Do not force every graph into a hybrid of both disciplines.",
+    "Use the systems-architecture lens for technical boundaries, runtime structure, data and control flows, integrations, operational ownership, security, reliability, and implementation constraints. Use the product-management lens for user or stakeholder journeys, product capabilities, business rules, prioritization, value, and observable outcomes. Use a deliberately mixed lens only when the represented scope genuinely crosses both, and keep the product concepts and implementation components clearly distinguishable.",
+    "Make every proposal understandable and useful to its intended audience. Choose clear terminology, grouping, decomposition, and relationship labels that fit the selected lens and explain why the parts belong together. Avoid implementation soup in product views, vague capability maps in technical views, arbitrary decomposition, duplicate concepts, and structures that are technically valid but misleading for what the graph is supposed to communicate.",
     assessmentOnly
       ? "Work in a fresh isolated context. Read the assigned graph and relevant project evidence, then produce a rigorous assessment without editing or proposing changes."
       : "Work in a fresh isolated context. Read the graph and relevant project evidence, then design a coherent, detailed graph update for the assigned objective.",

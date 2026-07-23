@@ -74,7 +74,7 @@ import { CodeKnowledgeMapView } from "./CodeKnowledgeMapView";
 import { CodeDetailKnowledgeMapView } from "./CodeDetailKnowledgeMapView";
 import { getActiveFlow, useArchicodeStore } from "../store/useArchicodeStore";
 import { getNodeSignalCounts } from "../utils/nodeSignals";
-import { buildFlowGraphPreview } from "../utils/graphChangePreview";
+import { buildFlowGraphPreview, proposedFlowsForGraphPreview } from "../utils/graphChangePreview";
 import { builtInNodeTypes } from "../utils/nodeTypes";
 import { canvasBackgroundStyle } from "../utils/canvasBackgrounds";
 import { canvasCaptureFileName, captureCleanCanvasViewport, captureVisibleCanvasViewport, type CanvasCaptureStatus } from "../utils/canvasCapture";
@@ -744,13 +744,21 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
     graphPreview: state.graphPreview,
     hideGraphChangeSetPreview: state.hideGraphChangeSetPreview
   })));
-  const flow = getActiveFlow(bundle, activeFlowId);
+  const proposedPreviewFlow = useMemo(
+    () => graphPreview?.activeProposedFlowId
+      ? proposedFlowsForGraphPreview(graphPreview.operations).find((item) => item.id === graphPreview.activeProposedFlowId) ?? null
+      : null,
+    [graphPreview]
+  );
+  const previewingProposedFlow = Boolean(proposedPreviewFlow);
+  const flow = proposedPreviewFlow ?? getActiveFlow(bundle, activeFlowId);
   const graphChangePreview = useMemo(
     () => graphPreview && flow && !historicalInspection ? buildFlowGraphPreview(flow, graphPreview.operations) : null,
     [graphPreview, flow, historicalInspection]
   );
   const canvasRef = useRef<HTMLElement | null>(null);
   const reactFlowRef = useRef<ReactFlowInstance<Node, Edge> | null>(null);
+  const canvasEffectsRestoreTimerRef = useRef<number | null>(null);
   const suppressNodeClickRef = useRef<string | null>(null);
   const lastCanvasPointerRef = useRef<{ x: number; y: number } | null>(null);
   const captureStatusTimerRef = useRef<number | null>(null);
@@ -889,6 +897,9 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
         measured: size,
         style: size,
         selected: selectedNodeIdSet.has(node.id),
+        draggable: !previewingProposedFlow,
+        connectable: !previewingProposedFlow,
+        deletable: !previewingProposedFlow,
         data: {
           node,
           signals: getNodeSignalCounts(bundle, node.id, flow?.id),
@@ -936,7 +947,7 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
       };
     });
     return [...realNodes, ...phantomNodes];
-  }, [bundle, visibleNodes, selectedNodeIdSet, overlappingNodeIds, busyTestNodeIds, historicalChangedNodeIds, overviewLabelOffsets, flow?.id, policyViolations, startViolationExplanation, graphChangePreview]);
+  }, [bundle, visibleNodes, selectedNodeIdSet, overlappingNodeIds, busyTestNodeIds, historicalChangedNodeIds, overviewLabelOffsets, flow?.id, policyViolations, startViolationExplanation, graphChangePreview, previewingProposedFlow]);
   const [canvasNodes, setCanvasNodes] = useState<Node[]>(sourceNodes);
   const [minimapVisible, setMinimapVisible] = useState(getInitialMinimapVisible);
   const [minimapRenderVersion, setMinimapRenderVersion] = useState(0);
@@ -1428,7 +1439,9 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
         label: edge.label,
         type: edgeType,
         animated: isAnimated,
-        selected: isSelected,
+        selected: previewingProposedFlow ? false : isSelected,
+        selectable: !previewingProposedFlow,
+        deletable: !previewingProposedFlow,
         style: edgeStyle,
         data: {
           pathKind: edgeType === "archicodeCurved" ? "bezier" : "smoothstep",
@@ -1437,7 +1450,7 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
           arrowColor,
           bidirectional: edge.bidirectional ?? false,
           previewState: graphChangePreview?.edgeStates.get(edge.id),
-          onSelect: () => selectEdge(edge.id)
+          onSelect: previewingProposedFlow ? undefined : () => selectEdge(edge.id)
         }
       };
     });
@@ -1527,7 +1540,32 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
       };
     });
     return [...persistedEdges, ...policyEdges, ...phantomEdges];
-  }, [edgeType, flow, graphChangePreview, mappedPolicyViolations, openPolicyViolationSource, selectEdge, selectedEdgeId, visibleNodeIds, visibleNodes]);
+  }, [edgeType, flow, graphChangePreview, mappedPolicyViolations, openPolicyViolationSource, previewingProposedFlow, selectEdge, selectedEdgeId, visibleNodeIds, visibleNodes]);
+
+  const suppressCanvasMovementEffects = useCallback(() => {
+    if (canvasEffectsRestoreTimerRef.current !== null) {
+      window.clearTimeout(canvasEffectsRestoreTimerRef.current);
+      canvasEffectsRestoreTimerRef.current = null;
+    }
+    canvasRef.current?.classList.add("is-viewport-moving");
+  }, []);
+
+  const restoreCanvasMovementEffects = useCallback(() => {
+    if (canvasEffectsRestoreTimerRef.current !== null) {
+      window.clearTimeout(canvasEffectsRestoreTimerRef.current);
+    }
+    canvasEffectsRestoreTimerRef.current = window.setTimeout(() => {
+      canvasRef.current?.classList.remove("is-viewport-moving");
+      canvasEffectsRestoreTimerRef.current = null;
+    }, 80);
+  }, []);
+
+  useEffect(() => () => {
+    if (canvasEffectsRestoreTimerRef.current !== null) {
+      window.clearTimeout(canvasEffectsRestoreTimerRef.current);
+    }
+    canvasRef.current?.classList.remove("is-viewport-moving");
+  }, []);
 
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
@@ -2242,10 +2280,14 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
             setCurrentCanvasZoom(instance.getViewport().zoom);
             window.setTimeout(() => updateViewportState(instance), 0);
           }}
+          onMoveStart={suppressCanvasMovementEffects}
           onMove={(_event, viewport) => {
             setCurrentCanvasZoom((current) => Math.abs(current - viewport.zoom) > 0.01 ? viewport.zoom : current);
           }}
-          onMoveEnd={() => updateViewportState()}
+          onMoveEnd={() => {
+            restoreCanvasMovementEffects();
+            updateViewportState();
+          }}
           onNodeClick={(event, node) => {
             setContextMenu(null);
             if (suppressNodeClickRef.current === node.id) {

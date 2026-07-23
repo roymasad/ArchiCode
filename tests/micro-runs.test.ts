@@ -997,6 +997,74 @@ describe("Sherlock and Picasso contracts", () => {
     expect(progress).toContainEqual(expect.stringContaining("Correct and resubmit only this batch"));
   });
 
+  it("rejects approved-stage and approved-node mutations before Picasso assembles a review card", async () => {
+    const flow = richPicassoFlow("flow-main", "Protected Flow") as ProjectBundle["flows"][number];
+    flow.nodes = [
+      {
+        ...richPicassoNode("node-approved", "service", "Approved Service"),
+        stage: "draft-approved-production",
+        flags: ["user-approved"],
+        locked: false,
+        ignored: false,
+        visual: { shape: "hexagon", backgroundColor: "#4f83cc" },
+        position: { x: 120, y: 120 },
+        acceptanceChecks: [],
+        customProperties: {},
+        attachments: [],
+        todos: [],
+        updatedAt: ""
+      },
+      {
+        ...richPicassoNode("node-draft", "service", "Draft Service"),
+        stage: "draft",
+        flags: [],
+        locked: false,
+        ignored: false,
+        visual: { shape: "hexagon", backgroundColor: "#4f83cc" },
+        position: { x: 420, y: 120 },
+        acceptanceChecks: [],
+        customProperties: {},
+        attachments: [],
+        todos: [],
+        updatedAt: ""
+      }
+    ];
+    const bundle = fakeBundle();
+    bundle.flows = [flow];
+    const progress: string[] = [];
+    const batch = picassoGraphAgent.tools({
+      projectRoot: "/tmp/project",
+      bundle,
+      provider: fakeAnthropicProvider(),
+      onProgress: (message: string) => progress.push(message)
+    }, {
+      objective: "Refine the protected flow without bypassing graph policy",
+      mode: "refine",
+      scope: { flowId: "flow-main" }
+    }).find((tool) => tool.providerToolName === "picasso_submit_graph_batch")!;
+
+    await expect(batch.handler({
+      summary: "Rewrite an approved node",
+      operations: [{
+        kind: "update-node",
+        flowId: "flow-main",
+        patch: { id: "node-approved", description: "Picasso attempted to rewrite approved importer truth." }
+      }]
+    })).rejects.toThrow("approved and locked");
+
+    await expect(batch.handler({
+      summary: "Promote a draft node",
+      operations: [{
+        kind: "update-node",
+        flowId: "flow-main",
+        patch: { id: "node-draft", stage: "draft-approved-production" }
+      }]
+    })).rejects.toThrow("LLM patches cannot approve nodes");
+
+    expect(progress.filter((line) => line.startsWith("Rejected graph batch"))).toHaveLength(2);
+    expect(progress.some((line) => line.startsWith("Submitted graph batch"))).toBe(false);
+  });
+
   it("rejects skeletal Picasso nodes and requires a connected final topology", async () => {
     const context = {
       projectRoot: "/tmp/project",
@@ -1137,6 +1205,12 @@ describe("Sherlock and Picasso contracts", () => {
     const batchSchema = batchTool?.inputSchema as { properties?: { operations?: { maxItems?: number } } };
     expect(batchSchema.properties?.operations?.maxItems).toBe(16);
     const prompt = picassoGraphAgent.systemPrompt({ objective: "Design the platform graph", mode: "design" }, context);
+    expect(prompt).toContain("whichever lens is most appropriate");
+    expect(prompt).toContain("Do not force every graph into a hybrid");
+    expect(prompt).toContain("Use the systems-architecture lens");
+    expect(prompt).toContain("Use the product-management lens");
+    expect(prompt).toContain("Use a deliberately mixed lens only when");
+    expect(prompt).toContain("implementation soup in product views");
     expect(prompt).toContain("Never emit delete-flow");
     expect(prompt).toContain("Graph edges are strictly intra-flow");
     expect(prompt).toContain("Every add-note operation must target a concrete node");

@@ -55,6 +55,7 @@ import { builtInNodeTypes } from "../utils/nodeTypes";
 import { isRunBlockingNewChange } from "../utils/runStatus";
 import { childSubflowsForFlow, compareSiblingSubflows, compareTopLevelFlows, editableFlowName, flowDisplayName, isSubflowIgnored, normalizeEvidenceFlow, visibleNodesForFlow } from "@shared/graph";
 import { matches as chordMatches } from "../utils/keybindings";
+import { proposedFlowsForGraphPreview } from "../utils/graphChangePreview";
 
 const sidebarStageLabels: Record<ArchicodeNode["stage"], string> = {
   planned: "planned",
@@ -150,7 +151,9 @@ export function ProjectSidebar({
     createProjectFromTemplate,
     recentProjects,
     keybindings,
-    historicalInspection
+    historicalInspection,
+    graphPreview,
+    setGraphPreviewFlow
   } = useArchicodeStore(useShallow((state) => ({
     bundle: state.bundle,
     activeFlowId: state.activeFlowId,
@@ -180,7 +183,9 @@ export function ProjectSidebar({
     createProjectFromTemplate: state.createProjectFromTemplate,
     recentProjects: state.recentProjects,
     keybindings: state.keybindings,
-    historicalInspection: state.historicalInspection
+    historicalInspection: state.historicalInspection,
+    graphPreview: state.graphPreview,
+    setGraphPreviewFlow: state.setGraphPreviewFlow
   })));
   const [flowsExpanded, setFlowsExpanded] = useState(false);
   const [pathCopied, setPathCopied] = useState(false);
@@ -194,9 +199,16 @@ export function ProjectSidebar({
   const sidebarSelectionAnchorRef = useRef<string | null>(null);
   const flowVisualDraftsRef = useRef<Record<string, FlowVisual>>({});
   const flowVisualSaveQueuesRef = useRef<Record<string, Promise<unknown>>>({});
-  const flow = getActiveFlow(bundle, activeFlowId);
+  const proposedPreviewFlows = useMemo(
+    () => graphPreview ? proposedFlowsForGraphPreview(graphPreview.operations) : [],
+    [graphPreview]
+  );
+  const activeProposedFlow = graphPreview?.activeProposedFlowId
+    ? proposedPreviewFlows.find((item) => item.id === graphPreview.activeProposedFlowId) ?? null
+    : null;
+  const flow = activeProposedFlow ?? getActiveFlow(bundle, activeFlowId);
   const activeSubflow = flow?.subflows.find((subflow) => subflow.id === activeSubflowId) ?? null;
-  const runChangeBlocked = Boolean(historicalInspection) || Boolean(bundle?.runs.some(isRunBlockingNewChange));
+  const runChangeBlocked = Boolean(activeProposedFlow) || Boolean(historicalInspection) || Boolean(bundle?.runs.some(isRunBlockingNewChange));
 
   const filteredNodes = flow ? visibleNodesForFlow(flow, activeSubflowId, searchQuery) : [];
   const selectedNodeIdSet = useMemo(() => new Set(selectedNodeIds.length ? selectedNodeIds : selectedNodeId ? [selectedNodeId] : []), [selectedNodeId, selectedNodeIds]);
@@ -328,6 +340,10 @@ export function ProjectSidebar({
   };
   const recentProjectOptions = recentProjects.filter((project) => project.rootPath !== rootPath);
   const activeScopeLabel = activeSubflow ? activeSubflow.name : flow ? flowDisplayName(flow) : "No flow";
+  const flowTreeItems = [
+    ...(bundle?.flows ?? []),
+    ...proposedPreviewFlows.filter((proposed) => !bundle?.flows.some((persisted) => persisted.id === proposed.id))
+  ];
   const normalizedFlowSearchQuery = flowSearchQuery.trim().toLowerCase();
   const renderFlowIdentityPicker = (item: Flow): ReactNode => {
     const visual = effectiveFlowVisual(item);
@@ -517,7 +533,7 @@ export function ProjectSidebar({
   };
   const renderFlowTree = () => (
     <div className="flow-tree">
-      {bundle?.flows
+      {flowTreeItems
         .slice()
         .sort(compareTopLevelFlows)
         .filter((item) => {
@@ -526,12 +542,17 @@ export function ProjectSidebar({
           return childSubflowsForFlow(item, null).some((subflow) => subflowMatchesFlowSearch(item, subflow, normalizedFlowSearchQuery));
         })
         .map((item) => {
-        const isActiveFlow = item.id === activeFlowId;
+        const isProposedFlow = proposedPreviewFlows.some((proposed) => proposed.id === item.id);
+        const isActiveFlow = item.id === (graphPreview?.activeProposedFlowId ?? activeFlowId);
         const topLevelCount = item.nodes.filter((node) => !node.subflowId).length;
         return (
-          <div key={item.id} className={item.ignored ? "flow-tree-item is-ignored" : "flow-tree-item"}>
+          <div key={item.id} className={[
+            "flow-tree-item",
+            item.ignored ? "is-ignored" : "",
+            isProposedFlow ? "is-proposed" : ""
+          ].filter(Boolean).join(" ")}>
             <div className="flow-root-entry">
-              {renamingFlow?.id === item.id ? (
+              {!isProposedFlow && renamingFlow?.id === item.id ? (
                 <label className="flow-rename-row">
                   <FlowIdentityIcon visual={effectiveFlowVisual(item)} size={15} />
                   <input
@@ -559,43 +580,64 @@ export function ProjectSidebar({
                   role="button"
                   tabIndex={0}
                   onDragOver={(event) => {
-                    if (!draggingSubflowId) return;
+                    if (isProposedFlow || !draggingSubflowId) return;
                     event.preventDefault();
                     event.dataTransfer.dropEffect = "move";
                   }}
                   onDrop={(event) => {
+                    if (isProposedFlow) return;
                     event.preventDefault();
                     dropSubflow(null);
                   }}
-                  onClick={() => setActiveFlow(item.id)}
+                  onClick={() => {
+                    if (isProposedFlow) setGraphPreviewFlow(item.id);
+                    else {
+                      setGraphPreviewFlow(null);
+                      setActiveFlow(item.id);
+                    }
+                  }}
                   onKeyDown={(event) => {
                     if (event.key !== "Enter" && event.key !== " ") return;
                     event.preventDefault();
-                    setActiveFlow(item.id);
+                    if (isProposedFlow) setGraphPreviewFlow(item.id);
+                    else {
+                      setGraphPreviewFlow(null);
+                      setActiveFlow(item.id);
+                    }
                   }}
-                  onDoubleClick={() => { if (!historicalInspection) setRenamingFlow({ id: item.id, name: editableFlowName(item) }); }}
-                  title={item.perspective
+                  onDoubleClick={() => { if (!isProposedFlow && !historicalInspection) setRenamingFlow({ id: item.id, name: editableFlowName(item) }); }}
+                  title={isProposedFlow
+                    ? t("Preview this proposed flow. It has not been added to the project yet.")
+                    : item.perspective
                     ? `${item.perspective.question} Confidence: ${item.perspective.confidence}. Double-click to rename.`
                     : t("Show this flow's top-level nodes. Drop a subflow here to move it to top level. Double-click to rename.")}
                 >
-                  {renderFlowIdentityPicker(item)}
+                  {isProposedFlow ? <FlowIdentityIcon visual={item.visual} size={16} /> : renderFlowIdentityPicker(item)}
                   <span className="flow-name-stack">
                     <span>{flowDisplayName(item)}</span>
-                    {item.perspective ? <em>{t("{{value1}} · {{confidence}}", { value1: perspectiveLabel(item), confidence: item.perspective.confidence })}</em> : null}
+                    {isProposedFlow
+                      ? <em>{t("Proposed · preview only")}</em>
+                      : item.perspective
+                        ? <em>{t("{{value1}} · {{confidence}}", { value1: perspectiveLabel(item), confidence: item.perspective.confidence })}</em>
+                        : null}
                   </span>
                   <small>{item.ignored ? t("ignored") : topLevelCount}</small>
                 </div>
               )}
-              <IconButton
-                className="flow-ignore-toggle"
-                title={item.ignored ? t("Restore flow to agent working set") : t("Ignore flow for agents")}
-                disabled={runChangeBlocked}
-                onClick={() => toggleFlowIgnored(item)}
-              >
-                {item.ignored ? <Eye size={15} /> : <EyeOff size={15} />}
-              </IconButton>
+              {isProposedFlow ? (
+                <span className="flow-proposed-badge">{t("Preview")}</span>
+              ) : (
+                <IconButton
+                  className="flow-ignore-toggle"
+                  title={item.ignored ? t("Restore flow to agent working set") : t("Ignore flow for agents")}
+                  disabled={runChangeBlocked}
+                  onClick={() => toggleFlowIgnored(item)}
+                >
+                  {item.ignored ? <Eye size={15} /> : <EyeOff size={15} />}
+                </IconButton>
+              )}
             </div>
-            {isActiveFlow ? (
+            {isActiveFlow && !isProposedFlow ? (
               <>
                 {renderSubflowRows(item)}
                 <Button
@@ -729,7 +771,13 @@ export function ProjectSidebar({
           <FlowIdentityIcon visual={effectiveFlowVisual(flow)} size={15} />
           <span>
             <strong>{activeScopeLabel}</strong>
-            <small>{activeSubflow ? flow?.name : flow?.perspective ? t("{{value1}} · {{confidence}}", { value1: perspectiveLabel(flow), confidence: flow.perspective.confidence }) : t("Current scope")}</small>
+            <small>{activeProposedFlow
+              ? t("Proposed preview · not yet applied")
+              : activeSubflow
+                ? flow?.name
+                : flow?.perspective
+                  ? t("{{value1}} · {{confidence}}", { value1: perspectiveLabel(flow), confidence: flow.perspective.confidence })
+                  : t("Current scope")}</small>
           </span>
           <ChevronDown size={15} />
         </button>
@@ -746,7 +794,7 @@ export function ProjectSidebar({
                   />
                 </label>
                 {renderFlowTree()}
-                {normalizedFlowSearchQuery && !bundle.flows.some((item) => {
+                {normalizedFlowSearchQuery && !flowTreeItems.some((item) => {
                   if (item.name.toLowerCase().includes(normalizedFlowSearchQuery)) return true;
                   return childSubflowsForFlow(item, null).some((subflow) => subflowMatchesFlowSearch(item, subflow, normalizedFlowSearchQuery));
                 }) ? (

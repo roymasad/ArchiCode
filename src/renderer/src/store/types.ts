@@ -368,7 +368,13 @@ export type ArchicodeState = {
   // Ghost/highlight overlay on the canvas for a pending changeSet card the user has
   // toggled "Preview" on. Global (not per-flow) so it follows the user across flow tabs;
   // exclusive (one active at a time) and cleared on Apply/Reject or chat session switch.
-  graphPreview: { sessionId: string; messageId: string; changeSetId: string; operations: ResearchGraphOperation[] } | null;
+  graphPreview: {
+    sessionId: string;
+    messageId: string;
+    changeSetId: string;
+    operations: ResearchGraphOperation[];
+    activeProposedFlowId: string | null;
+  } | null;
   fileBrowser: ProjectFileBrowserData | null;
   selectedFilePath: string | null;
   filePreviewRequest: FilePreviewRequest | null;
@@ -413,6 +419,7 @@ export type ArchicodeState = {
   navigateToGraphTarget: (target: GraphNavigationTarget) => void;
   applyResearchCanvasAction: (action: ResearchCanvasAction) => void;
   showGraphChangeSetPreview: (sessionId: string, messageId: string, changeSetId: string, operations: ResearchGraphOperation[]) => void;
+  setGraphPreviewFlow: (flowId: string | null) => void;
   hideGraphChangeSetPreview: () => void;
   clearGraphNavigationRequest: (requestId: number) => void;
   setWorkbenchView: (view: WorkbenchView) => void;

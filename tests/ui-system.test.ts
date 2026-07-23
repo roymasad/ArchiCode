@@ -1216,6 +1216,12 @@ describe("renderer UI system", () => {
     expect(panel).toContain("viewport && researchRevealSubmittedMessageRef.current");
     expect(panel).toContain('<span>{t("More")}</span>');
     expect(panel).toContain("researchManualScrollHoldRef");
+    expect(panel).toContain("researchRestoreScrollSessionRef");
+    expect(panel).toContain("useLayoutEffect(() =>");
+    expect(panel).toContain("revealRestoredTranscript");
+    expect(panel).toContain("new ResizeObserver(revealRestoredTranscript)");
+    expect(panel).toContain('resizeObserver.observe(content)');
+    expect(panel).toContain("researchRestoreScrollSessionRef.current = null");
     expect(panel).toContain('viewport.addEventListener("wheel", holdAutoFollowOnWheel');
     expect(panel).toContain('viewport.addEventListener("touchmove", holdAutoFollow');
     expect(panel).toContain('viewport.addEventListener("keydown", holdAutoFollowOnKey');
@@ -1959,12 +1965,12 @@ describe("renderer UI system", () => {
     expect(css).toContain(".research-context-panel:not(.is-new-chat)");
     expect(css).toContain("flex-wrap: nowrap;");
     expect(panel).toContain("research-auto-approve-fit");
-    expect(panel).not.toContain("ResizeObserver");
     expect(panel).not.toContain("MutationObserver");
     expect(css).toContain("@container (max-width: 107px)");
     expect(css).toContain(".research-auto-approve-fit .ui-switch-row > span");
     expect(css).toContain("max-width: 136px;");
     expect(css).toContain("-webkit-line-clamp: 2;");
+    expect(css).toContain('.research-auto-approve .ui-switch[data-state="unchecked"] .ui-switch-thumb');
     expect(panel).toContain("delphiArgs.objective || run.subtitle");
     expect(panel).toContain('summaryExpanded ? t("Show less") : t("Show more")');
     expect(css).toContain(".research-subagent-summary:not(.is-expanded) small");
@@ -1981,6 +1987,23 @@ describe("renderer UI system", () => {
     expect(activitySource).not.toContain("progress.length");
     expect(activitySource).not.toContain("lastLiveSubagents");
     expect(activitySource).not.toContain("researchBusy ? \"busy\"");
+  });
+
+  it("keeps long graph applies visible and exposes proposed flows during canvas preview", () => {
+    const panel = readResearchPanelSource();
+    const sidebar = readFileSync(resolve(repoRoot, "src/renderer/src/components/ProjectSidebar.tsx"), "utf8");
+    const canvas = readFileSync(resolve(repoRoot, "src/renderer/src/components/FlowCanvas.tsx"), "utf8");
+    const graphSlice = readFileSync(resolve(repoRoot, "src/renderer/src/store/graphSlice.ts"), "utf8");
+    const css = readFileSync(resolve(repoRoot, "src/renderer/src/styles/app.css"), "utf8");
+
+    expect(panel).toContain('className="research-change-apply-progress"');
+    expect(panel).toContain("Applying selected graph changes…");
+    expect(css).toContain(".research-change-apply-progress");
+    expect(sidebar).toContain("proposedFlowsForGraphPreview");
+    expect(sidebar).toContain("Proposed · preview only");
+    expect(sidebar).toContain("setGraphPreviewFlow(item.id)");
+    expect(canvas).toContain("proposedPreviewFlow ?? getActiveFlow");
+    expect(graphSlice).toContain("activeProposedFlowId");
   });
 
   it("offers an explicit multi-select when Delphi has several compatible runtime targets", () => {
@@ -2013,6 +2036,12 @@ describe("renderer UI system", () => {
     expect(panel).toContain("canRetryFailedReview");
     expect(panel).toContain('"Repair & Apply"');
     expect(panel).toContain('"Queue Selected"');
+    expect(panel).toContain("implementationApprovalTitle");
+    expect(panel).toContain('"Start Implementation"');
+    expect(panel).toContain('"Start Selected Implementations"');
+    expect(panel).toContain("Approving starts an AI implementation run for the selected scope.");
+    expect(panel).toContain("research-implementation-approval-explainer");
+    expect(panel).toContain('Implement {{node}} with AI · {{effort}} effort');
     expect(panel).toContain("retryReviewed");
     expect(panel).toContain("changeSetResultReportPresentation(message.content)");
     expect(panel).not.toContain("researchMessagePresentationContent");
@@ -2027,6 +2056,7 @@ describe("renderer UI system", () => {
     expect(css).toContain(".research-change-set-result.is-warning");
     expect(css).toContain(".research-change-set-result.is-danger");
     expect(css).toContain(".research-change-set-result-details");
+    expect(css).toContain(".research-implementation-approval-explainer");
     expect(panel).toContain('queueSubmission ? "Partially queued" : "Partial"');
     expect(panel).toContain('summary.autoApproved ? "Auto-applied" : "Applied"');
     expect(panel).toContain('reviewPresentation?.actionLabel ?? (queueSubmission ? "Queued" : "Applied")');

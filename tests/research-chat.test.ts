@@ -7581,6 +7581,90 @@ describe("research chat workflow", () => {
     expect(nodeStillExists).toBe(true);
   });
 
+  it("reports validation blockers separately, aborts the transaction, and disables inherently invalid retries", async () => {
+    const { projectRoot } = await setupProject(JSON.stringify({
+      archicodeResearch: {
+        answer: "Prepared a graph card for review.",
+        summary: "Prepared a mixed graph proposal.",
+        changeSet: {
+          summary: "Mix one forbidden promotion with additive work",
+          operations: [
+            {
+              kind: "update-node",
+              flowId: "flow-main",
+              patch: { id: "node-canvas", stage: "draft-approved-production" }
+            },
+            {
+              kind: "create-node",
+              flowId: "flow-main",
+              node: {
+                id: "node-additive-one",
+                type: "service",
+                title: "Additive One",
+                description: "A valid additive node that should be aborted with the invalid transaction."
+              }
+            },
+            {
+              kind: "create-node",
+              flowId: "flow-main",
+              node: {
+                id: "node-additive-two",
+                type: "service",
+                title: "Additive Two",
+                description: "Another valid additive node that should be aborted with the invalid transaction."
+              }
+            }
+          ]
+        }
+      }
+    }));
+    const session = await createResearchChat({
+      projectRoot,
+      scope: { type: "flow", flowId: "flow-main" }
+    });
+    const answered = await sendResearchChatMessage({
+      projectRoot,
+      sessionId: session.id,
+      content: "Prepare the mixed graph proposal."
+    });
+    const assistant = answered.messages.find((message) => Boolean(message.changeSet));
+    const decisions = assistant!.changeSet!.operations.map((_, operationIndex) => ({
+      operationIndex,
+      decision: "accepted" as const
+    }));
+
+    const result = await applyResearchGraphChangeSet({
+      projectRoot,
+      sessionId: answered.id,
+      messageId: assistant!.id,
+      changeSetId: assistant!.changeSet!.id,
+      decisions
+    });
+
+    expect(result.results).toMatchObject([
+      { status: "failed", message: expect.stringContaining("LLM patches cannot approve nodes") },
+      { status: "failed", message: expect.stringContaining("transactional") },
+      { status: "failed", message: expect.stringContaining("transactional") }
+    ]);
+    expect(result.session.messages.some((message) =>
+      message.role === "system" &&
+      message.content.includes("1 validation blocker; 2 transactionally aborted.") &&
+      message.content.includes("Retryable: no.")
+    )).toBe(true);
+    expect(result.session.messages.at(-1)?.content).toContain("1 validation blocker, 2 transactionally aborted.");
+    expect(result.session.messages.at(-1)?.content).toContain("Aborted: 2 additional operations were not attempted");
+    expect((await loadProject(projectRoot)).flows[0]?.nodes.some((node) => node.id === "node-additive-one")).toBe(false);
+
+    await expect(applyResearchGraphChangeSet({
+      projectRoot,
+      sessionId: answered.id,
+      messageId: assistant!.id,
+      changeSetId: assistant!.changeSet!.id,
+      decisions,
+      retryReviewed: true
+    })).rejects.toThrow("already reviewed");
+  });
+
   it("directly fetches user-provided web links into research context", async () => {
     vi.stubGlobal("fetch", vi.fn(async () => new Response(`
       <html>

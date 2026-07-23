@@ -2436,14 +2436,21 @@ function researchChangeSetReportHeading(category: ResearchChangeSetCategory): st
 function isRetryableFailedResearchReview(session: ResearchChatSession, messageId: string, operationCount: number): boolean {
   const messageIndex = session.messages.findIndex((message) => message.id === messageId);
   if (messageIndex < 0) return false;
-  let latest: { applied: number; rejected: number; failed: number } | null = null;
+  let latest: { applied: number; rejected: number; failed: number; retryable: boolean } | null = null;
   for (const message of session.messages.slice(messageIndex + 1)) {
     if (message.changeSet) break;
     if (message.role !== "system") continue;
     const match = message.content.trim().match(/^(?:Graph changes reviewed|Graph changes retry reviewed|Auto-approved graph changes|Queue submission reviewed|Queue submission retry reviewed|Changes reviewed|Changes retry reviewed):\s+(\d+)\s+(?:applied|queued),\s+(\d+)\s+rejected,\s+(\d+)\s+failed\./);
-    if (match) latest = { applied: Number(match[1]), rejected: Number(match[2]), failed: Number(match[3]) };
+    if (match) {
+      latest = {
+        applied: Number(match[1]),
+        rejected: Number(match[2]),
+        failed: Number(match[3]),
+        retryable: !/\bRetryable:\s+no\./i.test(message.content)
+      };
+    }
   }
-  return Boolean(latest && latest.applied === 0 && latest.rejected === 0 && latest.failed === operationCount);
+  return Boolean(latest && latest.retryable && latest.applied === 0 && latest.rejected === 0 && latest.failed === operationCount);
 }
 
 function graphReviewNodeTitleMap(bundle: ProjectBundle, changeSet: ResearchChangeSet): Map<string, string> {
@@ -2468,6 +2475,11 @@ function researchChangeSetResultReport(changeSet: ResearchChangeSet, results: Re
   const applied = results.filter((result) => result.status === "applied").length;
   const rejected = results.filter((result) => result.status === "rejected").length;
   const failed = results.filter((result) => result.status === "failed").length;
+  const transactionalAbortPrefix = "Not applied because accepted graph changes are transactional";
+  const transactionallyAborted = results.filter((result) =>
+    result.status === "failed" && result.message.startsWith(transactionalAbortPrefix)
+  ).length;
+  const directFailures = failed - transactionallyAborted;
   const nodeTitles = graphReviewNodeTitleMap(bundle, changeSet);
   const category = researchChangeSetCategory(changeSet.operations);
   const appliedDetails: string[] = [];
@@ -2479,28 +2491,36 @@ function researchChangeSetResultReport(changeSet: ResearchChangeSet, results: Re
     const operation = changeSet.operations[result.operationIndex];
     const operationDetail = operation ? researchChangeSetOperationDetail(operation, nodeTitles) : `operation ${result.operationIndex}`;
     const detail = result.status === "applied" ? operationDetail : researchUnappliedOperationDetail(operationDetail);
+    const transactionAbort = result.status === "failed" && result.message.startsWith(transactionalAbortPrefix);
     const queued = category === "queue" && result.status === "applied";
     const statusLabel = queued ? "Queued" : capitalizeStatus(result.status);
     const presentedDetail = queued ? detail.replace(/^Queued\s+/, "") : detail;
     const conciseDetail = presentedDetail.replace(/\.$/, "");
     if (result.status === "applied") appliedDetails.push(conciseDetail);
     else if (result.status === "rejected") rejectedDetails.push(conciseDetail);
-    else failedDetails.push(conciseDetail);
-    detailLines.push(`${statusLabel}: ${presentedDetail}${result.message ? ` (${result.message})` : ""}`);
-    if (operation?.kind === "add-note" && operation.note.kind === "system-note" && !operation.note.pinned) {
+    else if (!transactionAbort) failedDetails.push(conciseDetail);
+    if (!transactionAbort) detailLines.push(`${statusLabel}: ${presentedDetail}${result.message ? ` (${result.message})` : ""}`);
+    if (!transactionAbort && operation?.kind === "add-note" && operation.note.kind === "system-note" && !operation.note.pinned) {
       detailLines.push("Note: this was added as an unpinned system note, so the default Relevant notes filter may hide it. Use All notes or pin it if you want it to stay visible there.");
     }
+  }
+  if (transactionallyAborted) {
+    detailLines.push(`Aborted: ${transactionallyAborted} additional operation${transactionallyAborted === 1 ? " was" : "s were"} not attempted because accepted graph changes are transactional.`);
   }
 
   const outcomeParts = [
     appliedDetails.length ? `${category === "queue" ? "Queued" : "Applied"}: ${summarizeResearchOutcomeDetails(appliedDetails)}.` : "",
     rejectedDetails.length ? `Not applied by your selection: ${summarizeResearchOutcomeDetails(rejectedDetails)}.` : "",
     failedDetails.length ? `Could not apply: ${summarizeResearchOutcomeDetails(failedDetails)}.` : "",
+    transactionallyAborted ? `${transactionallyAborted} additional operation${transactionallyAborted === 1 ? " was" : "s were"} aborted with the transaction.` : "",
     rejected || failed ? "I kept this exact review outcome and did not generate another proposal." : ""
   ].filter(Boolean);
+  const countSummary = transactionallyAborted
+    ? `${applied} ${category === "queue" ? "queued" : "applied"}, ${rejected} rejected, ${directFailures} validation blocker${directFailures === 1 ? "" : "s"}, ${transactionallyAborted} transactionally aborted.`
+    : `${applied} ${category === "queue" ? "queued" : "applied"}, ${rejected} rejected, ${failed} failed.`;
   const lines = [
     `${researchChangeSetReportHeading(category)} for "${changeSet.summary}".`,
-    `${applied} ${category === "queue" ? "queued" : "applied"}, ${rejected} rejected, ${failed} failed.`,
+    countSummary,
     `Outcome: ${outcomeParts.join(" ")}`,
     ...detailLines
   ];
@@ -4095,10 +4115,25 @@ async function reviewResearchGraphChangeSet(input: {
 
   const reviewedAt = iso();
   const resultCategory = researchChangeSetCategory(changeSet.operations);
+  const appliedCount = results.filter((result) => result.status === "applied").length;
+  const rejectedCount = results.filter((result) => result.status === "rejected").length;
+  const failedCount = results.filter((result) => result.status === "failed").length;
+  const validationBlockerCount = validationFailure
+    ? invalidOperationNumbers.length || Math.min(validationErrors.length, failedCount)
+    : 0;
+  const transactionallyAbortedCount = validationFailure
+    ? Math.max(0, failedCount - invalidOperationNumbers.length)
+    : 0;
+  const validationBreakdown = validationFailure
+    ? ` ${validationBlockerCount} validation blocker${validationBlockerCount === 1 ? "" : "s"}; ${transactionallyAbortedCount} transactionally aborted.`
+    : "";
+  const retryability = validationFailure && validationRequiresNewProposal(validationErrors)
+    ? " Retryable: no."
+    : "";
   const resultMessage: ResearchChatMessage = {
     id: id("msg"),
     role: "system",
-    content: `${input.resultPrefix}: ${results.filter((result) => result.status === "applied").length} ${resultCategory === "queue" ? "queued" : "applied"}, ${results.filter((result) => result.status === "rejected").length} rejected, ${results.filter((result) => result.status === "failed").length} failed.`,
+    content: `${input.resultPrefix}: ${appliedCount} ${resultCategory === "queue" ? "queued" : "applied"}, ${rejectedCount} rejected, ${failedCount} failed.${validationBreakdown}${retryability}`,
     createdAt: reviewedAt,
     attachmentIds: [],
     webUsed: false,
@@ -4130,6 +4165,21 @@ function isBoundedGraphMutationRetry(operation: ResearchOperation): boolean {
     operation.kind !== "run-acceptance-checks" &&
     operation.kind !== "start-runtime-debug-run" &&
     operation.kind !== "start-incident-debug-run";
+}
+
+function validationRequiresNewProposal(errors: ReadonlyArray<{ message: string }>): boolean {
+  const permanentlyForbiddenMutationMessages = [
+    "LLM patches cannot approve nodes or move nodes into an approved stage.",
+    "LLM patches cannot bypass user approval or unlock approved nodes.",
+    "LLM patches cannot change whether nodes are ignored.",
+    "LLM patches cannot add the user-approved flag.",
+    "LLM patches cannot lock nodes as approved.",
+    "Research-created nodes cannot be born approved, locked, or ignored.",
+    "Research-created flows cannot contain approved, locked, or ignored graph items."
+  ];
+  return errors.some((error) =>
+    permanentlyForbiddenMutationMessages.some((message) => error.message.includes(message))
+  );
 }
 
 function normalizeResearchGraphReviewDecisions(

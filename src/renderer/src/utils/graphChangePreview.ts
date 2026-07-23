@@ -11,6 +11,10 @@ export type FlowGraphPreview = {
   stats: { added: number; modified: number; removed: number };
 };
 
+export function proposedFlowsForGraphPreview(operations: ResearchGraphOperation[]): Flow[] {
+  return operations.flatMap((operation) => operation.kind === "create-flow" ? [operation.flow] : []);
+}
+
 /** Returns the flowId a research graph operation is scoped to, or null for project/global operations. */
 export function operationFlowId(operation: ResearchGraphOperation): string | null {
   if (operation.kind === "create-flow") return operation.flow.id;
@@ -148,6 +152,11 @@ export function buildFlowGraphPreview(flow: Flow, operations: ResearchGraphOpera
 
   for (const operation of relevant) {
     switch (operation.kind) {
+      case "create-flow": {
+        for (const node of operation.flow.nodes) nodeStates.set(node.id, "added");
+        for (const edge of operation.flow.edges) edgeStates.set(edge.id, "added");
+        break;
+      }
       case "create-node": {
         const id = operation.node.id ?? nextPhantomId();
         const position = resolvePhantomPosition(operation.node, positionsById, fallbackOrigin, phantomStackIndex);

@@ -1,7 +1,7 @@
 import { formatDateTime, formatTime } from "@renderer/i18n";
 import { t } from "@renderer/i18n";
 import { AlertCircle, AlertTriangle, Archive, Box, Brain, Check, CheckCircle2, ChevronDown, ChevronUp, Circle, Clock3, Copy, Download, ExternalLink, Eye, EyeOff, FileJson, FileText, FolderKanban, History, Layers3, ListTodo, Loader2, Maximize2, MessageSquare, Mic, MicOff, Minimize2, PanelLeftClose, PanelLeftOpen, Paperclip, Play, Plus, RefreshCw, Send, ShieldCheck, Sparkles, Split, Square, Volume2, Workflow, X } from "lucide-react";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps, ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { codexRealtimeModels, codexRealtimeV2Voices, defaultCodexRealtimeModel, defaultCodexRealtimeV2Voice, type Artifact, type LlmUsage, type ProjectBundle, type ProjectSettings, type ResearchChatMessage, type ResearchChatScope, type ResearchChatSession, type Run } from "@shared/schema";
@@ -498,6 +498,7 @@ type ResearchChangeSetReviewSummary = {
   rejected: number;
   failed: number;
   autoApproved: boolean;
+  retryable: boolean;
 };
 
 type ResearchTranscriptAnalysis = {
@@ -517,7 +518,8 @@ export function parseResearchChangeSetReviewSummary(message: ResearchChatSession
     autoApproved: match[1] === "Auto-approved graph changes",
     applied: Number(match[2]),
     rejected: Number(match[3]),
-    failed: Number(match[4])
+    failed: Number(match[4]),
+    retryable: !/\bRetryable:\s+no\./i.test(message.content)
   };
 }
 
@@ -650,6 +652,17 @@ function subflowTitleLabel(subflowId: string | undefined, titles: Map<string, st
   return titles.get(subflowId) ?? subflowId;
 }
 
+function implementationApprovalTitle(summary: string): string {
+  const detail = summary
+    .trim()
+    .replace(/^Queue(?:ing)?\s+/i, "")
+    .replace(/^(?:Gaia|AI Implement|implementation(?:\s+run)?)\s*:?\s*/i, "")
+    .trim();
+  return detail
+    ? t("AI implementation: {{summary}}", { summary: detail })
+    : t("AI implementation approval");
+}
+
 function operationLabel(
   operation: ResearchOperationView,
   titles: Map<string, string>,
@@ -681,8 +694,8 @@ function operationLabel(
   if (operation.kind === "start-agent-run") {
     const effort = operation.effort === "fast" ? t("Fast") : t("High");
     return operation.nodeId
-      ? t("Queue {{agent}} for {{node}} · {{effort}} effort", { agent: gaiaAgent.name, node: nodeTitleLabel(operation.nodeId, titles), effort })
-      : t("Queue {{agent}} for \"{{flow}}\" · {{effort}} effort", { agent: gaiaAgent.name, flow: flowTitleLabel(operation.flowId, flowTitles), effort });
+      ? t("Implement {{node}} with AI · {{effort}} effort", { node: nodeTitleLabel(operation.nodeId, titles), effort })
+      : t("Implement \"{{flow}}\" with AI · {{effort}} effort", { flow: flowTitleLabel(operation.flowId, flowTitles), effort });
   }
   if (operation.kind === "start-run-profile") return t("Queue run target {{id}}", { id: operation.profileId });
   if (operation.kind === "stop-runtime-service") return t("Stop runtime service {{id}}", { id: operation.serviceId });
@@ -1080,6 +1093,7 @@ export const ResearchPanel = memo(function ResearchPanel({
   const speechMeterRef = useRef<HTMLDivElement | null>(null);
   const researchScrollFollowRef = useRef(true);
   const researchManualScrollHoldRef = useRef(false);
+  const researchRestoreScrollSessionRef = useRef<string | null>(null);
   const researchRevealSubmittedMessageRef = useRef(false);
   const speechStreamRef = useRef<MediaStream | null>(null);
   const speechAudioContextRef = useRef<AudioContext | null>(null);
@@ -3362,17 +3376,71 @@ export const ResearchPanel = memo(function ResearchPanel({
     setResearchHasNewActivity(false);
   }, []);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
+    const sessionId = selected?.id ?? null;
+    researchRestoreScrollSessionRef.current = sessionId;
     researchManualScrollHoldRef.current = false;
     researchScrollFollowRef.current = true;
     setResearchHasNewActivity(false);
-    requestAnimationFrame(scrollResearchToBottom);
+    if (!sessionId) return;
+
+    let cancelled = false;
+    let secondFrame = 0;
+    let resizeObserver: ResizeObserver | null = null;
+    const revealRestoredTranscript = () => {
+      if (
+        cancelled ||
+        researchRestoreScrollSessionRef.current !== sessionId ||
+        researchManualScrollHoldRef.current
+      ) {
+        return;
+      }
+      scrollResearchToBottom();
+    };
+    const observeSettlingContent = () => {
+      if (resizeObserver || typeof ResizeObserver === "undefined") return;
+      const content = messagesViewportRef.current?.querySelector(".research-message-list");
+      if (!content) return;
+      resizeObserver = new ResizeObserver(revealRestoredTranscript);
+      resizeObserver.observe(content);
+    };
+
+    // Scroll before paint when possible, then retry after Radix exposes the
+    // viewport and while persisted cards settle to their rendered height.
+    revealRestoredTranscript();
+    const firstFrame = requestAnimationFrame(() => {
+      revealRestoredTranscript();
+      observeSettlingContent();
+      secondFrame = requestAnimationFrame(() => {
+        revealRestoredTranscript();
+        observeSettlingContent();
+      });
+    });
+    const settleTimer = window.setTimeout(() => {
+      revealRestoredTranscript();
+      if (researchRestoreScrollSessionRef.current === sessionId) {
+        researchRestoreScrollSessionRef.current = null;
+      }
+      resizeObserver?.disconnect();
+    }, 1_200);
+
+    return () => {
+      cancelled = true;
+      cancelAnimationFrame(firstFrame);
+      if (secondFrame) cancelAnimationFrame(secondFrame);
+      window.clearTimeout(settleTimer);
+      resizeObserver?.disconnect();
+      if (researchRestoreScrollSessionRef.current === sessionId) {
+        researchRestoreScrollSessionRef.current = null;
+      }
+    };
   }, [selected?.id, scrollResearchToBottom]);
 
   useEffect(() => {
     const viewport = messagesViewportRef.current;
     if (!viewport) return;
     const holdAutoFollow = () => {
+      researchRestoreScrollSessionRef.current = null;
       researchManualScrollHoldRef.current = true;
       researchScrollFollowRef.current = false;
     };
@@ -4595,36 +4663,53 @@ export const ResearchPanel = memo(function ResearchPanel({
                       const changeSet = message.changeSet;
                       const changeSetCategory = researchChangeSetCategory(changeSet.operations);
                       const queueSubmission = changeSetCategory === "queue";
+                      const implementationSubmission = researchChangeSetActionKind(changeSet) === "implementation";
                       const reviewKey = changeSetReviewKey(selected.id, message.id, changeSet.id);
                       const reviewPending = pendingChangeSetKeys.has(reviewKey);
                       const reviewSummary = transcriptAnalysis.reviewSummaryByChangeSetIndex.get(messageIndex) ?? null;
                       const reviewPresentation = reviewStatusPresentation(reviewSummary, changeSetCategory);
                       const superseded = Boolean(changeSet.supersededAt);
                       const reviewed = Boolean(changeSet.reviewedAt) || Boolean(reviewSummary);
-                      const canRetryFailedReview = Boolean(reviewSummary && reviewSummary.applied === 0 && reviewSummary.rejected === 0 && reviewSummary.failed === changeSet.operations.length);
+                      const canRetryFailedReview = Boolean(reviewSummary && reviewSummary.retryable && reviewSummary.applied === 0 && reviewSummary.rejected === 0 && reviewSummary.failed === changeSet.operations.length);
                       const waitingForRun = Boolean(activeGraphLockRun && (!reviewed || canRetryFailedReview));
                       const previewingThisChangeSet = graphPreview?.changeSetId === changeSet.id;
                       const acceptedOperationIndices = acceptedByChangeSet[changeSet.id]
                         ?? new Set(changeSet.operations.map((_, operationIndex) => operationIndex));
                       const previewOperations = changeSet.operations.filter((_, operationIndex) => acceptedOperationIndices.has(operationIndex));
+                      const selectedImplementationCount = changeSet.operations.filter(
+                        (operation, operationIndex) =>
+                          operation.kind === "start-agent-run" && acceptedOperationIndices.has(operationIndex)
+                      ).length;
                       // A superseded card was retired by a newer proposal — it was never
                       // applied, so its buttons must not read "Applied"/"Reviewed".
                       const supersededOnly = superseded && !reviewSummary;
-                      const primaryActionLabel = supersededOnly
-                        ? "Superseded"
-                        : waitingForRun
-                          ? queueSubmission ? "Queue after run" : "Apply after run"
-                          : reviewPending
-                            ? canRetryFailedReview ? "Retrying" : queueSubmission ? "Queueing" : "Applying"
-                            : canRetryFailedReview
-                              ? queueSubmission ? "Retry Queue" : "Repair & Apply"
-                              : reviewed
-                                ? reviewPresentation?.actionLabel ?? (queueSubmission ? "Queued" : "Applied")
-                                : queueSubmission ? "Queue Selected" : "Apply Selected";
+                      const primaryActionLabel = implementationSubmission
+                        ? supersededOnly
+                          ? "Superseded"
+                          : waitingForRun
+                            ? "Start Implementation after current run"
+                            : reviewPending
+                              ? canRetryFailedReview ? "Retrying" : "Starting Implementation"
+                              : canRetryFailedReview
+                                ? "Retry Implementation"
+                                : reviewed
+                                  ? reviewPresentation?.actionLabel ?? "Implementation Queued"
+                                  : selectedImplementationCount > 1 ? "Start Selected Implementations" : "Start Implementation"
+                        : supersededOnly
+                          ? "Superseded"
+                          : waitingForRun
+                            ? queueSubmission ? "Queue after run" : "Apply after run"
+                            : reviewPending
+                              ? canRetryFailedReview ? "Retrying" : queueSubmission ? "Queueing" : "Applying"
+                              : canRetryFailedReview
+                                ? queueSubmission ? "Retry Queue" : "Repair & Apply"
+                                : reviewed
+                                  ? reviewPresentation?.actionLabel ?? (queueSubmission ? "Queued" : "Applied")
+                                  : queueSubmission ? "Queue Selected" : "Apply Selected";
                       return (
                         <div className="research-change-set">
                           <div className="research-change-set-head">
-                            <strong>{changeSet.summary}</strong>
+                            <strong>{implementationSubmission ? implementationApprovalTitle(changeSet.summary) : changeSet.summary}</strong>
                             <IconButton
                               type="button"
                               className={previewingThisChangeSet ? "is-active" : ""}
@@ -4651,6 +4736,15 @@ export const ResearchPanel = memo(function ResearchPanel({
                                     ? <Badge tone="warning">{t("Waiting for run")}</Badge>
                                   : null}
                           </div>
+                          {implementationSubmission && !reviewed && !supersededOnly ? (
+                            <div className="research-implementation-approval-explainer">
+                              <Play size={15} aria-hidden="true" />
+                              <span>
+                                <strong>{t("What happens")}</strong>
+                                <small>{t("Approving starts an AI implementation run for the selected scope. It can create or modify project files, and its progress and results will appear in Activity.")}</small>
+                              </span>
+                            </div>
+                          ) : null}
                           {reviewPresentation ? <small>{reviewPresentation.summaryLabel}</small> : null}
                           {waitingForRun && activeGraphLockRun ? (
                             <div className="research-change-run-lock" role="status">
@@ -4700,7 +4794,9 @@ export const ResearchPanel = memo(function ResearchPanel({
                               size="sm"
                               variant="primary"
                               title={waitingForRun && activeGraphLockRun
-                                ? `${queueSubmission ? "Queueing" : "Apply"} is locked until run ${activeGraphLockRun.id} finishes or is cancelled.`
+                                ? implementationSubmission
+                                  ? `Implementation cannot start until run ${activeGraphLockRun.id} finishes or is cancelled.`
+                                  : `${queueSubmission ? "Queueing" : "Apply"} is locked until run ${activeGraphLockRun.id} finishes or is cancelled.`
                                 : canRetryFailedReview
                                   ? `Run recovery preflight on the retained card, then ${queueSubmission ? "submit it again" : "apply it"}`
                                   : undefined}
@@ -4740,6 +4836,15 @@ export const ResearchPanel = memo(function ResearchPanel({
                               <span>{reviewPending ? t(queueSubmission ? "Queueing" : "Applying") : supersededOnly ? t("Superseded") : reviewed ? t("Reviewed") : t("Reject")}</span>
                             </Button>
                           </div>
+                          {reviewPending ? (
+                            <div className="research-change-apply-progress" role="status" aria-live="polite">
+                              <Loader2 size={14} className="is-spinning" aria-hidden="true" />
+                              <span>
+                                <strong>{t(implementationSubmission ? "Starting selected implementation…" : queueSubmission ? "Queueing selected changes…" : canRetryFailedReview ? "Repairing and applying selected changes…" : "Applying selected graph changes…")}</strong>
+                                <small>{t("This can take a moment. You can keep reviewing the chat while ArchiCode finishes.")}</small>
+                              </span>
+                            </div>
+                          ) : null}
                         </div>
                       );
                     })() : null}

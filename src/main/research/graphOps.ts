@@ -517,8 +517,10 @@ function projectResearchOperationForValidation(bundle: ProjectBundle, operation:
   } else if (operation.kind === "update-node") {
     const node = flow.nodes.find((item) => item.id === operation.patch.id);
     if (node) {
-      const { id: _id, ...patch } = operation.patch;
-      Object.assign(node, patch);
+      const resolvedPatch = normalizeResearchUpdateNodePatch(flow, operation.patch);
+      const nextNode = applyNodePatch(node, resolvedPatch, "llm");
+      const nodeIndex = flow.nodes.findIndex((item) => item.id === node.id);
+      flow.nodes[nodeIndex] = nextNode;
     }
   } else if (operation.kind === "delete-node") {
     flow.nodes = flow.nodes.filter((node) => node.id !== operation.nodeId);
@@ -795,6 +797,12 @@ export function validateResearchOperationReferences(
     const existingNode = flow.nodes.find((node) => node.id === operation.patch.id);
     if (existingNode && !nodePatchChangesPersistedState(existingNode, resolvedPatch)) {
       throw new Error(`Update node ${existingNode.id} does not change any persisted fields.`);
+    }
+    if (existingNode) {
+      // Keep proposal-time validation aligned with the accepted Research apply
+      // path. In particular, an LLM must not approve a node or mutate an
+      // importer/user-approved node without a user-created revision.
+      applyNodePatch(existingNode, resolvedPatch, "llm");
     }
   }
   if (operation.kind === "create-node") {

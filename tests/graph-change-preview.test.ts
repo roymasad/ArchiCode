@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { flowSchema, researchGraphOperationSchema, type ResearchGraphOperation } from "../src/shared/schema";
-import { buildFlowGraphPreview } from "../src/renderer/src/utils/graphChangePreview";
+import { buildFlowGraphPreview, proposedFlowsForGraphPreview } from "../src/renderer/src/utils/graphChangePreview";
 import flowFixture from "../fixtures/sample-project/.archicode/flows/flow-main.json";
 
 function operation(input: unknown): ResearchGraphOperation {
@@ -8,6 +8,27 @@ function operation(input: unknown): ResearchGraphOperation {
 }
 
 describe("graph change preview placement", () => {
+  it("exposes proposed flows and marks their complete topology as added", () => {
+    const proposedFlow = flowSchema.parse({
+      ...flowFixture,
+      id: "flow-proposed",
+      name: "Proposed flow"
+    });
+    const createFlow = operation({
+      kind: "create-flow",
+      flow: proposedFlow
+    });
+
+    expect(proposedFlowsForGraphPreview([createFlow])).toEqual([proposedFlow]);
+
+    const preview = buildFlowGraphPreview(proposedFlow, [createFlow]);
+    expect([...preview.nodeStates.values()]).toEqual(proposedFlow.nodes.map(() => "added"));
+    expect([...preview.edgeStates.values()]).toEqual(proposedFlow.edges.map(() => "added"));
+    expect(preview.phantomNodes).toEqual([]);
+    expect(preview.phantomEdges).toEqual([]);
+    expect(preview.stats.added).toBe(proposedFlow.nodes.length + proposedFlow.edges.length);
+  });
+
   it("recalculates a surviving node with the same topology-aware layout used by apply", () => {
     const flow = flowSchema.parse(flowFixture);
     const anchor = flow.nodes.find((node) => node.id === "node-json-model")!;

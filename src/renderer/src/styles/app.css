@@ -2769,6 +2769,7 @@ textarea {
   width: 34px;
   height: 20px;
   flex: 0 0 auto;
+  padding: 0;
   border: 1px solid var(--border-strong);
   border-radius: 999px;
   background: var(--surface-muted);
@@ -3059,6 +3060,26 @@ textarea {
   display: grid;
   gap: 6px;
   min-width: 0;
+}
+
+.flow-tree-item.is-proposed .flow-root-entry {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.flow-tree-item.is-proposed .flow-root-row {
+  border-color: color-mix(in srgb, var(--accent) 38%, var(--border));
+  background: color-mix(in srgb, var(--accent-muted) 28%, transparent);
+}
+
+.flow-proposed-badge {
+  padding: 3px 6px;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border));
+  border-radius: 999px;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent-muted) 46%, transparent);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
 }
 
 .flow-name-stack {
@@ -5802,6 +5823,14 @@ body.is-canvas-capture-exporting .code-detail-render-limit {
   opacity: 0.6;
 }
 
+/* Preserve preview semantics while avoiding blur rasterization during viewport
+   movement. The full glow returns shortly after panning or zooming ends. */
+.canvas-shell.is-viewport-moving .flow-node.is-preview-added,
+.canvas-shell.is-viewport-moving .flow-node.is-preview-modified,
+.canvas-shell.is-viewport-moving .flow-node.is-preview-removed {
+  box-shadow: none !important;
+}
+
 .flow-node.has-policy-violation:not(.is-selected):not(.is-overlapping) {
   border-color: #ff3f5f;
   box-shadow: 0 0 0 3px color-mix(in srgb, #ff3f5f 22%, transparent), 0 0 18px color-mix(in srgb, #ff3f5f 18%, transparent), 0 12px 28px rgb(0 0 0 / 14%);
@@ -6180,6 +6209,19 @@ body.is-canvas-capture-exporting .code-detail-render-limit {
 .archicode-edge-arrowhead.is-preview-removed {
   opacity: 0.6;
   filter: drop-shadow(0 0 3px var(--preview-removed)) drop-shadow(0 0 8px color-mix(in srgb, var(--preview-removed) 60%, transparent));
+}
+
+.canvas-shell.is-viewport-moving .react-flow__edge-path.archicode-edge.is-preview-added,
+.canvas-shell.is-viewport-moving .react-flow__edge-path.archicode-edge.is-preview-modified,
+.canvas-shell.is-viewport-moving .react-flow__edge-path.archicode-edge.is-preview-removed,
+.canvas-shell.is-viewport-moving .archicode-edge-arrowhead.is-preview-added,
+.canvas-shell.is-viewport-moving .archicode-edge-arrowhead.is-preview-modified,
+.canvas-shell.is-viewport-moving .archicode-edge-arrowhead.is-preview-removed {
+  filter: none !important;
+}
+
+.canvas-shell.is-viewport-moving .react-flow__edge-path.archicode-edge {
+  transition: none;
 }
 
 /* HTML edge labels (EdgeLabelRenderer) — always painted above every edge path. */
@@ -12071,6 +12113,16 @@ button.activity-maintenance-indicator {
   -webkit-line-clamp: 2;
 }
 
+.research-auto-approve .ui-switch[data-state="unchecked"] .ui-switch-thumb {
+  background: color-mix(in srgb, var(--text-muted) 14%, var(--surface-muted));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border-strong) 38%, transparent);
+}
+
+.research-auto-approve .ui-switch:disabled .ui-switch-thumb {
+  background: color-mix(in srgb, var(--text-muted) 10%, var(--surface-muted));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--border-strong) 28%, transparent);
+}
+
 @container (max-width: 107px) {
   .research-auto-approve-fit .ui-switch-row {
     gap: 0;
@@ -12988,6 +13040,40 @@ button.activity-maintenance-indicator {
   background: var(--accent-muted);
 }
 
+.research-implementation-approval-explainer {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 9px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  border-radius: 7px;
+  background: color-mix(in srgb, var(--accent-muted) 30%, transparent);
+}
+
+.research-implementation-approval-explainer > svg {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  color: var(--accent);
+}
+
+.research-implementation-approval-explainer > span {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.research-implementation-approval-explainer strong {
+  color: var(--text);
+  font-size: 12px;
+  line-height: 1.3;
+}
+
+.research-implementation-approval-explainer small {
+  color: var(--text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
 .research-change-run-lock {
   display: flex;
   align-items: flex-start;
@@ -13033,6 +13119,39 @@ button.activity-maintenance-indicator {
 
 .research-change-actions {
   flex-wrap: wrap;
+}
+
+.research-change-apply-progress {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--accent) 24%, var(--border));
+  border-radius: 7px;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--accent-muted) 34%, transparent);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.research-change-apply-progress > svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--accent);
+}
+
+.research-change-apply-progress > span {
+  display: grid;
+  gap: 1px;
+}
+
+.research-change-apply-progress strong {
+  color: var(--text);
+  font-size: 12px;
+}
+
+.research-change-apply-progress small {
+  color: var(--text-muted);
 }
 
 .research-queued-messages {
