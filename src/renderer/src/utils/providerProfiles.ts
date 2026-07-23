@@ -1,3 +1,4 @@
+import { t } from "@renderer/i18n";
 import {
   defaultPhaseModelPolicies,
   defaultSubagentModelPolicies,
@@ -9,33 +10,33 @@ export type ProviderSettings = ProjectSettings["providers"][number];
 export type ProviderKind = ProviderSettings["kind"];
 
 export const providerKindOptions: Array<{ value: ProviderKind; label: string }> = [
-  { value: "anthropic-compatible", label: "Anthropic Compatible API" },
-  { value: "openai-compatible", label: "OpenAI Compatible API" },
-  { value: "claude-local", label: "Claude Code CLI" },
-  { value: "codex-local", label: "Codex Local CLI" },
-  { value: "antigravity-local", label: "Google Antigravity CLI" },
-  { value: "grok-local", label: "Grok Build CLI" },
-  { value: "kimi-local", label: "Kimi Code CLI" },
-  { value: "opencode-local", label: "OpenCode Local CLI" }
+  { value: "anthropic-compatible", label: t("Anthropic Compatible API") },
+  { value: "openai-compatible", label: t("OpenAI Compatible API") },
+  { value: "claude-local", label: t("Claude Code CLI") },
+  { value: "codex-local", label: t("Codex Local CLI") },
+  { value: "antigravity-local", label: t("Google Antigravity CLI") },
+  { value: "grok-local", label: t("Grok Build CLI") },
+  { value: "kimi-local", label: t("Kimi Code CLI") },
+  { value: "opencode-local", label: t("OpenCode Local CLI") }
 ];
 
 export const codexLocalCommandAccessHint =
   "Windows needs full access for Codex package installs and registry/cache writes. macOS usually works with workspace write.";
 
 export const codexLocalSandboxOptions: Array<{ value: NonNullable<ProviderSettings["localSandbox"]>; label: string }> = [
-  { value: "read-only", label: "read only" },
-  { value: "workspace-write", label: "workspace write" },
-  { value: "danger-full-access", label: "full access" }
+  { value: "read-only", label: t("read only") },
+  { value: "workspace-write", label: t("workspace write") },
+  { value: "danger-full-access", label: t("full access") }
 ];
 
 export const outputVerbosityOptions: Array<{
   value: "default" | NonNullable<ProviderSettings["outputVerbosity"]>;
   label: string;
 }> = [
-  { value: "default", label: "Model default" },
-  { value: "low", label: "Low" },
-  { value: "medium", label: "Medium" },
-  { value: "high", label: "High" }
+  { value: "default", label: t("Model default") },
+  { value: "low", label: t("Low") },
+  { value: "medium", label: t("Medium") },
+  { value: "high", label: t("High") }
 ];
 
 export function codexLocalSandboxLabel(value?: ProviderSettings["localSandbox"]): string {

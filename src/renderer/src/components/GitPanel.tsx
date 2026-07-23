@@ -1,3 +1,5 @@
+import { formatDateTime } from "@renderer/i18n";
+import { t } from "@renderer/i18n";
 import { Archive, FileDiff, GitBranch, GitCommit, GitPullRequestArrow, Loader2, Plus, RefreshCw, SendHorizontal, Sparkles, Trash2, Undo2 } from "lucide-react";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -31,9 +33,9 @@ function ChangeLineCounts({ change }: { change: GitFileStatus }) {
   const deletions = change.deletions ?? 0;
   if (!additions && !deletions) return null;
   return (
-    <span className="git-line-counts" aria-label={`${additions} lines added, ${deletions} lines removed`}>
-      {additions ? <span className="git-lines-added">+{additions}</span> : null}
-      {deletions ? <span className="git-lines-removed">-{deletions}</span> : null}
+    <span className="git-line-counts" aria-label={t("{{additions}} lines added, {{deletions}} lines removed", { additions: additions, deletions: deletions })}>
+      {additions ? <span className="git-lines-added">{t("+ {{additions}}", { additions: additions })}</span> : null}
+      {deletions ? <span className="git-lines-removed">{t("- {{deletions}}", { deletions: deletions })}</span> : null}
     </span>
   );
 }
@@ -213,36 +215,36 @@ export function GitPanel() {
   return (
     <DialogRoot open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
-        <IconButton title="Open Git" className="toolbar-git-button">
+        <IconButton title={t("Open Git")} className="toolbar-git-button">
           <GitBranch size={16} />
           {changedCount ? <span className="toolbar-git-count">{changedCount}</span> : null}
         </IconButton>
       </DialogTrigger>
       <DialogContent
-        title="Git"
-        description="Basic Git controls for local project work. Use your Git client or terminal for advanced flows such as remotes, merge, rebase, conflict resolution, tags, and stashes."
+        title={t("Git")}
+        description={t("Basic Git controls for local project work. Use your Git client or terminal for advanced flows such as remotes, merge, rebase, conflict resolution, tags, and stashes.")}
         className={gitStatus?.isRepo ? "git-dialog is-populated" : "git-dialog"}
         draggable
         resizable
       >
         {!rootPath ? (
-          <strong>No project open.</strong>
+          <strong>{t("No project open.")}</strong>
         ) : !gitStatus?.isRepo ? (
           <div className="git-empty-state">
-            <strong>No Git repository found.</strong>
+            <strong>{t("No Git repository found.")}</strong>
             <p>{noRepoMessage}</p>
             <div className="git-empty-actions">
-              <Tooltip content={canInitializeGit ? initGitHelp : "Restart ArchiCode to load the local Git initialization bridge for this app window."}>
+              <Tooltip content={canInitializeGit ? initGitHelp : t("Restart ArchiCode to load the local Git initialization bridge for this app window.")}>
                 <span className="git-empty-action">
                   <Button type="button" variant="primary" onClick={() => void initializeGitRepository()} disabled={gitBusy || !canInitializeGit}>
                     <GitBranch size={14} />
-                    <span>Initialize local Git</span>
+                    <span>{t("Initialize local Git")}</span>
                   </Button>
                 </span>
               </Tooltip>
               <Button type="button" onClick={() => void refreshGitStatus()} disabled={gitBusy}>
                 <RefreshCw size={14} />
-                <span>Check again</span>
+                <span>{t("Check again")}</span>
               </Button>
             </div>
           </div>
@@ -250,29 +252,29 @@ export function GitPanel() {
           <div className="git-panel">
             <section className="git-summary-row">
               <div>
-                <span className="ui-eyebrow">Branch</span>
+                <span className="ui-eyebrow">{t("Branch")}</span>
                 <strong>{currentBranch}</strong>
                 {gitStatus.upstream ? <small>{gitStatus.upstream}</small> : null}
               </div>
               <div className="git-summary-badges">
-                <Badge>{changedCount} changed</Badge>
+                <Badge>{t("{{changedCount}} changed", { changedCount: changedCount })}</Badge>
                 <Tooltip content={gitScopeHelp}>
                   <span>
-                    <Badge>basic Git</Badge>
+                    <Badge>{t("basic Git")}</Badge>
                   </span>
                 </Tooltip>
-                {gitStatus.ahead ? <Badge tone="accent">ahead {gitStatus.ahead}</Badge> : null}
-                {gitStatus.behind ? <Badge tone="warning">behind {gitStatus.behind}</Badge> : null}
+                {gitStatus.ahead ? <Badge tone="accent">{t("ahead {{ahead}}", { ahead: gitStatus.ahead })}</Badge> : null}
+                {gitStatus.behind ? <Badge tone="warning">{t("behind {{behind}}", { behind: gitStatus.behind })}</Badge> : null}
               </div>
             </section>
 
             {gitStatus.merging ? (
               <section className="git-merge-banner">
-                <strong>Merge in progress</strong>
+                <strong>{t("Merge in progress")}</strong>
                 <p>
                   {changedFiles.some(isConflictedGitFileStatus)
-                    ? "Some files still have unresolved conflicts (marked below). Resolve them in your Git client, terminal, or ask Solomon — Merge Arbiter through Research chat, then commit here to finish the merge."
-                    : "All conflicts are resolved and staged. Commit below to finish the merge."}
+                    ? t("Some files still have unresolved conflicts (marked below). Resolve them in your Git client, terminal, or ask Solomon — Merge Arbiter through Research chat, then commit here to finish the merge.")
+                    : t("All conflicts are resolved and staged. Commit below to finish the merge.")}
                 </p>
               </section>
             ) : null}
@@ -280,37 +282,37 @@ export function GitPanel() {
             <section className="git-action-grid">
               <Button type="button" size="sm" onClick={() => void refreshGitStatus()} disabled={gitBusy}>
                 <RefreshCw size={15} />
-                <span>Refresh</span>
+                <span>{t("Refresh")}</span>
               </Button>
               <Button type="button" size="sm" onClick={() => void runGitOperation("pull")} disabled={gitBusy}>
                 <GitPullRequestArrow size={15} />
-                <span>Pull</span>
+                <span>{t("Pull")}</span>
               </Button>
               <Button type="button" size="sm" onClick={() => void runGitOperation("push")} disabled={gitBusy}>
                 <SendHorizontal size={15} />
-                <span>Push</span>
+                <span>{t("Push")}</span>
               </Button>
               <Button type="button" size="sm" onClick={() => toggleGitTool("switch")} disabled={!branchOptions.length}>
                 <GitBranch size={15} />
-                <span>Switch</span>
+                <span>{t("Switch")}</span>
               </Button>
               <Button type="button" size="sm" onClick={() => toggleGitTool("create")}>
                 <Plus size={15} />
-                <span>Branch</span>
+                <span>{t("Branch")}</span>
               </Button>
               <Button type="button" size="sm" onClick={() => toggleGitTool("stash")}>
                 <Archive size={15} />
-                <span>Stashes {stashes.length ? `(${stashes.length})` : ""}</span>
+                <span>{t("Stashes {{value1}}", { value1: stashes.length ? `(${stashes.length})` : "" })}</span>
               </Button>
               <Button type="button" size="sm" variant="danger" onClick={confirmDiscardChanges} disabled={!canDiscardChanges}>
                 <Trash2 size={15} />
-                <span>Disregard changes</span>
+                <span>{t("Disregard changes")}</span>
               </Button>
             </section>
 
             {activeGitTool === "switch" && branchOptions.length ? (
               <section className="git-branch-box">
-                <Field label="Switch branch" hint="Only local branches are shown. Branch changes reload the project data from disk. Merge, rebase, resolve conflicts, and manage remotes in your Git client or terminal.">
+                <Field label={t("Switch branch")} hint={t("Only local branches are shown. Branch changes reload the project data from disk. Merge, rebase, resolve conflicts, and manage remotes in your Git client or terminal.")}>
                   <div className="git-branch-row">
                     <Select value={branchDraft} onValueChange={setBranchDraft} options={branchOptions} />
                     <Button
@@ -319,7 +321,7 @@ export function GitPanel() {
                       disabled={gitBusy || !branchDraft || branchDraft === gitStatus.currentBranch}
                     >
                       <GitBranch size={14} />
-                      <span>Switch</span>
+                      <span>{t("Switch")}</span>
                     </Button>
                   </div>
                 </Field>
@@ -328,12 +330,12 @@ export function GitPanel() {
 
             {activeGitTool === "create" ? (
               <section className="git-branch-box">
-                <Field label="Create branch">
+                <Field label={t("Create branch")}>
                   <div className="git-branch-row">
                     <TextInput
                       value={newBranchName}
                       onChange={(event) => setNewBranchName(event.target.value)}
-                      placeholder="feature/my-change"
+                      placeholder={t("feature/my-change")}
                       disabled={gitBusy}
                     />
                     <Button
@@ -347,7 +349,7 @@ export function GitPanel() {
                       disabled={gitBusy || !newBranchName.trim()}
                     >
                       <Plus size={14} />
-                      <span>Create</span>
+                      <span>{t("Create")}</span>
                     </Button>
                   </div>
                 </Field>
@@ -357,7 +359,7 @@ export function GitPanel() {
             {activeGitTool === "stash" ? (
               <section className="git-stash-box">
                 <div className="git-section-head">
-                  <span className="ui-eyebrow">Stashes</span>
+                  <span className="ui-eyebrow">{t("Stashes")}</span>
                   <div className="git-stash-head-actions">
                     <Badge>{stashes.length}</Badge>
                   </div>
@@ -366,14 +368,14 @@ export function GitPanel() {
                   <TextInput
                     value={stashName}
                     onChange={(event) => setStashName(event.target.value)}
-                    placeholder="Name this stash"
+                    placeholder={t("Name this stash")}
                     disabled={gitBusy || !canUseStash}
                   />
-                  <Tooltip content={canUseStash ? "Stash current uncommitted changes." : "Restart ArchiCode to load Git stash support in this app window."}>
+                  <Tooltip content={canUseStash ? t("Stash current uncommitted changes.") : t("Restart ArchiCode to load Git stash support in this app window.")}>
                     <span className="git-stash-action-wrap">
                       <Button type="button" size="sm" onClick={() => void runNamedStash()} disabled={!canStashChanges || !stashName.trim()}>
                         <Archive size={14} />
-                        <span>{pendingStashBranch ? "Stash and switch" : "Stash changes"}</span>
+                        <span>{pendingStashBranch ? t("Stash and switch") : t("Stash changes")}</span>
                       </Button>
                     </span>
                   </Tooltip>
@@ -387,12 +389,12 @@ export function GitPanel() {
                         setStashName("ArchiCode manual stash");
                       }}
                     >
-                      <span>Cancel switch</span>
+                      <span>{t("Cancel switch")}</span>
                     </Button>
                   ) : null}
                 </div>
                 {pendingStashBranch ? (
-                  <small>Stash these changes before switching to {pendingStashBranch}.</small>
+                  <small>{t("Stash these changes before switching to {{pendingStashBranch}}.", { pendingStashBranch: pendingStashBranch })}</small>
                 ) : null}
                 {stashes.length ? (
                   <div className="git-stash-list">
@@ -400,13 +402,13 @@ export function GitPanel() {
                       <article key={stash.ref} className="git-stash-row">
                         <div>
                           <strong>{stash.ref}</strong>
-                          <small>{stash.message} · {stash.relativeTime}</small>
+                          <small>{t("{{message}} · {{relativeTime}}", { message: stash.message, relativeTime: stash.relativeTime })}</small>
                         </div>
-                        <Tooltip content={canUseStash ? "Apply and remove this stash." : "Restart ArchiCode to load Git stash support in this app window."}>
+                        <Tooltip content={canUseStash ? t("Apply and remove this stash.") : t("Restart ArchiCode to load Git stash support in this app window.")}>
                           <span className="git-stash-action-wrap">
                             <Button type="button" size="sm" onClick={() => void popGitStash(stash.ref)} disabled={gitBusy || !canUseStash}>
                               <Undo2 size={14} />
-                              <span>Pop</span>
+                              <span>{t("Pop")}</span>
                             </Button>
                           </span>
                         </Tooltip>
@@ -414,16 +416,16 @@ export function GitPanel() {
                     ))}
                   </div>
                 ) : (
-                  <small>No stashes yet.</small>
+                  <small>{t("No stashes yet.")}</small>
                 )}
               </section>
             ) : null}
 
             <section className="git-commit-box">
               <div className="git-section-head">
-                <span className="ui-eyebrow">Commit</span>
+                <span className="ui-eyebrow">{t("Commit")}</span>
                 <Button type="button" size="sm" onClick={() => setSelectedFiles(changedFiles.map((change) => change.path))} disabled={!changedFiles.length}>
-                  <span>Select all</span>
+                  <span>{t("Select all")}</span>
                 </Button>
               </div>
               <ScrollArea className="git-change-scroll">
@@ -444,7 +446,7 @@ export function GitPanel() {
                           <button
                             type="button"
                             className="git-conflict-badge-button"
-                            title="Ask Research chat to check this merge conflict"
+                            title={t("Ask Research chat to check this merge conflict")}
                             onClick={() => askResearchAboutConflict()}
                           >
                             <Badge tone="warning">{statusText(change)}</Badge>
@@ -453,7 +455,7 @@ export function GitPanel() {
                           <Badge tone={change.index === "?" ? "warning" : "neutral"}>{statusText(change)}</Badge>
                         )}
                         <IconButton
-                          title={isDiffOpen ? "Hide diff" : "View diff"}
+                          title={isDiffOpen ? t("Hide diff") : t("View diff")}
                           className={isDiffOpen ? "git-diff-toggle is-active" : "git-diff-toggle"}
                           onClick={(event) => {
                             event.preventDefault();
@@ -467,7 +469,7 @@ export function GitPanel() {
                       {isDiffOpen ? (
                         <div className="git-diff-preview">
                           {diffLoadingPath === change.path ? (
-                            <small>Loading diff...</small>
+                            <small>{t("Loading diff...")}</small>
                           ) : diffLines.length ? (
                             <pre className="diff-view">
                               {diffLines.map((line, index) => (
@@ -475,20 +477,20 @@ export function GitPanel() {
                               ))}
                             </pre>
                           ) : (
-                            <small>No tracked Git diff is available for this file.</small>
+                            <small>{t("No tracked Git diff is available for this file.")}</small>
                           )}
                         </div>
                       ) : null}
                     </Fragment>
                   );
-                }) : <strong>No uncommitted changes.</strong>}
+                }) : <strong>{t("No uncommitted changes.")}</strong>}
               </ScrollArea>
               <Field
-                label="Commit message"
+                label={t("Commit message")}
                 action={
                   <IconButton
                     className="inspector-field-enhance-button"
-                    title={commitMessageFiles.length ? "Write a commit message from the diff" : "Select changed files first"}
+                    title={commitMessageFiles.length ? t("Write a commit message from the diff") : t("Select changed files first")}
                     disabled={!canGenerateCommitMessage}
                     onClick={() => void requestCommitMessage()}
                   >
@@ -499,7 +501,7 @@ export function GitPanel() {
                 <TextArea
                   value={commitMessage}
                   onChange={(event) => setCommitMessage(event.target.value)}
-                  placeholder="Describe this change"
+                  placeholder={t("Describe this change")}
                 />
               </Field>
               <Button
@@ -512,31 +514,31 @@ export function GitPanel() {
                 disabled={!canCommit}
               >
                 <GitCommit size={16} />
-                <span>Stage selected and commit</span>
+                <span>{t("Stage selected and commit")}</span>
               </Button>
             </section>
 
             <section className="git-dialog-log">
-              <span className="ui-eyebrow">Latest output</span>
+              <span className="ui-eyebrow">{t("Latest output")}</span>
               {gitLogs[0] ? (
-                <pre>{[gitLogs[0].command, gitLogs[0].stdout, gitLogs[0].stderr].filter(Boolean).join("\n") || "No output."}</pre>
+                <pre>{[gitLogs[0].command, gitLogs[0].stdout, gitLogs[0].stderr].filter(Boolean).join("\n") || t("No output.")}</pre>
               ) : (
-                <small>No Git operations run this session.</small>
+                <small>{t("No Git operations run this session.")}</small>
               )}
             </section>
 
             <section className="git-history-box">
-              <span className="ui-eyebrow">Commit history</span>
+              <span className="ui-eyebrow">{t("Commit history")}</span>
               <ScrollArea className="git-history-scroll">
                 {recentCommits.length ? recentCommits.map((commit) => (
                   <article key={commit.hash} className="git-history-row">
                     <code>{commit.shortHash}</code>
                     <div>
                       <strong>{commit.subject}</strong>
-                      <small>{commit.authorName} · {new Date(commit.authoredAt).toLocaleString()}</small>
+                      <small>{t("{{authorName}} · {{value2}}", { authorName: commit.authorName, value2: formatDateTime(new Date(commit.authoredAt)) })}</small>
                     </div>
                   </article>
-                )) : <strong>No commits yet.</strong>}
+                )) : <strong>{t("No commits yet.")}</strong>}
               </ScrollArea>
             </section>
           </div>

@@ -1,3 +1,4 @@
+import { t } from "@renderer/i18n";
 import {
   Background,
   ConnectionMode,
@@ -385,7 +386,7 @@ function visualQaCodeKnowledgeSnapshot(flow: Flow | null): CodeKnowledgeSnapshot
   const fileNodes = flow.nodes.slice(0, 48).map((node) => ({
     id: `preview-file-${node.id}`,
     kind: "file" as const,
-    label: `${node.title.replace(/\s+/g, "")}.ts`,
+    label: t("{{value1}}.ts", { value1: node.title.replace(/\s+/g, "") }),
     path: `src/${node.type}/${node.title.replace(/\s+/g, "")}.ts`,
     language: "typescript",
     role: "production",
@@ -1169,7 +1170,7 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
       const detail = progress.itemsDone !== undefined && progress.itemsTotal !== undefined
         ? ` · ${progress.itemsDone}/${progress.itemsTotal}`
         : "";
-      setKnowledgeRefreshState({ status: "refreshing", label: `${progress.label}${detail}` });
+      setKnowledgeRefreshState({ status: "refreshing", label: t("{{label}}{{detail}}", { label: progress.label, detail: detail }) });
     });
   }, [bundle?.rootPath]);
 
@@ -1209,7 +1210,7 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
 
   const refreshKnowledgeEvidence = useCallback(() => {
     if (!bundle?.rootPath || !flow || !window.archicode?.refreshGraphEvidence) return;
-    setKnowledgeRefreshState({ status: "refreshing", label: "Starting deterministic relationship analysis…" });
+    setKnowledgeRefreshState({ status: "refreshing", label: t("Starting deterministic relationship analysis…") });
     void window.archicode.refreshGraphEvidence(bundle.rootPath, flow.id).then(async (result) => {
       await reload();
       setKnowledgeRefreshState({
@@ -1672,7 +1673,7 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
       target: connection.target,
       sourceHandle: connection.sourceHandle ?? undefined,
       targetHandle: connection.targetHandle ?? undefined,
-      label: "relates"
+      label: t("relates")
     };
 
     await saveFlow({
@@ -2090,7 +2091,7 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
       ref={canvasRef}
       className={historicalInspection ? "canvas-shell is-historical" : "canvas-shell"}
       style={canvasStyle}
-      aria-label="Architecture flow canvas"
+      aria-label={t("Architecture flow canvas")}
       onPointerEnter={(event) => {
         lastCanvasPointerRef.current = { x: event.clientX, y: event.clientY };
       }}
@@ -2116,12 +2117,12 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
         }
       }}
     >
-      {historicalInspection ? <div className="canvas-historical-watermark" aria-hidden="true">HISTORICAL · {historicalInspection.entry.shortCommit}</div> : null}
+      {historicalInspection ? <div className="canvas-historical-watermark" aria-hidden="true">{t("HISTORICAL · {{shortCommit}}", { shortCommit: historicalInspection.entry.shortCommit })}</div> : null}
       {dragSelectionStyle ? <div className="canvas-drag-selection" style={dragSelectionStyle} aria-hidden="true" /> : null}
       {!knowledgeMapVisible && scopeBreadcrumb.length ? (
         <nav
           className={`canvas-scope-breadcrumb${canvas3dVisible ? " is-3d" : ""}`}
-          aria-label="Current flow scope"
+          aria-label={t("Current flow scope")}
         >
           {scopeBreadcrumb.map((item, index) => {
             const isCurrent = index === scopeBreadcrumb.length - 1;
@@ -2131,7 +2132,7 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
                 {isCurrent ? (
                   <strong title={item.name}>{item.name}</strong>
                 ) : (
-                  <button type="button" title={`Open ${item.name}`} onClick={() => setActiveSubflow(item.id)}>{item.name}</button>
+                  <button type="button" title={t("Open {{name}}", { name: item.name })} onClick={() => setActiveSubflow(item.id)}>{item.name}</button>
                 )}
               </span>
             );
@@ -2141,18 +2142,18 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
       {graphPreview ? (
         <div className="graph-preview-badge" role="status">
           <Eye size={14} aria-hidden="true" />
-          <span>Preview</span>
+          <span>{t("Preview")}</span>
           {graphChangePreview ? (
             <span className="graph-preview-badge-stats">
-              {graphChangePreview.stats.added ? <span className="is-added">+{graphChangePreview.stats.added}</span> : null}
-              {graphChangePreview.stats.modified ? <span className="is-modified">~{graphChangePreview.stats.modified}</span> : null}
-              {graphChangePreview.stats.removed ? <span className="is-removed">−{graphChangePreview.stats.removed}</span> : null}
+              {graphChangePreview.stats.added ? <span className="is-added">{t("+ {{added}}", { added: graphChangePreview.stats.added })}</span> : null}
+              {graphChangePreview.stats.modified ? <span className="is-modified">{t("~ {{modified}}", { modified: graphChangePreview.stats.modified })}</span> : null}
+              {graphChangePreview.stats.removed ? <span className="is-removed">{t("− {{removed}}", { removed: graphChangePreview.stats.removed })}</span> : null}
               {!graphChangePreview.stats.added && !graphChangePreview.stats.modified && !graphChangePreview.stats.removed
-                ? <span className="graph-preview-badge-empty">no changes here</span>
+                ? <span className="graph-preview-badge-empty">{t("no changes here")}</span>
                 : null}
             </span>
           ) : null}
-          <button type="button" className="graph-preview-badge-close" title="Exit preview" aria-label="Exit preview" onClick={hideGraphChangeSetPreview}>
+          <button type="button" className="graph-preview-badge-close" title={t("Exit preview")} aria-label={t("Exit preview")} onClick={hideGraphChangeSetPreview}>
             <X size={13} />
           </button>
         </div>
@@ -2160,8 +2161,8 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
       <button
         type="button"
         className="canvas-minimap-toggle"
-        title={minimapVisible ? "Hide minimap" : "Show minimap"}
-        aria-label={minimapVisible ? "Hide minimap" : "Show minimap"}
+        title={minimapVisible ? t("Hide minimap") : t("Show minimap")}
+        aria-label={minimapVisible ? t("Hide minimap") : t("Show minimap")}
         aria-pressed={minimapVisible}
         onClick={toggleMinimap}
       >
@@ -2170,8 +2171,8 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
       <button
         type="button"
         className={`canvas-3d-toggle${canvas3dVisible ? " is-active" : ""}`}
-        title={canvas3dVisible ? "Show editable 2D canvas" : "Show read-only 3D flow"}
-        aria-label={canvas3dVisible ? "Show editable 2D canvas" : "Show read-only 3D flow"}
+        title={canvas3dVisible ? t("Show editable 2D canvas") : t("Show read-only 3D flow")}
+        aria-label={canvas3dVisible ? t("Show editable 2D canvas") : t("Show read-only 3D flow")}
         aria-pressed={canvas3dVisible}
         onClick={toggleCanvas3d}
       >
@@ -2180,8 +2181,8 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
       <button
         type="button"
         className={`canvas-knowledge-toggle${knowledgeMapVisible ? " is-active" : ""}`}
-        title={knowledgeMapVisible ? "Show editable 2D canvas" : "Show architecture lens map"}
-        aria-label={knowledgeMapVisible ? "Show editable 2D canvas" : "Show architecture lens map"}
+        title={knowledgeMapVisible ? t("Show editable 2D canvas") : t("Show architecture lens map")}
+        aria-label={knowledgeMapVisible ? t("Show editable 2D canvas") : t("Show architecture lens map")}
         aria-pressed={knowledgeMapVisible}
         onClick={toggleKnowledgeMap}
       >
@@ -2332,7 +2333,7 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
                       setDraggingGroupId(null);
                       groupDragRef.current = null;
                     }}
-                    title={`Drag to move ${groupBox.name} or click to select all ${groupBox.memberCount} nodes`}
+                    title={t("Drag to move {{name}} or click to select all {{memberCount}} nodes", { name: groupBox.name, memberCount: groupBox.memberCount })}
                   >
                     <span className="flow-group-label-name">{groupBox.name}</span>
                     <small>{groupBox.memberCount}</small>
@@ -2345,12 +2346,12 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
           {policyViolations.length ? (
             <Panel position="bottom-right" className={`architecture-policy-overlay${minimapVisible ? " has-minimap" : ""}`}>
               {policyIssuesOpen ? (
-                <section className="architecture-policy-issues" aria-label="Architecture policy violations">
+                <section className="architecture-policy-issues" aria-label={t("Architecture policy violations")}>
                   <div className="architecture-policy-issues-heading">
                     <AlertTriangle size={17} aria-hidden="true" />
-                    <strong>{policyViolations.length} architecture issue{policyViolations.length === 1 ? "" : "s"}</strong>
-                    <small>deterministic</small>
-                    <button type="button" className="architecture-policy-issues-close" aria-label="Collapse architecture issues" onClick={() => setPolicyIssuesOpen(false)}>
+                    <strong>{t("{{length}} architecture issue {{value2}}", { length: policyViolations.length, value2: policyViolations.length === 1 ? "" : "s" })}</strong>
+                    <small>{t("deterministic")}</small>
+                    <button type="button" className="architecture-policy-issues-close" aria-label={t("Collapse architecture issues")} onClick={() => setPolicyIssuesOpen(false)}>
                       <X size={15} aria-hidden="true" />
                     </button>
                   </div>
@@ -2361,29 +2362,29 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
                         <article key={violation.id}>
                           <div className="architecture-policy-issue-copy">
                             <span>{violation.policyTitle}</span>
-                            <small>{violation.source.path}{violation.source.line ? `:${violation.source.line}` : ""}</small>
+                            <small>{t("{{path}} {{value2}}", { path: violation.source.path, value2: violation.source.line ? `:${violation.source.line}` : "" })}</small>
                           </div>
                           <div className="architecture-policy-issue-actions">
                             <button
                               type="button"
-                              title="Explain this violation and suggest resolution in Research chat"
+                              title={t("Explain this violation and suggest resolution in Research chat")}
                               onClick={() => startViolationExplanation([violation])}
                             >
                               <CircleHelp size={13} aria-hidden="true" />
-                              <span>Explain</span>
+                              <span>{t("Explain")}</span>
                             </button>
                             <button type="button" onClick={() => openPolicyViolationSource(violation)}>
                               {violation.source.entityKind === "node" ? <Box size={13} aria-hidden="true" /> : <FileCode2 size={13} aria-hidden="true" />}
-                              <span>{violation.source.entityKind === "node" ? "View node" : "View file"}</span>
+                              <span>{violation.source.entityKind === "node" ? t("View node") : t("View file")}</span>
                             </button>
                             <button
                               type="button"
                               disabled={!ruleTarget}
-                              title={ruleTarget ? undefined : "This policy is not attached to a graph node."}
+                              title={ruleTarget ? undefined : t("This policy is not attached to a graph node.")}
                               onClick={() => openPolicyViolationRule(violation)}
                             >
                               <ClipboardList size={13} aria-hidden="true" />
-                              <span>View rule</span>
+                              <span>{t("View rule")}</span>
                             </button>
                           </div>
                         </article>
@@ -2392,11 +2393,11 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
                   </div>
                 </section>
               ) : (
-                <Tooltip content={`${policyViolations.length} deterministic architecture issue${policyViolations.length === 1 ? "" : "s"}. Click to review all.`}>
+                <Tooltip content={t("{{length}} deterministic architecture issue {{value2}}. Click to review all.", { length: policyViolations.length, value2: policyViolations.length === 1 ? "" : "s" })}>
                   <button
                     type="button"
                     className="architecture-policy-trigger"
-                    aria-label={`Show ${policyViolations.length} architecture issue${policyViolations.length === 1 ? "" : "s"}`}
+                    aria-label={t("Show {{length}} architecture issue {{value2}}", { length: policyViolations.length, value2: policyViolations.length === 1 ? "" : "s" })}
                     aria-expanded="false"
                     onClick={() => setPolicyIssuesOpen(true)}
                   >
@@ -2434,11 +2435,11 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
                   <span>{captureStatus.message}</span>
                 </div>
               ) : null}
-              <Tooltip content="Capture visible canvas">
+              <Tooltip content={t("Capture visible canvas")}>
                 <button
                   type="button"
                   className="canvas-capture-button"
-                  aria-label="Capture visible canvas"
+                  aria-label={t("Capture visible canvas")}
                   disabled={captureBusy}
                   onClick={() => void captureCanvasViewport()}
                 >
@@ -2450,14 +2451,14 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
           {currentCanvasZoom < nodeDetailZoomThreshold && visibleNodes.length > 0 ? (
             <Panel position="bottom-center" className="canvas-node-detail-hint" role="status">
               <ZoomIn size={14} aria-hidden="true" />
-              <span>Zoom in to see node details</span>
+              <span>{t("Zoom in to see node details")}</span>
             </Panel>
           ) : null}
           <Controls position="bottom-left" showFitView={false} showInteractive={false}>
-            <ControlButton onClick={fitVisibleNodes} title="Fit view" aria-label="Fit view">
+            <ControlButton onClick={fitVisibleNodes} title={t("Fit view")} aria-label={t("Fit view")}>
               <CircleDot className="canvas-fit-view-icon" size={13} />
             </ControlButton>
-            <ControlButton onClick={toggleFocusMode} title="Toggle full screen mode" aria-label="Toggle full screen mode">
+            <ControlButton onClick={toggleFocusMode} title={t("Toggle full screen mode")} aria-label={t("Toggle full screen mode")}>
               <Maximize2 size={15} />
             </ControlButton>
           </Controls>
@@ -2468,13 +2469,13 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
           className="node-context-menu"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           role="menu"
-          aria-label={contextMenu.kind === "node" ? "Node actions" : "Canvas actions"}
+          aria-label={contextMenu.kind === "node" ? t("Node actions") : t("Canvas actions")}
           onClick={(event) => event.stopPropagation()}
           onContextMenu={(event) => event.preventDefault()}
         >
           {contextMenu.kind === "pane" ? (
             <>
-              <span className="context-menu-label">Add node</span>
+              <span className="context-menu-label">{t("Add node")}</span>
               {builtInNodeTypes.map((kind) => (
                 <button key={kind} type="button" role="menuitem" onClick={() => runPaneAddNode(kind, contextMenu.position)}>
                   <Plus size={15} />
@@ -2483,162 +2484,162 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
               ))}
               <button type="button" role="menuitem" onClick={() => runNodeMenuAction(pasteNode)}>
                 <ClipboardList size={15} />
-                <span>Paste node</span>
+                <span>{t("Paste node")}</span>
               </button>
-              <span className="context-menu-label">Acceptance tests</span>
+              <span className="context-menu-label">{t("Acceptance tests")}</span>
               <button
                 type="button"
                 role="menuitem"
                 disabled={eligibleFlowCheckNodeCount === 0}
                 title={eligibleFlowCheckNodeCount === 0
-                  ? "No nodes with acceptance criteria in this flow"
-                  : "Run an AI agent that writes real test files from acceptance criteria for every eligible node in this flow"}
+                  ? t("No nodes with acceptance criteria in this flow")
+                  : t("Run an AI agent that writes real test files from acceptance criteria for every eligible node in this flow")}
                 onClick={runGenerateFlowChecks}
               >
                 <Sparkles size={15} />
-                <span>Generate tests for flow</span>
+                <span>{t("Generate tests for flow")}</span>
               </button>
             </>
           ) : (
             <>
-              <span className="context-menu-label">AI</span>
+              <span className="context-menu-label">{t("AI")}</span>
               <button
                 type="button"
                 role="menuitem"
-                title="Explain the selected node and its relationships in project context"
+                title={t("Explain the selected node and its relationships in project context")}
                 onClick={() => runNodeResearchAction(contextMenu.nodeId, (nodes) => explainNodesPrompt(nodes, flow!.name))}
               >
                 <CircleHelp size={15} />
-                <span>{selectedNodeIdSet.size > 1 ? "Explain Selected Nodes" : "Explain This"}</span>
+                <span>{selectedNodeIdSet.size > 1 ? t("Explain Selected Nodes") : t("Explain This")}</span>
               </button>
               <button
                 type="button"
                 role="menuitem"
-                title="Tag this node in the active research chat so you can ask questions about it"
+                title={t("Tag this node in the active research chat so you can ask questions about it")}
                 onClick={() => runNodeAddToChatAction(contextMenu.nodeId)}
               >
                 <MessageSquare size={15} />
-                <span>{selectedNodeIdSet.size > 1 ? `Add ${selectedNodeIdSet.size} Nodes to Chat` : "Add to Chat"}</span>
+                <span>{selectedNodeIdSet.size > 1 ? t("Add {{size}} Nodes to Chat", { size: selectedNodeIdSet.size }) : t("Add to Chat")}</span>
               </button>
               <button
                 type="button"
                 role="menuitem"
-                title="Start a new research chat scoped to this node's context"
+                title={t("Start a new research chat scoped to this node's context")}
                 onClick={() => runNodeNewChatAction(contextMenu.nodeId)}
               >
                 <Plus size={15} />
-                <span>{selectedNodeIdSet.size > 1 ? "New Multi-Node Chat" : "New Scoped Chat"}</span>
+                <span>{selectedNodeIdSet.size > 1 ? t("New Multi-Node Chat") : t("New Scoped Chat")}</span>
               </button>
               <button
                 type="button"
                 role="menuitem"
-                title="Compare the current codebase against this node's spec, acceptance criteria, and linked detail flow"
+                title={t("Compare the current codebase against this node's spec, acceptance criteria, and linked detail flow")}
                 onClick={() => runNodeResearchAction(contextMenu.nodeId, (nodes) => multiNodeSpecReviewPrompt(nodes, flow!))}
               >
                 <Bot size={15} />
-                <span>{selectedNodeIdSet.size > 1 ? "Review Code Against Specs" : "Review Code Against Spec"}</span>
+                <span>{selectedNodeIdSet.size > 1 ? t("Review Code Against Specs") : t("Review Code Against Spec")}</span>
               </button>
               <button
                 type="button"
                 role="menuitem"
-                title="Report a bug or unexpected behavior related to this node"
+                title={t("Report a bug or unexpected behavior related to this node")}
                 onClick={() => runNodeResearchAction(contextMenu.nodeId, multiNodeBugIssuePrompt)}
               >
                 <Bug size={15} />
-                <span>Report a Bug/Issue</span>
+                <span>{t("Report a Bug/Issue")}</span>
               </button>
               <button
                 type="button"
                 role="menuitem"
-                title="Review the selected node and add missing specification details without splitting it"
+                title={t("Review the selected node and add missing specification details without splitting it")}
                 onClick={() => runNodeResearchAction(contextMenu.nodeId, (nodes) => multiNodeRefinePrompt(nodes, flow!))}
               >
                 <FilePenLine size={15} />
-                <span>{selectedNodeIdSet.size > 1 ? "Refine Selected Nodes" : "Refine Node"}</span>
+                <span>{selectedNodeIdSet.size > 1 ? t("Refine Selected Nodes") : t("Refine Node")}</span>
               </button>
               <button
                 type="button"
                 role="menuitem"
-                title="Add missing detail, then break the selected node into smaller sub-nodes while preserving its overview and relationships"
+                title={t("Add missing detail, then break the selected node into smaller sub-nodes while preserving its overview and relationships")}
                 onClick={() => runNodeResearchAction(contextMenu.nodeId, (nodes) => multiNodeBreakdownPrompt(nodes, flow!))}
               >
                 <GitBranch size={15} />
-                <span>{selectedNodeIdSet.size > 1 ? "Break Down Selected Nodes" : "Break Down Node"}</span>
+                <span>{selectedNodeIdSet.size > 1 ? t("Break Down Selected Nodes") : t("Break Down Node")}</span>
               </button>
               {selectedNodeIdSet.size > 1 ? (
                 <button
                   type="button"
                   role="menuitem"
-                  title="Merge the selected nodes into a single node with unified description and criteria"
+                  title={t("Merge the selected nodes into a single node with unified description and criteria")}
                   onClick={runCombineNodesResearchAction}
                 >
                   <Merge size={15} />
-                  <span>Combine Nodes</span>
+                  <span>{t("Combine Nodes")}</span>
                 </button>
               ) : null}
               {selectedNodeIdSet.size > 1 ? (
                 <>
                   <span className="context-menu-separator" aria-hidden="true" />
-                  <span className="context-menu-label">Arrange</span>
+                  <span className="context-menu-label">{t("Arrange")}</span>
                   <div className="context-submenu">
                     <button type="button" role="menuitem" className="context-submenu-trigger">
                       <AlignLeft size={15} />
-                      <span>Align</span>
+                      <span>{t("Align")}</span>
                       <ChevronRight size={14} className="context-submenu-chevron" />
                     </button>
-                    <div className="context-submenu-content" role="menu" aria-label="Align nodes">
+                    <div className="context-submenu-content" role="menu" aria-label={t("Align nodes")}>
                       <button type="button" role="menuitem" onClick={() => runNodeMenuAction(() => arrangeSelectedNodes("align-left"))}>
                         <AlignLeft size={15} />
-                        <span>Align left</span>
+                        <span>{t("Align left")}</span>
                       </button>
                       <button type="button" role="menuitem" onClick={() => runNodeMenuAction(() => arrangeSelectedNodes("align-center-horizontal"))}>
                         <AlignCenterHorizontal size={15} />
-                        <span>Align centers horizontally</span>
+                        <span>{t("Align centers horizontally")}</span>
                       </button>
                       <button type="button" role="menuitem" onClick={() => runNodeMenuAction(() => arrangeSelectedNodes("align-right"))}>
                         <AlignRight size={15} />
-                        <span>Align right</span>
+                        <span>{t("Align right")}</span>
                       </button>
                       <button type="button" role="menuitem" onClick={() => runNodeMenuAction(() => arrangeSelectedNodes("align-top"))}>
                         <AlignVerticalJustifyStart size={15} />
-                        <span>Align top</span>
+                        <span>{t("Align top")}</span>
                       </button>
                       <button type="button" role="menuitem" onClick={() => runNodeMenuAction(() => arrangeSelectedNodes("align-center-vertical"))}>
                         <AlignCenterVertical size={15} />
-                        <span>Align centers vertically</span>
+                        <span>{t("Align centers vertically")}</span>
                       </button>
                       <button type="button" role="menuitem" onClick={() => runNodeMenuAction(() => arrangeSelectedNodes("align-bottom"))}>
                         <AlignVerticalJustifyEnd size={15} />
-                        <span>Align bottom</span>
+                        <span>{t("Align bottom")}</span>
                       </button>
                     </div>
                   </div>
                   <button type="button" role="menuitem" onClick={() => runNodeMenuAction(() => arrangeSelectedNodes("distribute-horizontal"))}>
                     <AlignVerticalSpaceAround size={15} />
-                    <span>Distribute horizontally</span>
+                    <span>{t("Distribute horizontally")}</span>
                   </button>
                   <button type="button" role="menuitem" onClick={() => runNodeMenuAction(() => arrangeSelectedNodes("distribute-vertical"))}>
                     <AlignHorizontalSpaceAround size={15} />
-                    <span>Distribute vertically</span>
+                    <span>{t("Distribute vertically")}</span>
                   </button>
                 </>
               ) : null}
               <span className="context-menu-separator" aria-hidden="true" />
               <button type="button" role="menuitem" onClick={() => runNodeMenuAction(duplicateSelectedNode)}>
                 <Copy size={15} />
-                <span>{selectedNodeIdSet.size > 1 ? "Duplicate nodes" : "Duplicate node"}</span>
+                <span>{selectedNodeIdSet.size > 1 ? t("Duplicate nodes") : t("Duplicate node")}</span>
               </button>
               <button type="button" role="menuitem" onClick={() => runNodeMenuAction(copySelectedNode)}>
                 <Copy size={15} />
-                <span>{selectedNodeIdSet.size > 1 ? "Copy nodes" : "Copy node"}</span>
+                <span>{selectedNodeIdSet.size > 1 ? t("Copy nodes") : t("Copy node")}</span>
               </button>
               <button type="button" role="menuitem" onClick={() => runNodeMenuAction(cutSelectedNode)}>
                 <Scissors size={15} />
-                <span>{selectedNodeIdSet.size > 1 ? "Cut nodes" : "Cut node"}</span>
+                <span>{selectedNodeIdSet.size > 1 ? t("Cut nodes") : t("Cut node")}</span>
               </button>
               <button type="button" role="menuitem" onClick={() => runNodeMenuAction(pasteNode)}>
                 <ClipboardList size={15} />
-                <span>Paste node</span>
+                <span>{t("Paste node")}</span>
               </button>
               <button
                 type="button"
@@ -2650,7 +2651,7 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
                 }}
               >
                 <Trash2 size={15} />
-                <span>{selectedNodeIdSet.size > 1 ? "Delete nodes" : "Delete node"}</span>
+                <span>{selectedNodeIdSet.size > 1 ? t("Delete nodes") : t("Delete node")}</span>
               </button>
             </>
           )}
@@ -2659,19 +2660,16 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
 
       <DialogRoot open={deleteConfirmOpen} onOpenChange={setDeleteConfirmOpen}>
         <DialogContent
-          title={selectedDeleteNodes.length > 1 ? "Delete selected nodes?" : "Delete node?"}
-          description="This removes the node data and any connected edges from the current flow."
+          title={selectedDeleteNodes.length > 1 ? t("Delete selected nodes?") : t("Delete node?")}
+          description={t("This removes the node data and any connected edges from the current flow.")}
         >
           <div className="confirm-summary">
             <div className="confirm-summary-grid">
-              <span><b>Selection</b>{selectedDeleteNodes.length === 1 ? selectedDeleteNodes[0]?.title ?? "Node" : `${selectedDeleteNodes.length} nodes`}</span>
-              <span><b>Effect</b>Connected edges will be removed too</span>
+              <span><b>{t("Selection")}</b>{selectedDeleteNodes.length === 1 ? selectedDeleteNodes[0]?.title ?? t("Node") : t("{{length}} nodes", { length: selectedDeleteNodes.length })}</span>
+              <span><b>{t("Effect")}</b>{t("Connected edges will be removed too")}</span>
             </div>
             {selectedDeleteNodes.length > 1 ? (
-              <p className="confirm-note">
-                {selectedDeleteNodes.slice(0, 3).map((node) => node.title).join(", ")}
-                {selectedDeleteNodes.length > 3 ? `, and ${selectedDeleteNodes.length - 3} more.` : "."}
-              </p>
+              <p className="confirm-note">{t("{{value1}} {{value2}}", { value1: selectedDeleteNodes.slice(0, 3).map((node) => node.title).join(", "), value2: selectedDeleteNodes.length > 3 ? `, and ${selectedDeleteNodes.length - 3} more.` : "." })}</p>
             ) : null}
           </div>
           <div className="dialog-actions">
@@ -2680,9 +2678,9 @@ export function FlowCanvas({ onNodeSelected }: { onNodeSelected?: () => void }) 
               setDeleteConfirmOpen(false);
             }}>
               <Trash2 size={15} />
-              <span>Delete</span>
+              <span>{t("Delete")}</span>
             </Button>
-            <Button type="button" onClick={() => setDeleteConfirmOpen(false)}>Cancel</Button>
+            <Button type="button" onClick={() => setDeleteConfirmOpen(false)}>{t("Cancel")}</Button>
           </div>
         </DialogContent>
       </DialogRoot>

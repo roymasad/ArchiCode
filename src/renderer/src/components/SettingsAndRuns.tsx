@@ -1,7 +1,9 @@
+import { formatDateTime } from "@renderer/i18n";
+import { t } from "@renderer/i18n";
 import { AlertTriangle, Bot, Check, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, FileDiff, GitBranch, Loader2, MessageSquare, MoreHorizontal, MoveUpRight, Terminal } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import type { ReactNode, WheelEvent as ReactWheelEvent } from "react";
+import type { ReactNode } from "react";
 import type { Artifact, Note, Run } from "@shared/schema";
 import type { ProjectMaintenanceChangedFile } from "@shared/projectMaintenance";
 import { useArchicodeStore } from "../store/useArchicodeStore";
@@ -25,10 +27,10 @@ type SettingsAndRunsProps = {
 };
 
 const optionalActivityTabs = [
-  { value: "plans", label: "Plan", icon: ClipboardList },
-  { value: "diffs", label: "Source Changes", icon: FileDiff },
-  { value: "git", label: "Git", icon: GitBranch },
-  { value: "questions", label: "Questions", icon: MessageSquare }
+  { value: "plans", label: t("Plan"), icon: ClipboardList },
+  { value: "diffs", label: t("Source Changes"), icon: FileDiff },
+  { value: "git", label: t("Git"), icon: GitBranch },
+  { value: "questions", label: t("Questions"), icon: MessageSquare }
 ] as const;
 const optionalActivityTabValues: string[] = optionalActivityTabs.map((tab) => tab.value);
 const defaultActivityTab = "runs";
@@ -65,6 +67,7 @@ export function SettingsAndRuns({ open, height, onToggleOpen, panelAction, showC
   const [maintenance, setMaintenance] = useState<Awaited<ReturnType<typeof window.archicode.getProjectMaintenanceStatus>> | null>(null);
   const [maintenancePopoverOpen, setMaintenancePopoverOpen] = useState(false);
   const [maintenanceTooltipOpen, setMaintenanceTooltipOpen] = useState(false);
+  const activityTabListRef = useRef<HTMLDivElement | null>(null);
 
   const planArtifacts = (bundle?.artifacts ?? []).filter((artifact) => artifact.type === "plan").slice(-8);
   const codeReviewArtifacts = (bundle?.artifacts ?? [])
@@ -116,17 +119,23 @@ export function SettingsAndRuns({ open, height, onToggleOpen, panelAction, showC
     else showOptionalTab(value);
   };
 
-  const scrollActivityTabs = (event: ReactWheelEvent<HTMLDivElement>) => {
-    const tabList = event.currentTarget;
-    const maxScrollLeft = tabList.scrollWidth - tabList.clientWidth;
-    if (maxScrollLeft <= 0) return;
-    const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
-    if (!delta) return;
-    const nextScrollLeft = Math.max(0, Math.min(maxScrollLeft, tabList.scrollLeft + delta));
-    if (nextScrollLeft === tabList.scrollLeft) return;
-    event.preventDefault();
-    tabList.scrollLeft = nextScrollLeft;
-  };
+  useEffect(() => {
+    if (!open) return;
+    const tabList = activityTabListRef.current;
+    if (!tabList) return;
+    const scrollActivityTabs = (event: WheelEvent) => {
+      const maxScrollLeft = tabList.scrollWidth - tabList.clientWidth;
+      if (maxScrollLeft <= 0) return;
+      const delta = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+      if (!delta) return;
+      const nextScrollLeft = Math.max(0, Math.min(maxScrollLeft, tabList.scrollLeft + delta));
+      if (nextScrollLeft === tabList.scrollLeft) return;
+      event.preventDefault();
+      tabList.scrollLeft = nextScrollLeft;
+    };
+    tabList.addEventListener("wheel", scrollActivityTabs, { passive: false });
+    return () => tabList.removeEventListener("wheel", scrollActivityTabs);
+  }, [open]);
 
   useEffect(() => {
     if (!rootPath || !window.archicode?.getProjectMaintenanceStatus) {
@@ -255,12 +264,12 @@ export function SettingsAndRuns({ open, height, onToggleOpen, panelAction, showC
   return (
     <aside
       className={open ? "activity-panel is-open" : "activity-panel"}
-      aria-label="Runs and artifacts"
+      aria-label={t("Runs and artifacts")}
       style={open ? { height } : undefined}
     >
       <div className="activity-panel-header">
         <div>
-          <strong>Activity</strong>
+          <strong>{t("Activity")}</strong>
         </div>
         <div className="activity-summary">
           {maintenance && (maintenance.state === "scheduled" || maintenance.state === "running") ? (
@@ -270,11 +279,11 @@ export function SettingsAndRuns({ open, height, onToggleOpen, panelAction, showC
               </span>
             </Tooltip>
           ) : maintenance?.state === "error" ? (
-            <Tooltip content={`${maintenance.message} ${maintenance.error ?? ""} Click to retry.`}>
+            <Tooltip content={t("{{message}}{{value2}} Click to retry.", { message: maintenance.message, value2: maintenance.error ?? "" })}>
               <button
                 type="button"
                 className="activity-maintenance-indicator is-error"
-                aria-label="Background code-data refresh failed; retry"
+                aria-label={t("Background code-data refresh failed; retry")}
                 onClick={() => rootPath && void window.archicode.retryProjectMaintenance(rootPath).then(setMaintenance)}
               >
                 <AlertTriangle size={15} />
@@ -288,9 +297,9 @@ export function SettingsAndRuns({ open, height, onToggleOpen, panelAction, showC
               }}
               content={(
                 <span className="activity-maintenance-tooltip">
-                  <strong>Code change detected since ArchiCode last analyzed the architecture graph.</strong>
-                  <span>Code Knowledge and the enabled semantic index were refreshed. Graph nodes cannot be changed automatically; they require review.</span>
-                  <span>Click to review the changed files, open them, resync the codebase, or ignore this warning.</span>
+                  <strong>{t("Code change detected since ArchiCode last analyzed the architecture graph.")}</strong>
+                  <span>{t("Code Knowledge and the enabled semantic index were refreshed. Graph nodes cannot be changed automatically; they require review.")}</span>
+                  <span>{t("Click to review the changed files, open them, resync the codebase, or ignore this warning.")}</span>
                 </span>
               )}
             >
@@ -303,7 +312,7 @@ export function SettingsAndRuns({ open, height, onToggleOpen, panelAction, showC
                   }}
                 >
                   <PopoverTrigger asChild>
-                    <button type="button" className="activity-maintenance-indicator is-warning" aria-label="Review files changed since graph analysis">
+                    <button type="button" className="activity-maintenance-indicator is-warning" aria-label={t("Review files changed since graph analysis")}>
                       <AlertTriangle size={15} />
                     </button>
                   </PopoverTrigger>
@@ -317,14 +326,14 @@ export function SettingsAndRuns({ open, height, onToggleOpen, panelAction, showC
                     <div className="activity-maintenance-popover-head">
                       <AlertTriangle size={16} />
                       <div>
-                        <strong>Source changed outside ArchiCode</strong>
-                        <small>The Code Knowledge Map and enabled semantic index are current. The architecture graph was left unchanged.</small>
+                        <strong>{t("Source changed outside ArchiCode")}</strong>
+                        <small>{t("The Code Knowledge Map and enabled semantic index are current. The architecture graph was left unchanged.")}</small>
                       </div>
                     </div>
                     <div className="activity-maintenance-files">
-                      <strong>{maintenance.changedFiles.length} changed file{maintenance.changedFiles.length === 1 ? "" : "s"}</strong>
+                      <strong>{t("{{length}} changed file {{value2}}", { length: maintenance.changedFiles.length, value2: maintenance.changedFiles.length === 1 ? "" : "s" })}</strong>
                       {maintenance.changedFiles.length ? (
-                        <div className="activity-maintenance-file-list" aria-label="Files changed since graph analysis">
+                        <div className="activity-maintenance-file-list" aria-label={t("Files changed since graph analysis")}>
                           {maintenance.changedFiles.map((changedFile) => (
                             <button type="button" key={changedFile.path} onClick={() => void openMaintenanceFile(changedFile)}>
                               <FileDiff size={14} />
@@ -333,12 +342,12 @@ export function SettingsAndRuns({ open, height, onToggleOpen, panelAction, showC
                             </button>
                           ))}
                         </div>
-                      ) : <small>The exact paths were unavailable for this older warning.</small>}
+                      ) : <small>{t("The exact paths were unavailable for this older warning.")}</small>}
                     </div>
-                    <small>Resync compares the architecture graph with current code. Ignore clears this notice without changing the graph.</small>
+                    <small>{t("Resync compares the architecture graph with current code. Ignore clears this notice without changing the graph.")}</small>
                     <div className="activity-maintenance-actions">
-                      <Button type="button" size="sm" variant="secondary" onClick={() => void ignoreMaintenanceWarning()}>Ignore</Button>
-                      <Button type="button" size="sm" onClick={openCodebaseResync}>Resync codebase</Button>
+                      <Button type="button" size="sm" variant="secondary" onClick={() => void ignoreMaintenanceWarning()}>{t("Ignore")}</Button>
+                      <Button type="button" size="sm" onClick={openCodebaseResync}>{t("Resync codebase")}</Button>
                     </div>
                   </PopoverContent>
                 </PopoverRoot>
@@ -346,7 +355,7 @@ export function SettingsAndRuns({ open, height, onToggleOpen, panelAction, showC
             </Tooltip>
           ) : null}
           {panelAction}
-          {runErrors.length ? <Badge tone="danger">{runErrors.length} issues</Badge> : null}
+          {runErrors.length ? <Badge tone="danger">{t("{{length}} issues", { length: runErrors.length })}</Badge> : null}
           {showCollapseControl ? (
             <IconButton title={collapseControlTitle} onClick={onToggleOpen}>
               {open ? <ChevronDown size={16} /> : <ChevronUp size={16} />}
@@ -357,33 +366,29 @@ export function SettingsAndRuns({ open, height, onToggleOpen, panelAction, showC
 
       {open ? (
         <TabsRoot value={activeTab} onValueChange={setPersistedActiveTab} className="activity-tabs">
-          <TabsList className="ui-tabs-list compact activity-tab-list" onWheel={scrollActivityTabs}>
+          <TabsList ref={activityTabListRef} className="ui-tabs-list compact activity-tab-list">
             <TabsTrigger
               value="runs"
               className={queueIsLive ? "is-queue-live" : undefined}
-              aria-label={queueIsLive ? "Queue, active run in progress" : "Queue"}
+              aria-label={queueIsLive ? t("Queue, active run in progress") : t("Queue")}
             >
               <Terminal size={14} />
-              Queue
-              {queueIsLive ? <span className="queue-live-chip" aria-hidden="true"><span className="queue-live-dot" /> Live</span> : null}
+              {t("Queue")}{" "}{queueIsLive ? <span className="queue-live-chip" aria-hidden="true"><span className="queue-live-dot" /> {" "}{t("Live")}</span> : null}
             </TabsTrigger>
             <TabsTrigger
               value="trace"
               className={traceIsLive ? "is-trace-live" : undefined}
-              aria-label={traceIsLive ? "Trace, live output updating" : "Trace"}
+              aria-label={traceIsLive ? t("Trace, live output updating") : t("Trace")}
             >
               <Bot size={14} />
-              Trace
-              {traceIsLive ? <span className="trace-live-chip" aria-hidden="true"><span className="trace-live-dot" /> Live</span> : null}
+              {t("Trace")}{" "}{traceIsLive ? <span className="trace-live-chip" aria-hidden="true"><span className="trace-live-dot" /> {" "}{t("Live")}</span> : null}
             </TabsTrigger>
             <TabsTrigger value="errors">
               <AlertTriangle size={14} />
-              Errors
-            </TabsTrigger>
+              {t("Errors")}{" "}</TabsTrigger>
             <TabsTrigger value="console">
               <Terminal size={14} />
-              Console
-            </TabsTrigger>
+              {t("Console")}{" "}</TabsTrigger>
             {optionalActivityTabs.filter((tab) => visibleOptionalTabs.includes(tab.value)).map(({ value, label, icon: Icon }) => (
               <TabsTrigger key={value} value={value} className="activity-secondary-active-tab">
                 <Icon size={14} />
@@ -393,14 +398,14 @@ export function SettingsAndRuns({ open, height, onToggleOpen, panelAction, showC
             ))}
             <MenuRoot>
               <MenuTrigger asChild>
-                <button type="button" className="activity-more-tabs-trigger" aria-label="More activity views">
+                <button type="button" className="activity-more-tabs-trigger" aria-label={t("More activity views")}>
                   <MoreHorizontal size={15} />
-                  <span>More</span>
+                  <span>{t("More")}</span>
                   {openQuestions.length ? <Badge tone="warning">{openQuestions.length}</Badge> : null}
                 </button>
               </MenuTrigger>
               <MenuContent align="end">
-                <MenuLabel>Review</MenuLabel>
+                <MenuLabel>{t("Review")}</MenuLabel>
                 {optionalActivityTabs.slice(0, 3).map(({ value, label, icon: Icon }) => (
                   <MenuItem key={value} onSelect={() => toggleOptionalTab(value)}>
                     <Check size={14} className={visibleOptionalTabs.includes(value) ? "activity-more-tab-check is-visible" : "activity-more-tab-check"} />
@@ -408,7 +413,7 @@ export function SettingsAndRuns({ open, height, onToggleOpen, panelAction, showC
                   </MenuItem>
                 ))}
                 <MenuSeparator />
-                <MenuLabel>Project</MenuLabel>
+                <MenuLabel>{t("Project")}</MenuLabel>
                 {optionalActivityTabs.slice(3).map(({ value, label, icon: Icon }) => (
                   <MenuItem key={value} onSelect={() => toggleOptionalTab(value)}>
                     <Check size={14} className={visibleOptionalTabs.includes(value) ? "activity-more-tab-check is-visible" : "activity-more-tab-check"} />
@@ -427,12 +432,12 @@ export function SettingsAndRuns({ open, height, onToggleOpen, panelAction, showC
           </TabsContent>
           <TabsContent value="errors" className="activity-tab">
             <div className="record-list compact-records error-records">
-              {runErrors.length === 0 ? <strong>No open run issues.</strong> : null}
+              {runErrors.length === 0 ? <strong>{t("No open run issues.")}</strong> : null}
               {runErrors.map(({ run, classification, title, message, at }) => (
                 <article key={run.id} className="record-card error-record">
                   <div className="record-card-head">
                     <Badge tone={runFailureTone(classification)}>{runFailureStatusLabel(classification)}</Badge>
-                    <small>{at ? new Date(at).toLocaleString() : run.phase}</small>
+                    <small>{at ? formatDateTime(new Date(at)) : run.phase}</small>
                   </div>
                   <strong>{title}</strong>
                   <small>{message}</small>
@@ -447,10 +452,10 @@ export function SettingsAndRuns({ open, height, onToggleOpen, panelAction, showC
                       }}
                     >
                       <Terminal size={14} />
-                      <span>Show in Queue</span>
+                      <span>{t("Show in Queue")}</span>
                     </Button>
                     <Button type="button" size="sm" onClick={() => dismissRunError(run.id)}>
-                      <span>Dismiss</span>
+                      <span>{t("Dismiss")}</span>
                     </Button>
                   </div>
                 </article>
@@ -474,21 +479,21 @@ export function SettingsAndRuns({ open, height, onToggleOpen, panelAction, showC
           </TabsContent>
           <TabsContent value="questions" className="activity-tab">
             <div className="record-list compact-records question-record-list">
-              {openQuestions.length === 0 ? <strong>No open planning questions.</strong> : null}
+              {openQuestions.length === 0 ? <strong>{t("No open planning questions.")}</strong> : null}
               {openQuestions.map((question) => (
                 <article key={question.id} className="record-card question-record-card">
                   <div className="record-card-head">
                     <strong>{nodeTitles.get(question.nodeId) ?? question.nodeId}</strong>
                     <Button type="button" size="sm" variant="ghost" onClick={() => openQuestionTarget(question)}>
                       <MoveUpRight size={14} />
-                      <span>Open</span>
+                      <span>{t("Open")}</span>
                     </Button>
                   </div>
                   <small>{question.body}</small>
                   <TextArea
                     rows={2}
                     value={questionAnswers[question.id] ?? ""}
-                    placeholder="Answer this question"
+                    placeholder={t("Answer this question")}
                     onChange={(event) => setQuestionAnswers((current) => ({
                       ...current,
                       [question.id]: event.target.value
@@ -497,13 +502,13 @@ export function SettingsAndRuns({ open, height, onToggleOpen, panelAction, showC
                   <div className="action-row">
                     <Button type="button" size="sm" variant="primary" disabled={!questionAnswers[question.id]?.trim()} onClick={() => void answerQuestion(question)}>
                       <CheckCircle2 size={14} />
-                      <span>Answer</span>
+                      <span>{t("Answer")}</span>
                     </Button>
                     <Button type="button" size="sm" onClick={() => void letAiDecideQuestion(question)}>
-                      <span>Let AI decide</span>
+                      <span>{t("Let AI decide")}</span>
                     </Button>
                     <Button type="button" size="sm" onClick={() => updateNoteResolved(question.id, true)}>
-                      <span>Dismiss</span>
+                      <span>{t("Dismiss")}</span>
                     </Button>
                   </div>
                 </article>
@@ -558,7 +563,7 @@ function ActivityArtifactPreview({ artifacts, empty }: { artifacts: Artifact[]; 
 
   return (
     <div className="activity-artifact-preview">
-      <div className="activity-artifact-list" aria-label="Artifacts">
+      <div className="activity-artifact-list" aria-label={t("Artifacts")}>
         {[...artifacts].reverse().map((artifact) => (
           <button
             key={artifact.id}

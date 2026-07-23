@@ -1,3 +1,4 @@
+import { t } from "@renderer/i18n";
 import "@xterm/xterm/css/xterm.css";
 
 import { FitAddon } from "@xterm/addon-fit";
@@ -234,7 +235,7 @@ export function ProjectConsole() {
       {
         id,
         revision: 0,
-        title: `Terminal ${current.length + 1}`,
+        title: t("Terminal {{value1}}", { value1: current.length + 1 }),
         status: "Starting terminal..."
       }
     ]);
@@ -332,7 +333,7 @@ export function ProjectConsole() {
       })
       .catch((error) => {
         const message = error instanceof Error ? error.message : String(error);
-        updateTab(id, { exited: true, status: message, title: "Terminal failed" });
+        updateTab(id, { exited: true, status: message, title: t("Terminal failed") });
         terminal.writeln(message);
         schedulePersist();
       });
@@ -385,7 +386,7 @@ export function ProjectConsole() {
       setActiveTabId(activeId);
     } else {
       const id = tabId();
-      setTabs([{ id, revision: 0, title: "Terminal 1", status: "Starting terminal..." }]);
+      setTabs([{ id, revision: 0, title: t("Terminal 1"), status: "Starting terminal..." }]);
       setActiveTabId(id);
     }
     return cleanupAllTerminals;
@@ -435,9 +436,9 @@ export function ProjectConsole() {
       : activeTab?.status ?? "No terminal open.";
 
   return (
-    <section className="project-console" aria-label="Project terminal">
+    <section className="project-console" aria-label={t("Project terminal")}>
       <div className="console-controls-row">
-        <div className="console-tab-strip" role="tablist" aria-label="Terminal tabs">
+        <div className="console-tab-strip" role="tablist" aria-label={t("Terminal tabs")}>
           {tabs.map((tab) => (
             <div key={tab.id} className={tab.id === activeTabId ? "console-tab active" : "console-tab"}>
               <button
@@ -451,9 +452,9 @@ export function ProjectConsole() {
                 <span>{tab.title}</span>
               </button>
               <IconButton
-                aria-label={`Close ${tab.title}`}
+                aria-label={t("Close {{title}}", { title: tab.title })}
                 size="sm"
-                title={`Close ${tab.title}`}
+                title={t("Close {{title}}", { title: tab.title })}
                 onClick={(event) => {
                   event.stopPropagation();
                   closeTab(tab.id);
@@ -463,24 +464,24 @@ export function ProjectConsole() {
               </IconButton>
             </div>
           ))}
-          {!tabs.length ? <span className="console-empty-tab">No terminal open</span> : null}
+          {!tabs.length ? <span className="console-empty-tab">{t("No terminal open")}</span> : null}
         </div>
         <div className="console-toolbar">
           <Button type="button" size="sm" onClick={createTab} disabled={!canUseConsole}>
             <Plus size={14} />
-            <span>New</span>
+            <span>{t("New")}</span>
           </Button>
           <Button type="button" size="sm" onClick={clearActiveTab} disabled={!activeTab}>
             <Trash2 size={14} />
-            <span>Clear</span>
+            <span>{t("Clear")}</span>
           </Button>
           <Button type="button" size="sm" onClick={stopActiveTab} disabled={!activeTab?.sessionId || activeTab.exited}>
             <Square size={14} />
-            <span>Stop</span>
+            <span>{t("Stop")}</span>
           </Button>
           <Button type="button" size="sm" onClick={restartActiveTab} disabled={!activeTab || !canUseConsole}>
             <RotateCcw size={14} />
-            <span>Restart</span>
+            <span>{t("Restart")}</span>
           </Button>
         </div>
       </div>

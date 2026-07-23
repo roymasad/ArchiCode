@@ -1,4 +1,5 @@
 import { defineConfig, loadEnv } from "vite";
+import { resolve } from "node:path";
 
 export default defineConfig(({ mode }) => {
   // Vite returns env-file values without exposing them to client code. Copy
@@ -10,6 +11,12 @@ export default defineConfig(({ mode }) => {
   }
 
   return {
+    resolve: {
+      alias: {
+        "@renderer": resolve(__dirname, "src/renderer/src"),
+        "@shared": resolve(__dirname, "src/shared")
+      }
+    },
     test: {
       // The .live.ts suffix is intentionally outside Vitest's default
       // *.test.* / *.spec.* discovery. This config is the only entrypoint.

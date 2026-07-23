@@ -1,3 +1,4 @@
+import { t } from "@renderer/i18n";
 import { Keyboard, RotateCcw, Search, X } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useArchicodeStore } from "../store/useArchicodeStore";
@@ -102,7 +103,7 @@ export function ShortcutsSettingsTab() {
     const binding = keybindings[descriptor.id as ActionId];
     if (descriptor.reserved) {
       return (
-        <li key={descriptor.id} className="preferences-row is-reserved" aria-label={`${descriptor.label} (universal shortcut, not rebindable)`}>
+        <li key={descriptor.id} className="preferences-row is-reserved" aria-label={t("{{label}}(universal shortcut, not rebindable)", { label: descriptor.label })}>
           <div className="preferences-row-copy">
             <strong>{descriptor.label}</strong>
             <span className="preferences-row-description">{descriptor.description}</span>
@@ -112,7 +113,7 @@ export function ShortcutsSettingsTab() {
               <Keyboard size={14} />
               <span>{formatChord(binding)}</span>
             </span>
-            <span className="preferences-reserved-badge" title="Universal shortcut — not rebindable">Locked</span>
+            <span className="preferences-reserved-badge" title={t("Universal shortcut — not rebindable")}>{t("Locked")}</span>
           </div>
         </li>
       );
@@ -131,7 +132,7 @@ export function ShortcutsSettingsTab() {
             <span className="preferences-row-description">{descriptor.description}</span>
           </div>
           <div className="preferences-row-binding">
-            <Tooltip content="Captured chord">
+            <Tooltip content={t("Captured chord")}>
               <Button ref={captureRef} type="button" size="sm" variant="primary" onClick={() => setDraft({ id: descriptor.id as ActionId, chord: null })}>
                 <Keyboard size={14} />
                 <span>{formatChord(draftChord)}</span>
@@ -139,19 +140,17 @@ export function ShortcutsSettingsTab() {
             </Tooltip>
             <div className="preferences-row-actions">
               <Button type="button" size="sm" variant="success" onClick={applyDraft} disabled={reservedReasonReserved || reservedReason3d}>
-                Apply
-              </Button>
+                {t("Apply")}{" "}</Button>
               <Button type="button" size="sm" variant="ghost" onClick={cancelDraft}>
-                Cancel
-              </Button>
+                {t("Cancel")}{" "}</Button>
             </div>
           </div>
           {reservedReasonReserved ? (
-            <span className="preferences-row-warning is-danger">Reserved by the browser or window manager. Choose a different chord.</span>
+            <span className="preferences-row-warning is-danger">{t("Reserved by the browser or window manager. Choose a different chord.")}</span>
           ) : reservedReason3d ? (
-            <span className="preferences-row-warning is-danger">WASD-style keys are reserved for 3D canvas camera navigation. Choose a different chord.</span>
+            <span className="preferences-row-warning is-danger">{t("WASD-style keys are reserved for 3D canvas camera navigation. Choose a different chord.")}</span>
           ) : hasConflict ? (
-            <span className="preferences-row-warning">Already bound to: {conflictingEntry!.filter((id) => id !== descriptor.id).map((id) => actionById(id)?.label ?? id).join(", ")}. Applying will override.</span>
+            <span className="preferences-row-warning">{t("Already bound to: {{value1}}. Applying will override.", { value1: conflictingEntry!.filter((id) => id !== descriptor.id).map((id) => actionById(id)?.label ?? id).join(", ") })}</span>
           ) : null}
         </li>
       );
@@ -185,17 +184,15 @@ export function ShortcutsSettingsTab() {
               variant="ghost"
               onClick={() => resetOne(descriptor.id as ActionId)}
               disabled={binding && DEFAULT_BINDINGS[descriptor.id as ActionId] && chordKey(binding) === chordKey(DEFAULT_BINDINGS[descriptor.id as ActionId])}
-              title="Reset this binding to its default"
+              title={t("Reset this binding to its default")}
             >
               <RotateCcw size={13} />
-              <span>Reset</span>
+              <span>{t("Reset")}</span>
             </Button>
           </div>
         </div>
         {conflictCount > 0 ? (
-          <span className="preferences-row-warning">
-            Conflicts with {conflictingEntry.filter((id) => id !== descriptor.id).map((id) => actionById(id)?.label ?? id).join(", ")}.
-          </span>
+          <span className="preferences-row-warning">{t("Conflicts with {{value1}}.", { value1: conflictingEntry.filter((id) => id !== descriptor.id).map((id) => actionById(id)?.label ?? id).join(", ") })}</span>
         ) : null}
       </li>
     );
@@ -207,18 +204,18 @@ export function ShortcutsSettingsTab() {
         <Search size={14} />
         <input
           className="ui-input preferences-filter-input"
-          placeholder="Filter actions..."
+          placeholder={t("Filter actions...")}
           value={filter}
           onChange={(event) => setFilter(event.target.value)}
         />
         {filter ? (
-          <IconButton aria-label="Clear filter" title="Clear filter" onClick={() => setFilter("")}>
+          <IconButton aria-label={t("Clear filter")} title={t("Clear filter")} onClick={() => setFilter("")}>
             <X size={14} />
           </IconButton>
         ) : null}
         <Button type="button" size="sm" variant="ghost" onClick={resetAll} disabled={keybindingsBusy}>
           <RotateCcw size={13} />
-          <span>Reset all to defaults</span>
+          <span>{t("Reset all to defaults")}</span>
         </Button>
       </div>
       <div className="preferences-groups">
@@ -231,7 +228,7 @@ export function ShortcutsSettingsTab() {
           </section>
         ))}
         {groupedDescriptors.length === 0 ? (
-          <p className="preferences-empty">No actions match "{filter}".</p>
+          <p className="preferences-empty">{t("No actions match \" {{filter}} \".", { filter: filter })}</p>
         ) : null}
       </div>
     </TabsContent>

@@ -326,7 +326,7 @@ export function generatedTargetProjectAgentInstructions(
   return [
     "# Project Agent Instructions",
     "",
-    `These instructions are for agents changing ${bundle.project.name}, the target project represented by this repository and its ArchiCode graph. They are not instructions for developing the ArchiCode application itself.`,
+    `These instructions are for agents changing ${bundle.project.name}, the target project represented by this repository and its ArchiCode graph.`,
     "",
     "- Keep implementation aligned with this target project's graph, selected node, acceptance criteria, and explicit user requirements.",
     technologyInstruction,
@@ -357,12 +357,18 @@ async function migrateLegacyGeneratedAgentInstructionsWithCommands(
   bundle: Pick<ProjectBundle, "project" | "flows">,
   verifyCommands: string[]
 ): Promise<boolean> {
+  const currentGeneratedInstructions = generatedTargetProjectAgentInstructions(bundle, verifyCommands);
+  const previousGeneratedInstructions = currentGeneratedInstructions.replace(
+    "the target project represented by this repository and its ArchiCode graph.",
+    "the target project represented by this repository and its ArchiCode graph. They are not instructions for developing the ArchiCode application itself."
+  );
   for (const fileName of ["AGENTS.md", "agents.md"]) {
     const fullPath = path.join(projectRoot, fileName);
     if (!(await exists(fullPath))) continue;
     const existingText = await readFile(fullPath, "utf8");
-    if (!isUntouchedLegacyGeneratedAgentInstructions(existingText)) return false;
-    await writeFile(fullPath, `${generatedTargetProjectAgentInstructions(bundle, verifyCommands)}\n`, "utf8");
+    const isPreviousGeneratedInstructions = existingText.trimEnd() === previousGeneratedInstructions.trimEnd();
+    if (!isUntouchedLegacyGeneratedAgentInstructions(existingText) && !isPreviousGeneratedInstructions) return false;
+    await writeFile(fullPath, `${currentGeneratedInstructions}\n`, "utf8");
     return true;
   }
   return false;

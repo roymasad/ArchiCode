@@ -1,3 +1,5 @@
+import { formatDateTime, formatNumber } from "@renderer/i18n";
+import { t } from "@renderer/i18n";
 import { AlertTriangle, CheckCircle2, Clock3, RefreshCw, XCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -42,39 +44,39 @@ function ResyncSummary({ report, flows }: { report: ResyncReport; flows: Array<{
         <div>
           <strong>{resultTitle(report)}</strong>
           <span>{actionable
-            ? "The verified patch was applied; ambiguous user-owned items were preserved for your review."
+            ? t("The verified patch was applied; ambiguous user-owned items were preserved for your review.")
             : report.status === "up-to-date"
-              ? "Repository evidence matches the previous baseline. The graph was not regenerated or rewritten."
-              : "ArchiCode applied the smallest validated patch to the existing map."}</span>
+              ? t("Repository evidence matches the previous baseline. The graph was not regenerated or rewritten.")
+              : t("ArchiCode applied the smallest validated patch to the existing map.")}</span>
         </div>
       </div>
       <div className="resync-summary-grid">
-        <div><span>Map scope</span><strong>{resyncScopeLabel(report.scope, flows)}</strong></div>
-        <div><span>Estimated map accuracy</span><strong>{report.accuracyEstimate.score}% · {report.accuracyEstimate.label}</strong><small>Estimate, not a guarantee</small></div>
-        <div><span>Total time</span><strong>{elapsedLabel(report.durationMs)}</strong></div>
-        <div><span>Repository scope</span><strong>{countDelta(report).toLocaleString()} changed · {report.files.scanned.toLocaleString()} scanned</strong><small>{report.files.parsed.toLocaleString()} parsed in depth</small></div>
-        <div><span>Verified unchanged</span><strong>{patch.verifiedUnchanged.toLocaleString()} graph entities</strong></div>
-        <div><span>Updated</span><strong>{patch.nodesUpdated.toLocaleString()} nodes · {patch.edgesUpdated.toLocaleString()} edges</strong><small>{patch.flowsUpdated.toLocaleString()} flows</small></div>
-        <div><span>Added / removed</span><strong>{(patch.nodesAdded + patch.edgesAdded + patch.flowsAdded).toLocaleString()} / {(patch.nodesRemoved + patch.edgesRemoved).toLocaleString()}</strong></div>
-        <div><span>Needs review</span><strong>{patch.conflicts.length.toLocaleString()} conflicts · {patch.potentialStale.toLocaleString()} potentially stale</strong></div>
-        <div><span>LLM affected-scope review</span><strong>{report.llmReview.affectedEntitiesReviewed.toLocaleString()} entities</strong><small>{report.llmReview.failedCalls.toLocaleString()} failed calls · {report.llmReview.suggestionsRejected.toLocaleString()} unsafe suggestions rejected</small></div>
+        <div><span>{t("Map scope")}</span><strong>{resyncScopeLabel(report.scope, flows)}</strong></div>
+        <div><span>{t("Estimated map accuracy")}</span><strong>{t("{{score}}% · {{label}}", { score: report.accuracyEstimate.score, label: report.accuracyEstimate.label })}</strong><small>{t("Estimate, not a guarantee")}</small></div>
+        <div><span>{t("Total time")}</span><strong>{elapsedLabel(report.durationMs)}</strong></div>
+        <div><span>{t("Repository scope")}</span><strong>{t("{{value1}} changed · {{value2}} scanned", { value1: formatNumber(countDelta(report)), value2: formatNumber(report.files.scanned) })}</strong><small>{t("{{value1}} parsed in depth", { value1: formatNumber(report.files.parsed) })}</small></div>
+        <div><span>{t("Verified unchanged")}</span><strong>{t("{{value1}} graph entities", { value1: formatNumber(patch.verifiedUnchanged) })}</strong></div>
+        <div><span>{t("Updated")}</span><strong>{t("{{value1}} nodes · {{value2}} edges", { value1: formatNumber(patch.nodesUpdated), value2: formatNumber(patch.edgesUpdated) })}</strong><small>{t("{{value1}} flows", { value1: formatNumber(patch.flowsUpdated) })}</small></div>
+        <div><span>{t("Added / removed")}</span><strong>{t("{{value1}} / {{value2}}", { value1: formatNumber((patch.nodesAdded + patch.edgesAdded + patch.flowsAdded)), value2: formatNumber((patch.nodesRemoved + patch.edgesRemoved)) })}</strong></div>
+        <div><span>{t("Needs review")}</span><strong>{t("{{value1}} conflicts · {{value2}} potentially stale", { value1: formatNumber(patch.conflicts.length), value2: formatNumber(patch.potentialStale) })}</strong></div>
+        <div><span>{t("LLM affected-scope review")}</span><strong>{t("{{value1}} entities", { value1: formatNumber(report.llmReview.affectedEntitiesReviewed) })}</strong><small>{t("{{value1}} failed calls · {{value2}} unsafe suggestions rejected", { value1: formatNumber(report.llmReview.failedCalls), value2: formatNumber(report.llmReview.suggestionsRejected) })}</small></div>
       </div>
 
       {patch.conflicts.length || patch.staleItems.length ? (
         <div className="resync-action-items">
-          <strong>Review these preserved items</strong>
+          <strong>{t("Review these preserved items")}</strong>
           <ul>{[...patch.conflicts, ...patch.staleItems].map((conflict) => (
             <li key={conflict.id}>
               <strong>{conflict.title}</strong>
               <span>{conflict.reason}</span>
-              {conflict.disappearedEvidence.length ? <small>Evidence no longer found: {conflict.disappearedEvidence.join(", ")}</small> : null}
+              {conflict.disappearedEvidence.length ? <small>{t("Evidence no longer found: {{value1}}", { value1: conflict.disappearedEvidence.join(", ") })}</small> : null}
             </li>
           ))}</ul>
         </div>
       ) : null}
 
       <details className="resync-technical">
-        <summary>Technical synchronization details</summary>
+        <summary>{t("Technical synchronization details")}</summary>
         <div>
           <p>{report.accuracyEstimate.explanation}</p>
           <ul>
@@ -145,7 +147,7 @@ export function ResyncCodebaseDialog({ open, onOpenChange }: { open: boolean; on
     setNow(Date.now());
     setReport(null);
     setError(null);
-    setProgress({ projectRoot: rootPath, phase: "baseline", label: "Preparing conservative synchronization" });
+    setProgress({ projectRoot: rootPath, phase: "baseline", label: t("Preparing conservative synchronization") });
     try {
       const result = await window.archicode.resyncCodebase({ projectRoot: rootPath, providerId, scope: selectedScope });
       setReport(result.report);
@@ -163,36 +165,36 @@ export function ResyncCodebaseDialog({ open, onOpenChange }: { open: boolean; on
 
   const cancel = async (): Promise<void> => {
     if (!window.archicode?.cancelCodebaseResync) return;
-    setProgress((current) => current ? { ...current, label: "Cancelling synchronization", detail: "No graph or baseline changes will be committed." } : current);
+    setProgress((current) => current ? { ...current, label: t("Cancelling synchronization"), detail: "No graph or baseline changes will be committed." } : current);
     await window.archicode.cancelCodebaseResync(rootPath);
   };
 
   return (
     <DialogRoot open={open} onOpenChange={(next) => { if (!running) onOpenChange(next); }}>
-      <DialogContent className="resync-dialog" title="Resync codebase" description="Update the existing architecture map from verified code changes while preserving truthful graph and user-authored content.">
+      <DialogContent className="resync-dialog" title={t("Resync codebase")} description={t("Update the existing architecture map from verified code changes while preserving truthful graph and user-authored content.")}>
         {!running ? (
-          <section className="resync-scope" aria-label="Resync scope">
+          <section className="resync-scope" aria-label={t("Resync scope")}>
             <div className="resync-scope-heading">
-              <div><strong>Scope</strong><span>Choose which architecture flows may be updated.</span></div>
-              <small>{scopeKind === "project" ? `${flows.length} flow${flows.length === 1 ? "" : "s"}` : `${validSelectedFlowIds.length} selected`}</small>
+              <div><strong>{t("Scope")}</strong><span>{t("Choose which architecture flows may be updated.")}</span></div>
+              <small>{scopeKind === "project" ? t("{{length}} flow {{value2}}", { length: flows.length, value2: flows.length === 1 ? "" : "s" }) : t("{{length}} selected", { length: validSelectedFlowIds.length })}</small>
             </div>
             <div className="resync-scope-options">
               <label className={scopeKind === "project" ? "is-selected" : ""}>
                 <input type="radio" name="resync-scope" checked={scopeKind === "project"} onChange={() => setScopeKind("project")} />
-                <span><strong>Project (all flows)</strong><small>Resync every flow and advance the project-wide evidence baseline.</small></span>
+                <span><strong>{t("Project (all flows)")}</strong><small>{t("Resync every flow and advance the project-wide evidence baseline.")}</small></span>
               </label>
               <label className={scopeKind === "flows" ? "is-selected" : ""}>
                 <input type="radio" name="resync-scope" checked={scopeKind === "flows"} onChange={() => setScopeKind("flows")} />
-                <span><strong>Specific flows</strong><small>Only selected flows may change; other flows keep pending code changes for later.</small></span>
+                <span><strong>{t("Specific flows")}</strong><small>{t("Only selected flows may change; other flows keep pending code changes for later.")}</small></span>
               </label>
             </div>
             {scopeKind === "flows" ? (
               <div className="resync-flow-picker">
                 <div className="resync-flow-picker-toolbar">
-                  <span>Select one or more flows</span>
+                  <span>{t("Select one or more flows")}</span>
                   <div>
-                    <Button type="button" size="sm" variant="secondary" onClick={() => setSelectedFlowIds(flows.map((flow) => flow.id))}>Select all</Button>
-                    <Button type="button" size="sm" variant="secondary" onClick={() => setSelectedFlowIds([])}>Clear</Button>
+                    <Button type="button" size="sm" variant="secondary" onClick={() => setSelectedFlowIds(flows.map((flow) => flow.id))}>{t("Select all")}</Button>
+                    <Button type="button" size="sm" variant="secondary" onClick={() => setSelectedFlowIds([])}>{t("Clear")}</Button>
                   </div>
                 </div>
                 <div className="resync-flow-list">
@@ -207,12 +209,12 @@ export function ResyncCodebaseDialog({ open, onOpenChange }: { open: boolean; on
                             ? [...new Set([...current, flow.id])]
                             : current.filter((flowId) => flowId !== flow.id))}
                         />
-                        <span><strong>{flow.name}</strong><small>{flow.evidenceBackbone ? "Evidence backbone" : flow.perspective ? `${flow.perspective.kind} perspective` : "Project flow"} · {flow.nodes.length} nodes</small></span>
+                        <span><strong>{flow.name}</strong><small>{t("{{value1}} · {{length}} nodes", { value1: flow.evidenceBackbone ? "Evidence backbone" : flow.perspective ? `${flow.perspective.kind} perspective` : "Project flow", length: flow.nodes.length })}</small></span>
                       </label>
                     );
                   })}
                 </div>
-                {!validSelectedFlowIds.length ? <small className="resync-scope-warning">Select at least one flow to continue.</small> : null}
+                {!validSelectedFlowIds.length ? <small className="resync-scope-warning">{t("Select at least one flow to continue.")}</small> : null}
               </div>
             ) : null}
           </section>
@@ -221,29 +223,29 @@ export function ResyncCodebaseDialog({ open, onOpenChange }: { open: boolean; on
           <div className="resync-running">
             <div className="resync-running-icon"><RefreshCw size={24} /></div>
             <div>
-              <strong>{progress?.label ?? "Synchronizing existing map"}</strong>
-              <span>{progress?.detail ?? "ArchiCode is applying a conservative, evidence-backed update."}</span>
-              <small>Scope: {resyncScopeLabel(selectedScope, flows)}</small>
+              <strong>{progress?.label ?? t("Synchronizing existing map")}</strong>
+              <span>{progress?.detail ?? t("ArchiCode is applying a conservative, evidence-backed update.")}</span>
+              <small>{t("Scope: {{value1}}", { value1: resyncScopeLabel(selectedScope, flows) })}</small>
             </div>
             <div className="resync-elapsed"><Clock3 size={15} /> {elapsedLabel(elapsed)}</div>
-            {progress?.itemsDone !== undefined ? <small>{progress.itemsDone.toLocaleString()}{progress.itemsTotal !== undefined ? ` / ${progress.itemsTotal.toLocaleString()}` : ""}</small> : null}
+            {progress?.itemsDone !== undefined ? <small>{t("{{value1}} {{value2}}", { value1: formatNumber(progress.itemsDone), value2: progress.itemsTotal !== undefined ? ` / ${formatNumber(progress.itemsTotal)}` : "" })}</small> : null}
           </div>
         ) : report ? <ResyncSummary report={report} flows={flows} /> : (
           <div className="resync-intro">
-            <p>The current graph remains the source of truth. ArchiCode hashes the repository, freezes unchanged entities, and reconciles only the affected evidence and relationships.</p>
+            <p>{t("The current graph remains the source of truth. ArchiCode hashes the repository, freezes unchanged entities, and reconciles only the affected evidence and relationships.")}</p>
             <ul>
-              <li>Node and edge IDs, wording, layout, flow membership, notes, and custom properties remain untouched when evidence is unchanged.</li>
-              <li>User-edited or ambiguous content is preserved and reported as an actionable conflict.</li>
-              <li>No-change runs skip parsing, graph mutation, and LLM review.</li>
+              <li>{t("Node and edge IDs, wording, layout, flow membership, notes, and custom properties remain untouched when evidence is unchanged.")}</li>
+              <li>{t("User-edited or ambiguous content is preserved and reported as an actionable conflict.")}</li>
+              <li>{t("No-change runs skip parsing, graph mutation, and LLM review.")}</li>
             </ul>
           </div>
         )}
 
-        {error ? <div className="resync-error"><XCircle size={18} /><span><strong>Synchronization did not apply</strong>{error}</span></div> : null}
+        {error ? <div className="resync-error"><XCircle size={18} /><span><strong>{t("Synchronization did not apply")}</strong>{error}</span></div> : null}
 
         {!running && history.length ? (
           <details className="resync-history">
-            <summary>Sync history ({history.length})</summary>
+            <summary>{t("Sync history ( {{length}} )", { length: history.length })}</summary>
             <div>{history.map((item) => (
               <button type="button" key={item.reportId} className={report?.reportId === item.reportId ? "is-active" : ""} onClick={() => {
                 setReport(item);
@@ -252,9 +254,9 @@ export function ResyncCodebaseDialog({ open, onOpenChange }: { open: boolean; on
                   setSelectedFlowIds(item.scope.flowIds);
                 } else setScopeKind("project");
               }}>
-                <span>{new Date(item.completedAt).toLocaleString()}</span>
+                <span>{formatDateTime(new Date(item.completedAt))}</span>
                 <strong>{resultTitle(item)}</strong>
-                <small>{resyncScopeLabel(item.scope, flows)} · {countDelta(item)} changed files · {elapsedLabel(item.durationMs)}</small>
+                <small>{t("{{value1}} · {{value2}} changed files · {{value3}}", { value1: resyncScopeLabel(item.scope, flows), value2: countDelta(item), value3: elapsedLabel(item.durationMs) })}</small>
               </button>
             ))}</div>
           </details>
@@ -262,10 +264,10 @@ export function ResyncCodebaseDialog({ open, onOpenChange }: { open: boolean; on
 
         <div className="resync-dialog-actions">
           {running
-            ? <Button type="button" variant="secondary" onClick={() => void cancel()}>Cancel resync</Button>
+            ? <Button type="button" variant="secondary" onClick={() => void cancel()}>{t("Cancel resync")}</Button>
             : <>
-                <Button type="button" variant="secondary" onClick={() => onOpenChange(false)}>Close</Button>
-                <Button type="button" variant="primary" disabled={!canStart} onClick={() => void start()}><RefreshCw size={15} /> {scopeKind === "flows" ? "Resync selected flows" : report ? "Resync again" : "Resync codebase"}</Button>
+                <Button type="button" variant="secondary" onClick={() => onOpenChange(false)}>{t("Close")}</Button>
+                <Button type="button" variant="primary" disabled={!canStart} onClick={() => void start()}><RefreshCw size={15} /> {scopeKind === "flows" ? t("Resync selected flows") : report ? t("Resync again") : t("Resync codebase")}</Button>
               </>}
         </div>
       </DialogContent>

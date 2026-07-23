@@ -19,7 +19,7 @@ import {
   imageAttachmentsForPrompt,
   imageLabelText,
   inferModelCapabilityProfile,
-  orchestratorSystemPrompt,
+  orchestratorSystemInstructions,
   orchestratorUserPromptParts,
   phasePolicyText,
   reasoningEffort,
@@ -798,7 +798,7 @@ export function buildAnthropicCompatibleBody(
     model: policy.modelOverride?.trim() || provider.model || "claude-sonnet-4-6",
     max_tokens: maxTokens,
     // Stable across orchestrator invocations, so cache it as the system prefix.
-    system: [{ type: "text", text: bareExtraction ? extractionSystemPrompt : orchestratorSystemPrompt, cache_control: { type: "ephemeral" } }],
+    system: [{ type: "text", text: bareExtraction ? extractionSystemPrompt : orchestratorSystemInstructions(), cache_control: { type: "ephemeral" } }],
     messages: [
       {
         role: "user",

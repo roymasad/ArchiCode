@@ -1,3 +1,4 @@
+import { t } from "@renderer/i18n";
 import { ShieldAlert, ShieldCheck, X } from "lucide-react";
 import { useState } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -18,8 +19,8 @@ export function PermissionModal() {
       if (!open) setShellPrompt(null);
     }}>
       <DialogContent
-        title="Shell Permission"
-        description="ArchiCode will persist the command, decision, logs, exit code, and run instructions as JSON."
+        title={t("Shell Permission")}
+        description={t("ArchiCode will persist the command, decision, logs, exit code, and run instructions as JSON.")}
         className="permission-modal"
       >
         <div className="permission-lede">
@@ -32,12 +33,12 @@ export function PermissionModal() {
             checked={reusableApproval}
             onChange={() => setReusableApproval((current) => !current)}
           />
-          <span>Remember approval for this command and working folder</span>
+          <span>{t("Remember approval for this command and working folder")}</span>
         </label>
         <div className="action-row end">
           <Button type="button" onClick={() => setShellPrompt(null)}>
             <X size={16} />
-            <span>Deny</span>
+            <span>{t("Deny")}</span>
           </Button>
           <Button
             type="button"
@@ -53,7 +54,7 @@ export function PermissionModal() {
             })}
           >
             <ShieldCheck size={16} />
-            <span>Allow Run</span>
+            <span>{t("Allow Run")}</span>
           </Button>
         </div>
       </DialogContent>

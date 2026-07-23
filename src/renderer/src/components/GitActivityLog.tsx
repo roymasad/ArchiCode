@@ -1,3 +1,5 @@
+import { formatDateTime } from "@renderer/i18n";
+import { t } from "@renderer/i18n";
 import { GitBranch, GitCommit, Plus, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -53,9 +55,7 @@ export function GitActivityLog() {
 
   if (!gitStatus?.isRepo && !gitLogs.length && !recentCommits.length) {
     return (
-      <EmptyState icon={<GitBranch size={20} />} title="No Git activity yet">
-        Recent commit messages and Git operation output will appear here.
-      </EmptyState>
+      <EmptyState icon={<GitBranch size={20} />} title={t("No Git activity yet")}>{t("{{value1}} {{value2}}", { value1: t("Recent commit messages and Git operation output will appear here."), value2: " " })}</EmptyState>
     );
   }
 
@@ -66,9 +66,9 @@ export function GitActivityLog() {
           <div className="git-activity-header">
             <div className="git-activity-summary">
               <Badge>{currentBranch}</Badge>
-              <Badge>{gitStatus.changes.length} changed</Badge>
-              {gitStatus.ahead ? <Badge tone="accent">ahead {gitStatus.ahead}</Badge> : null}
-              {gitStatus.behind ? <Badge tone="warning">behind {gitStatus.behind}</Badge> : null}
+              <Badge>{t("{{length}} changed", { length: gitStatus.changes.length })}</Badge>
+              {gitStatus.ahead ? <Badge tone="accent">{t("ahead {{ahead}}", { ahead: gitStatus.ahead })}</Badge> : null}
+              {gitStatus.behind ? <Badge tone="warning">{t("behind {{behind}}", { behind: gitStatus.behind })}</Badge> : null}
             </div>
             <div className="git-activity-branch-controls">
               {branchOptions.length ? (
@@ -86,14 +86,14 @@ export function GitActivityLog() {
                   <TextInput
                     value={newBranchName}
                     onChange={(event) => setNewBranchName(event.target.value)}
-                    placeholder="new-branch"
+                    placeholder={t("new-branch")}
                     disabled={gitBusy}
-                    aria-label="New branch name"
+                    aria-label={t("New branch name")}
                   />
-                  <IconButton title="Create branch" type="submit" disabled={gitBusy || !newBranchName.trim()}>
+                  <IconButton title={t("Create branch")} type="submit" disabled={gitBusy || !newBranchName.trim()}>
                     <Plus size={14} />
                   </IconButton>
-                  <IconButton title="Cancel branch creation" onClick={() => {
+                  <IconButton title={t("Cancel branch creation")} onClick={() => {
                     setCreatingBranch(false);
                     setNewBranchName("");
                   }}>
@@ -103,7 +103,7 @@ export function GitActivityLog() {
               ) : (
                 <Button type="button" size="sm" onClick={() => setCreatingBranch(true)} disabled={gitBusy}>
                   <Plus size={14} />
-                  <span>Branch</span>
+                  <span>{t("Branch")}</span>
                 </Button>
               )}
             </div>
@@ -112,7 +112,7 @@ export function GitActivityLog() {
         {recentCommits.length ? (
           <section className="git-history-activity">
             <div className="record-card-head">
-              <strong>Recent commits</strong>
+              <strong>{t("Recent commits")}</strong>
               <Badge>{recentCommits.length}</Badge>
             </div>
             {recentCommits.map((commit) => (
@@ -120,20 +120,20 @@ export function GitActivityLog() {
                 <GitCommit size={15} />
                 <div>
                   <strong>{commit.subject}</strong>
-                  <small>{commit.shortHash} · {commit.authorName} · {new Date(commit.authoredAt).toLocaleString()}</small>
+                  <small>{t("{{shortHash}} · {{authorName}} · {{value3}}", { shortHash: commit.shortHash, authorName: commit.authorName, value3: formatDateTime(new Date(commit.authoredAt)) })}</small>
                 </div>
               </article>
             ))}
           </section>
-        ) : gitStatus?.isRepo ? <strong>No commits yet.</strong> : null}
+        ) : gitStatus?.isRepo ? <strong>{t("No commits yet.")}</strong> : null}
         {gitLogs.map((log) => (
           <article key={`${log.at}-${log.command}`} className={log.ok ? "git-log-entry" : "git-log-entry is-failed"}>
             <div className="record-card-head">
-              <Badge tone={log.ok ? "success" : "danger"}>{log.ok ? "ok" : "failed"}</Badge>
-              <small>{new Date(log.at).toLocaleString()}</small>
+              <Badge tone={log.ok ? "success" : "danger"}>{log.ok ? t("ok") : t("failed")}</Badge>
+              <small>{formatDateTime(new Date(log.at))}</small>
             </div>
             <strong>{log.command}</strong>
-            <pre>{[log.stdout, log.stderr].filter(Boolean).join("\n") || "No output."}</pre>
+            <pre>{[log.stdout, log.stderr].filter(Boolean).join("\n") || t("No output.")}</pre>
           </article>
         ))}
       </div>

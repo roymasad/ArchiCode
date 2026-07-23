@@ -1,3 +1,4 @@
+import { formatDateTime, formatNumber } from "@renderer/i18n";
 import {
   Activity,
   Bug,
@@ -42,7 +43,7 @@ import {
   Square,
   X
 } from "lucide-react";
-import { useCallback, useEffect, useRef, useState, type WheelEvent } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { codexRealtimeModels, codexRealtimeV2Voices, defaultCodexRealtimeModel, defaultCodexRealtimeV2Voice, defaultPhaseModelPolicies, defaultSubagentModelPolicies, runTargetProfileSchema, type CodeIdeApplication, type CodeIdeSettings, type CodexRealtimeModel, type CodexRealtimeVoice, type DebugIncident, type LlmPhase, type PhaseModelPolicy, type ProjectSettings, type RunEffort, type RunScope, type RuntimeService, type SpeechSettings, type SubagentModelProfile, type TtsSettings, type VoiceSettings } from "@shared/schema";
 import { gaiaAgent, pandoraAgent } from "@shared/agentIdentities";
@@ -52,6 +53,8 @@ import { providerHasCompletedCapabilityCheck, providerImageInputSupportStatus, p
 import { researchPersonalities, type GlobalResearchPersonality, type GlobalResearchVerbosity } from "@shared/researchPersonality";
 import { runtimeInsight } from "@shared/runtimeInsights";
 import { stripAnsiEscapes } from "@shared/terminalText";
+import type { LocalePreference, LocaleState } from "@shared/i18n/locale";
+import { applyRendererLocale, t } from "../i18n";
 import { useArchicodeStore, type ProjectSettingsTab } from "../store/useArchicodeStore";
 import { runFailureMessage } from "../utils/runErrors";
 import { isRunBlockingNewChange } from "../utils/runStatus";
@@ -147,33 +150,33 @@ const phaseProfileGroups: Array<{
 }> = [
   {
     id: "archi",
-    title: "Archi — Research Chat",
-    description: "The main chat agent. A model selected inside an individual chat overrides this default for that chat.",
-    profiles: [{ phase: "brainstorming", label: "Chat" }]
+    title: t("Archi — Research Chat"),
+    description: t("The main chat agent. A model selected inside an individual chat overrides this default for that chat."),
+    profiles: [{ phase: "brainstorming", label: t("Chat") }]
   },
   {
     id: "gaia",
     title: gaiaAgent.title,
-    description: "Planning and implementation remain independently configurable phases of the same AI Implement agent.",
+    description: t("Planning and implementation remain independently configurable phases of the same AI Implement agent."),
     profiles: [
-      { phase: "planning", label: "Planning" },
-      { phase: "coding", label: "Implementation / Coding" }
+      { phase: "planning", label: t("Planning") },
+      { phase: "coding", label: t("Implementation / Coding") }
     ]
   },
   {
     id: "pandora",
     title: pandoraAgent.title,
-    description: "The AI Debug agent for focused failure investigation, repair, and recovery.",
-    profiles: [{ phase: "debugging", label: "Debugging" }]
+    description: t("The AI Debug agent for focused failure investigation, repair, and recovery."),
+    profiles: [{ phase: "debugging", label: t("Debugging") }]
   },
   {
     id: "system",
-    title: "System tasks",
-    description: "Supporting model calls that are not standalone agents.",
+    title: t("System tasks"),
+    description: t("Supporting model calls that are not standalone agents."),
     profiles: [
-      { phase: "review", label: "Build/runtime review" },
-      { phase: "verifying", label: "Verification" },
-      { phase: "summarizing", label: "Context summary" }
+      { phase: "review", label: t("Build/runtime review") },
+      { phase: "verifying", label: t("Verification") },
+      { phase: "summarizing", label: t("Context summary") }
     ]
   }
 ];
@@ -328,6 +331,7 @@ export function ProjectToolbar({
   const [runProfilesError, setRunProfilesError] = useState<string | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState("general");
+  const [localeState, setLocaleState] = useState<LocaleState>({ preference: "system", resolvedLocale: "en" });
   const [implementationEffort, setImplementationEffort] = useState<RunEffort>("auto");
   const [pendingImplementScope, setPendingImplementScope] = useState<RunScope | null>(null);
   const [cleanLayoutConfirmOpen, setCleanLayoutConfirmOpen] = useState(false);
@@ -467,6 +471,17 @@ export function ProjectToolbar({
       cancelled = true;
     };
   }, [settingsOpen]);
+
+  useEffect(() => {
+    if (!settingsOpen) return;
+    void window.archicode.getLocale().then(setLocaleState);
+  }, [settingsOpen]);
+
+  const updateLocale = useCallback(async (preference: LocalePreference) => {
+    const next = await window.archicode.setLocale(preference);
+    setLocaleState(next);
+    await applyRendererLocale(next);
+  }, []);
 
   useEffect(() => {
     if (!settingsOpen) return;
@@ -1187,7 +1202,7 @@ export function ProjectToolbar({
     try {
       const status = await window.archicode.rebuildSemanticIndex(rootPath);
       setSemanticIndexStatus(status);
-      setSemanticIndexNotice(status.state === "ready" ? `Semantic index rebuilt with ${status.indexedItems.toLocaleString()} items.` : status.message);
+      setSemanticIndexNotice(status.state === "ready" ? `Semantic index rebuilt with ${formatNumber(status.indexedItems)} items.` : status.message);
     } catch (error) {
       setSemanticIndexNotice(error instanceof Error ? error.message : "Could not rebuild the semantic index.");
     } finally {
@@ -1386,7 +1401,7 @@ export function ProjectToolbar({
       label: modelOptionLabel(provider, model)
     }));
     return (
-      <Field label="Model" hint={modelHint(provider)}>
+      <Field label={t("Model")} hint={modelHint(provider)}>
         <ModelCombobox
           value={currentModel}
           placeholder={placeholder}
@@ -1404,10 +1419,10 @@ export function ProjectToolbar({
     const isCodexLocal = provider.kind === "codex-local";
     return (
       <Field
-        label="Output verbosity"
+        label={t("Output verbosity")}
         hint={isCodexLocal
-          ? "Overrides Codex model_verbosity for each ArchiCode invocation without changing Codex files."
-          : "Sent as text.verbosity for GPT-5.6 Responses API requests. Other models and Chat Completions are unchanged."}
+          ? t("Overrides Codex model_verbosity for each ArchiCode invocation without changing Codex files.")
+          : t("Sent as text.verbosity for GPT-5.6 Responses API requests. Other models and Chat Completions are unchanged.")}
       >
         <Select
           value={provider.outputVerbosity ?? "default"}
@@ -1459,7 +1474,7 @@ export function ProjectToolbar({
         currentVersion: "unknown",
         releaseUrl: ARCHICODE_RELEASES_URL,
         updateChannel: "github",
-        message: "Update checks are available in the packaged Electron app."
+        message: t("Update checks are available in the packaged Electron app.")
       });
       return;
     }
@@ -1592,16 +1607,16 @@ export function ProjectToolbar({
           <span className="llm-profile-card-heading">
             <strong>{title}</strong>
             <Tooltip content={description}>
-              <span className="llm-profile-card-help" role="img" tabIndex={0} aria-label={`About ${title}`}>
+              <span className="llm-profile-card-help" role="img" tabIndex={0} aria-label={t("About {{title}}", { title: title })}>
                 <HelpCircle size={14} />
               </span>
             </Tooltip>
           </span>
         </span>
-        <Badge tone={policy.reasoningMode === "high" ? "accent" : "neutral"}>{policy.reasoningMode} reasoning</Badge>
+        <Badge tone={policy.reasoningMode === "high" ? "accent" : "neutral"}>{t("{{reasoningMode}} reasoning", { reasoningMode: policy.reasoningMode })}</Badge>
       </div>
       <div className="settings-two-col">
-        <Field label="Temperature">
+        <Field label={t("Temperature")}>
           <TextInput
             type="number"
             min={0}
@@ -1613,19 +1628,19 @@ export function ProjectToolbar({
             })}
           />
         </Field>
-        <Field label="Reasoning">
+        <Field label={t("Reasoning")}>
           <Select
             value={policy.reasoningMode}
             onValueChange={(value) => onChange({ reasoningMode: value as PhaseModelPolicy["reasoningMode"] })}
             options={[
-              { value: "off", label: "off" },
-              { value: "low", label: "low" },
-              { value: "medium", label: "medium" },
-              { value: "high", label: "high" }
+              { value: "off", label: t("off") },
+              { value: "low", label: t("low") },
+              { value: "medium", label: t("medium") },
+              { value: "high", label: t("high") }
             ]}
           />
         </Field>
-        <Field label="Max output" hint={profileOutputLimitHint(enabledProvider, policy)}>
+        <Field label={t("Max output")} hint={profileOutputLimitHint(enabledProvider, policy)}>
           <TextInput
             type="number"
             min={256}
@@ -1636,12 +1651,12 @@ export function ProjectToolbar({
           />
         </Field>
         <Field
-          label="Model override"
-          hint={`Stored for ${enabledProvider.label}. Provider default inherits its current model${enabledProvider.model?.trim() ? ` (${enabledProvider.model.trim()})` : ""}.`}
+          label={t("Model override")}
+          hint={t("Stored for {{label}}. Provider default inherits its current model {{value2}}.", { label: enabledProvider.label, value2: enabledProvider.model?.trim() ? ` (${enabledProvider.model.trim()})` : "" })}
         >
           <ModelCombobox
             value={policy.modelOverride?.trim() || PROVIDER_DEFAULT_MODEL_VALUE}
-            placeholder="Provider default"
+            placeholder={t("Provider default")}
             options={profileModelOptions(enabledProvider, policy)}
             catalogMode
             onValueChange={(value) => onChange({
@@ -1797,23 +1812,28 @@ export function ProjectToolbar({
     } : current);
   };
 
-  const scrollToolbarHorizontally = (event: WheelEvent<HTMLDivElement>) => {
+  useEffect(() => {
     const target = toolbarActionsRef.current;
-    if (!target || Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
-    const maxScrollLeft = target.scrollWidth - target.clientWidth;
-    if (maxScrollLeft <= 0) return;
-    const nextScrollLeft = Math.min(maxScrollLeft, Math.max(0, target.scrollLeft + event.deltaY));
-    if (nextScrollLeft === target.scrollLeft) return;
-    event.preventDefault();
-    target.scrollLeft = nextScrollLeft;
-  };
+    if (!target) return;
+    const scrollToolbarHorizontally = (event: WheelEvent) => {
+      if (Math.abs(event.deltaX) >= Math.abs(event.deltaY)) return;
+      const maxScrollLeft = target.scrollWidth - target.clientWidth;
+      if (maxScrollLeft <= 0) return;
+      const nextScrollLeft = Math.min(maxScrollLeft, Math.max(0, target.scrollLeft + event.deltaY));
+      if (nextScrollLeft === target.scrollLeft) return;
+      event.preventDefault();
+      target.scrollLeft = nextScrollLeft;
+    };
+    target.addEventListener("wheel", scrollToolbarHorizontally, { passive: false });
+    return () => target.removeEventListener("wheel", scrollToolbarHorizontally);
+  }, []);
 
   const renderContextWindowField = (provider: ProjectSettings["providers"][number]) => (
     <Field
-      label="Context window"
+      label={t("Context window")}
       hint={provider.detectedContextWindowTokens
         ? `Auto detected: ${formatTokenCount(provider.detectedContextWindowTokens)} tokens. Enter a value only to override.`
-        : "Auto uses detected model metadata or conservative known-model defaults. Suggestions are editable because provider catalogs change."}
+        : t("Auto uses detected model metadata or conservative known-model defaults. Suggestions are editable because provider catalogs change.")}
     >
       <TextInput
         type="number"
@@ -1831,7 +1851,7 @@ export function ProjectToolbar({
   const speechTestDisabled = !speechDraft.enabled || !activeSpeechModel?.downloaded || speechTestBusy || Boolean(speechDownloadingModelId) || Boolean(speechDeletingModelId);
   const activeTtsModel = ttsStatus?.models.find((model) => model.id === ttsDraft.modelId) ?? null;
   const activeTtsVoice = ttsStatus?.voices.find((voice) => voice.id === ttsDraft.voiceId) ?? null;
-  const ttsVoiceOptions = (ttsStatus?.voices.length ? ttsStatus.voices : [{ id: "af_heart", label: "Heart" }]).map((voice) => ({
+  const ttsVoiceOptions = (ttsStatus?.voices.length ? ttsStatus.voices : [{ id: "af_heart", label: t("Heart") }]).map((voice) => ({
     value: voice.id,
     label: voice.label
   }));
@@ -1923,8 +1943,8 @@ export function ProjectToolbar({
 
   return (
     <>
-      <header className={rightSidebarCollapsed ? "project-toolbar has-right-sidebar-restore" : "project-toolbar"} aria-label="Project toolbar">
-        <Toolbar ref={toolbarActionsRef} className="toolbar-actions" onWheel={scrollToolbarHorizontally}>
+      <header className={rightSidebarCollapsed ? "project-toolbar has-right-sidebar-restore" : "project-toolbar"} aria-label={t("Project toolbar")}>
+        <Toolbar ref={toolbarActionsRef} className="toolbar-actions">
           <div className="toolbar-status-group">
             <GraphHistoryBar inline />
             <IconButton
@@ -1940,14 +1960,14 @@ export function ProjectToolbar({
             </IconButton>
             <HelpPage
               trigger={(
-                <IconButton title="Open ArchiCode help">
+                <IconButton title={t("Open ArchiCode help")}>
                   <HelpCircle size={16} />
                 </IconButton>
               )}
             />
           </div>
 
-          <div className="toolbar-primary-actions" aria-label="Implementation actions">
+          <div className="toolbar-primary-actions" aria-label={t("Implementation actions")}>
             <PatchReviewPanel />
             <MenuRoot>
               <Tooltip content={implementTooltip}>
@@ -1957,70 +1977,67 @@ export function ProjectToolbar({
                       type="button"
                       size="sm"
                       variant="primary"
-                      aria-label="AI Implement scope"
+                      aria-label={t("AI Implement scope")}
                       disabled={!bundle || runChangeBlocked}
                     >
                       <Sparkles size={16} />
-                      <span>AI Implement</span>
+                      <span>{t("AI Implement")}</span>
                       <ChevronDown size={14} />
                     </Button>
                   </MenuTrigger>
                 </span>
               </Tooltip>
               <MenuContent align="start" className="ai-implement-menu-content">
-                <MenuLabel>1-AI EFFORT</MenuLabel>
+                <MenuLabel>{t("1-AI EFFORT")}</MenuLabel>
                 <MenuItem
-                  tooltip="Planning chooses Fast or High based on the requested scope, risk, and expected implementation horizon."
+                  tooltip={t("Planning chooses Fast or High based on the requested scope, risk, and expected implementation horizon.")}
                   onSelect={(event) => {
                     event.preventDefault();
                     setImplementationEffort("auto");
                   }}
                 >
-                  {implementationEffort === "auto" ? <Check size={15} /> : <span className="menu-item-spacer" />} <em>Auto</em>
+                  {implementationEffort === "auto" ? <Check size={15} /> : <span className="menu-item-spacer" />} <em>{t("Auto")}</em>
                 </MenuItem>
                 <MenuItem
-                  tooltip="Fewer implementation batches and lighter verification for small, low-risk, or localized work."
+                  tooltip={t("Fewer implementation batches and lighter verification for small, low-risk, or localized work.")}
                   onSelect={(event) => {
                     event.preventDefault();
                     setImplementationEffort("fast");
                   }}
                 >
-                  {implementationEffort === "fast" ? <Check size={15} /> : <span className="menu-item-spacer" />} <em>Fast</em>
+                  {implementationEffort === "fast" ? <Check size={15} /> : <span className="menu-item-spacer" />} <em>{t("Fast")}</em>
                 </MenuItem>
                 <MenuItem
-                  tooltip="More orchestration for broad, risky, multi-system, or long-horizon implementation work."
+                  tooltip={t("More orchestration for broad, risky, multi-system, or long-horizon implementation work.")}
                   onSelect={(event) => {
                     event.preventDefault();
                     setImplementationEffort("high");
                   }}
                 >
-                  {implementationEffort === "high" ? <Check size={15} /> : <span className="menu-item-spacer" />} <em>High</em>
+                  {implementationEffort === "high" ? <Check size={15} /> : <span className="menu-item-spacer" />} <em>{t("High")}</em>
                 </MenuItem>
                 <MenuSeparator />
-                <MenuLabel>2-IMPLEMENT SCOPE</MenuLabel>
+                <MenuLabel>{t("2-IMPLEMENT SCOPE")}</MenuLabel>
                 <MenuItem
-                  tooltip="Focus the run on the whole project. The agent can update source and graph state wherever the project-level task requires it."
-                  onSelect={() => setPendingImplementScope({ kind: "project", flowId: activeFlow?.id, nodeIds: [], label: "Project" })}
+                  tooltip={t("Focus the run on the whole project. The agent can update source and graph state wherever the project-level task requires it.")}
+                  onSelect={() => setPendingImplementScope({ kind: "project", flowId: activeFlow?.id, nodeIds: [], label: t("Project") })}
                 >
-                  <LayoutGrid size={15} /> Project
-                </MenuItem>
+                  <LayoutGrid size={15} /> {" "}{t("Project")}{" "}</MenuItem>
                 <MenuItem
-                  tooltip="Focus the run on the current flow. The agent may inspect other flows for references, but should keep edits centered on this flow."
+                  tooltip={t("Focus the run on the current flow. The agent may inspect other flows for references, but should keep edits centered on this flow.")}
                   onSelect={() => setPendingImplementScope({ kind: "flow", flowId: activeFlow?.id, nodeIds: [], label: activeFlow?.name ?? "Flow" })}
                 >
-                  <ChevronRight size={15} /> Flow
-                </MenuItem>
+                  <ChevronRight size={15} /> {" "}{t("Flow")}{" "}</MenuItem>
                 <MenuItem
                   disabled={!selectedImplementNodeIds.length}
                   tooltip={selectedImplementNodeIds.length
-                    ? "Focus the run on the selected node or nodes. The agent may inspect other graph context, but should keep edits centered on this selection."
-                    : "Select one or more nodes to run AI Implement with node scope."}
+                    ? t("Focus the run on the selected node or nodes. The agent may inspect other graph context, but should keep edits centered on this selection.")
+                    : t("Select one or more nodes to run AI Implement with node scope.")}
                   onSelect={() => selectedImplementNodeIds.length
                     ? setPendingImplementScope({ kind: "nodes", flowId: activeFlow?.id, nodeIds: selectedImplementNodeIds, label: selectedImplementNodeLabel })
                     : undefined}
                 >
-                  <Square size={15} /> Nodes
-                </MenuItem>
+                  <Square size={15} /> {" "}{t("Nodes")}{" "}</MenuItem>
               </MenuContent>
             </MenuRoot>
             <MenuRoot>
@@ -2030,23 +2047,22 @@ export function ProjectToolbar({
                     <Button
                       type="button"
                       size="sm"
-                      aria-label="AI Run"
+                      aria-label={t("AI Run")}
                       disabled={!bundle || runChangeBlocked}
                     >
                       <Play size={16} />
-                      <span>AI Run</span>
+                      <span>{t("AI Run")}</span>
                       <ChevronDown size={14} />
                     </Button>
                   </MenuTrigger>
                 </span>
               </Tooltip>
               <MenuContent>
-                <MenuLabel>BUILD APP</MenuLabel>
+                <MenuLabel>{t("BUILD APP")}</MenuLabel>
                 <MenuItem tooltip={buildTooltip} onSelect={() => void startBuildRun()}>
-                  <Hammer size={15} /> Build
-                </MenuItem>
+                  <Hammer size={15} /> {" "}{t("Build")}{" "}</MenuItem>
                 <MenuSeparator />
-                <MenuLabel>Run App</MenuLabel>
+                <MenuLabel>{t("Run App")}</MenuLabel>
                 {runProfiles.length ? (
                   runProfiles.map((profile) => (
                     <MenuItem key={profile.id} tooltip={profile.runCommand} onSelect={() => void runProfile({ profileId: profile.id })}>
@@ -2055,8 +2071,7 @@ export function ProjectToolbar({
                   ))
                 ) : (
                   <MenuItem tooltip={runTooltip} onSelect={() => void startRunAppDiscovery()}>
-                    <Play size={15} /> Detect Run App target
-                  </MenuItem>
+                    <Play size={15} /> {" "}{t("Detect Run App target")}{" "}</MenuItem>
                 )}
               </MenuContent>
             </MenuRoot>
@@ -2067,41 +2082,39 @@ export function ProjectToolbar({
                     <Button
                       type="button"
                       size="sm"
-                      aria-label="AI Debug"
+                      aria-label={t("AI Debug")}
                       disabled={!bundle || runChangeBlocked}
                     >
                       <Bug size={16} />
-                      <span>AI Debug</span>
+                      <span>{t("AI Debug")}</span>
                       <ChevronDown size={14} />
                     </Button>
                   </MenuTrigger>
                 </span>
               </Tooltip>
               <MenuContent>
-                <MenuLabel>Review</MenuLabel>
+                <MenuLabel>{t("Review")}</MenuLabel>
                 <MenuItem
-                  tooltip="Ask the chat agent to find contradictions, missing information, and illogical nodes, edges, or flow boundaries."
+                  tooltip={t("Ask the chat agent to find contradictions, missing information, and illogical nodes, edges, or flow boundaries.")}
                   onSelect={() => setLogicReviewOpen(true)}
                 >
-                  <SearchCheck size={15} /> Review flow logic…
-                </MenuItem>
+                  <SearchCheck size={15} /> {" "}{t("Review flow logic…")}{" "}</MenuItem>
                 <MenuSeparator />
-                <MenuLabel>Debug</MenuLabel>
+                <MenuLabel>{t("Debug")}</MenuLabel>
                 <MenuItem
                   tooltip={openBugReports.length
-                    ? "Review, edit, select, or resolve reported bugs before asking Pandora to fix them."
-                    : "No open bug reports found."}
+                    ? t("Review, edit, select, or resolve reported bugs before asking Pandora to fix them.")
+                    : t("No open bug reports found.")}
                   disabled={!openBugReports.length}
                   onSelect={openBugReview}
                 >
-                  <Bug size={15} /> Review reported bugs{openBugReports.length ? ` (${openBugReports.length})` : ""}
+                  <Bug size={15} /> {" "}{t("Review reported bugs")}{openBugReports.length ? t("({{length}})", { length: openBugReports.length }) : ""}
                 </MenuItem>
                 <MenuItem
-                  tooltip="Create a project bug report for Pandora to pick up."
+                  tooltip={t("Create a project bug report for Pandora to pick up.")}
                   onSelect={() => setReportBugOpen(true)}
                 >
-                  <MessageSquare size={15} /> Report Bug
-                </MenuItem>
+                  <MessageSquare size={15} /> {" "}{t("Report Bug")}{" "}</MenuItem>
               </MenuContent>
             </MenuRoot>
           </div>
@@ -2120,7 +2133,7 @@ export function ProjectToolbar({
             ) : null}
             <IconButton
               className={workbenchView === "files" ? "toolbar-view-toggle is-active" : "toolbar-view-toggle"}
-              title={workbenchView === "files" ? "Show graph canvas" : "Browse project files"}
+              title={workbenchView === "files" ? t("Show graph canvas") : t("Browse project files")}
               aria-pressed={workbenchView === "files"}
               onClick={() => setWorkbenchView(workbenchView === "files" ? "graph" : "files")}
               disabled={!bundle}
@@ -2132,7 +2145,7 @@ export function ProjectToolbar({
               data-testid="research-button"
               className="toolbar-research-toggle"
               aria-pressed={researchPanelActive ?? false}
-              title={researchPanelActive ? "Show properties" : "Open scoped research chat"}
+              title={researchPanelActive ? t("Show properties") : t("Open scoped research chat")}
               onClick={() => {
                 onToggleResearchPanel?.();
               }}
@@ -2142,89 +2155,77 @@ export function ProjectToolbar({
             </IconButton>
             <MenuRoot>
               <MenuTrigger asChild>
-                <IconButton title="More project actions">
+                <IconButton title={t("More project actions")}>
                   <MoreHorizontal size={16} />
                 </IconButton>
               </MenuTrigger>
               <MenuContent>
-                <MenuLabel>Graph</MenuLabel>
+                <MenuLabel>{t("Graph")}</MenuLabel>
                 <MenuItem
-                  tooltip="Rearrange the visible nodes in this flow or subflow. This only changes canvas positions."
+                  tooltip={t("Rearrange the visible nodes in this flow or subflow. This only changes canvas positions.")}
                   onSelect={() => setCleanLayoutConfirmOpen(true)}
                 >
-                  <LayoutGrid size={15} /> Clean layout
-                </MenuItem>
+                  <LayoutGrid size={15} /> {" "}{t("Clean layout")}{" "}</MenuItem>
                 <MenuSeparator />
-                <MenuLabel>Codebase</MenuLabel>
+                <MenuLabel>{t("Codebase")}</MenuLabel>
                 <MenuItem
-                  tooltip="Incrementally verify repository changes and apply the smallest safe patch to the existing map."
+                  tooltip={t("Incrementally verify repository changes and apply the smallest safe patch to the existing map.")}
                   onSelect={() => setResyncCodebaseOpen(true)}
                 >
-                  <RefreshCw size={15} /> Resync codebase
-                </MenuItem>
+                  <RefreshCw size={15} /> {" "}{t("Resync codebase")}{" "}</MenuItem>
                 <MenuItem
-                  tooltip="Reopen the report from this project's one-time initial codebase import."
+                  tooltip={t("Reopen the report from this project's one-time initial codebase import.")}
                   onSelect={() => void openInitialCodebaseImportReport()}
                 >
-                  <History size={15} /> Initial import report
-                </MenuItem>
+                  <History size={15} /> {" "}{t("Initial import report")}{" "}</MenuItem>
                 <MenuSeparator />
-                <MenuLabel>Project</MenuLabel>
+                <MenuLabel>{t("Project")}</MenuLabel>
                 <MenuItem
-                  tooltip="Reload ArchiCode's project JSON from disk, useful after external edits or stale state."
+                  tooltip={t("Reload ArchiCode's project JSON from disk, useful after external edits or stale state.")}
                   onSelect={() => void reload()}
                 >
-                  <RefreshCw size={15} /> Reload JSON
-                </MenuItem>
+                  <RefreshCw size={15} /> {" "}{t("Reload JSON")}{" "}</MenuItem>
                 <MenuSub>
                   <MenuSubTrigger>
-                    <UploadCloud size={15} /> Import
-                  </MenuSubTrigger>
+                    <UploadCloud size={15} /> {" "}{t("Import")}{" "}</MenuSubTrigger>
                   <MenuSubContent>
                     <MenuItem
-                      tooltip="Choose a draw.io / diagrams.net XML file and append one selected page to the current flow or subflow."
+                      tooltip={t("Choose a draw.io / diagrams.net XML file and append one selected page to the current flow or subflow.")}
                       onSelect={() => void importDrawioFlow("append")}
                     >
-                      <UploadCloud size={15} /> Import draw.io append
-                    </MenuItem>
+                      <UploadCloud size={15} /> {" "}{t("Import draw.io append")}{" "}</MenuItem>
                     <MenuItem
-                      tooltip="Choose a draw.io / diagrams.net XML file and replace only the currently visible flow or subflow scope."
+                      tooltip={t("Choose a draw.io / diagrams.net XML file and replace only the currently visible flow or subflow scope.")}
                       onSelect={() => void importDrawioFlow("replace")}
                     >
-                      <UploadCloud size={15} /> Import draw.io replace
-                    </MenuItem>
+                      <UploadCloud size={15} /> {" "}{t("Import draw.io replace")}{" "}</MenuItem>
                   </MenuSubContent>
                 </MenuSub>
                 <MenuSub>
                   <MenuSubTrigger>
-                    <Download size={15} /> Export
-                  </MenuSubTrigger>
+                    <Download size={15} /> {" "}{t("Export")}{" "}</MenuSubTrigger>
                   <MenuSubContent>
                     <MenuItem
-                      tooltip="Save the current flow or subflow scope as a draw.io / diagrams.net XML file."
+                      tooltip={t("Save the current flow or subflow scope as a draw.io / diagrams.net XML file.")}
                       onSelect={() => void exportActiveDrawioFlow()}
                     >
-                      <Download size={15} /> Export draw.io XML
-                    </MenuItem>
+                      <Download size={15} /> {" "}{t("Export draw.io XML")}{" "}</MenuItem>
                     <MenuItem
-                      tooltip="Save the full loaded ArchiCode metadata bundle as one JSON file."
+                      tooltip={t("Save the full loaded ArchiCode metadata bundle as one JSON file.")}
                       onSelect={() => void exportProjectBundle()}
                     >
-                      <Download size={15} /> Export project JSON
-                    </MenuItem>
+                      <Download size={15} /> {" "}{t("Export project JSON")}{" "}</MenuItem>
                     <MenuSeparator />
                     <MenuItem
-                      tooltip="Choose one or more flows and export them as a printable PDF document."
+                      tooltip={t("Choose one or more flows and export them as a printable PDF document.")}
                       onSelect={() => openProjectDocumentExport("pdf")}
                     >
-                      <FileText size={15} /> Export PDF
-                    </MenuItem>
+                      <FileText size={15} /> {" "}{t("Export PDF")}{" "}</MenuItem>
                     <MenuItem
-                      tooltip="Choose one or more flows and export them as a standalone HTML document."
+                      tooltip={t("Choose one or more flows and export them as a standalone HTML document.")}
                       onSelect={() => openProjectDocumentExport("html")}
                     >
-                      <FileCode2 size={15} /> Export HTML
-                    </MenuItem>
+                      <FileCode2 size={15} /> {" "}{t("Export HTML")}{" "}</MenuItem>
                   </MenuSubContent>
                 </MenuSub>
                 {/*
@@ -2236,43 +2237,40 @@ export function ProjectToolbar({
                 </MenuItem>
                 */}
                 <MenuSeparator />
-                <MenuLabel>App</MenuLabel>
+                <MenuLabel>{t("App")}</MenuLabel>
                 <MenuItem
-                  tooltip="Choose the code IDE ArchiCode uses when opening a project."
+                  tooltip={t("Choose the code IDE ArchiCode uses when opening a project.")}
                   onSelect={() => {
                     setSettingsTab("general");
                     setSettingsOpen(true);
                   }}
                 >
-                  <Settings size={15} /> App Settings
-                </MenuItem>
+                  <Settings size={15} /> {" "}{t("App Settings")}{" "}</MenuItem>
                 <MenuItem
                   disabled={!bundle}
-                  tooltip={`Open the current project folder in ${selectedCodeIdeLabel}.`}
+                  tooltip={t("Open the current project folder in {{selectedCodeIdeLabel}}.", { selectedCodeIdeLabel: selectedCodeIdeLabel })}
                   onSelect={() => void openProjectInCodeIde()}
                 >
-                  <FileCode2 size={15} /> Open in {selectedCodeIdeLabel}
+                  <FileCode2 size={15} /> {" "}{t("Open in")}{" "}{selectedCodeIdeLabel}
                 </MenuItem>
                 <MenuItem
-                  tooltip={theme === "light" ? "Switch to dark theme" : "Switch to light theme"}
+                  tooltip={theme === "light" ? t("Switch to dark theme") : t("Switch to light theme")}
                   onSelect={toggleTheme}
                 >
                   {theme === "light" ? <Moon size={15} /> : <Sun size={15} />}
-                  {theme === "light" ? "Dark theme" : "Light theme"}
+                  {theme === "light" ? t("Dark theme") : t("Light theme")}
                 </MenuItem>
                 <MenuItem
                   disabled={!onResetLayout}
-                  tooltip="Restore the default panel sizes, docking, selected workbench view, activity tab, and canvas viewport."
+                  tooltip={t("Restore the default panel sizes, docking, selected workbench view, activity tab, and canvas viewport.")}
                   onSelect={() => onResetLayout?.()}
                 >
-                  <LayoutGrid size={15} /> Reset layout
-                </MenuItem>
+                  <LayoutGrid size={15} /> {" "}{t("Reset layout")}{" "}</MenuItem>
                 <MenuItem
-                  tooltip="Check GitHub Releases before opening the download page."
+                  tooltip={t("Check GitHub Releases before opening the download page.")}
                   onSelect={() => void checkForUpdates()}
                 >
-                  <UploadCloud size={15} /> Check for updates
-                </MenuItem>
+                  <UploadCloud size={15} /> {" "}{t("Check for updates")}{" "}</MenuItem>
               </MenuContent>
             </MenuRoot>
           </div>
@@ -2280,7 +2278,7 @@ export function ProjectToolbar({
         {rightSidebarCollapsed ? (
           <IconButton
             className="toolbar-right-sidebar-restore"
-            title="Show right sidebar"
+            title={t("Show right sidebar")}
             onClick={onRestoreRightSidebar}
             disabled={!bundle || !onRestoreRightSidebar}
           >
@@ -2309,49 +2307,47 @@ export function ProjectToolbar({
             </div>
             <div>
               <Badge tone={updateStatusTone}>{updateStatusLabel}</Badge>
-              <p>{updateStatus?.message ?? "ArchiCode is looking for the latest public version."}</p>
+              <p>{updateStatus?.message ?? t("ArchiCode is looking for the latest public version.")}</p>
             </div>
           </div>
 
           {updateStatus && updateStatus.status !== "failed" && updateStatus.status !== "not-configured" ? (
             <div className="app-update-version-grid">
               <div>
-                <span>Installed</span>
+                <span>{t("Installed")}</span>
                 <b>{updateStatus.currentVersion}</b>
               </div>
               <div>
-                <span>Latest release</span>
+                <span>{t("Latest release")}</span>
                 <b>{updateStatus.latestVersion}</b>
               </div>
             </div>
           ) : null}
 
           {updateIsWindowsStore ? (
-            <p className="app-update-note">
-              This copy should be updated from Microsoft Store. GitHub downloads are meant for non-Store desktop installs.
-            </p>
+            <p className="app-update-note">{t("{{value1}} {{value2}}", { value1: t("This copy should be updated from Microsoft Store. GitHub downloads are meant for non-Store desktop installs."), value2: " " })}</p>
           ) : null}
 
           <div className="dialog-actions">
             <Button type="button" onClick={() => void checkForUpdates()} disabled={updateCheckBusy}>
               {updateCheckBusy ? <Loader2 size={15} className="is-spinning" /> : <RefreshCw size={15} />}
-              <span>Check again</span>
+              <span>{t("Check again")}</span>
             </Button>
             {updateIsWindowsStore ? (
               <Button type="button" variant="primary" onClick={() => void openMicrosoftStoreUpdates()} disabled={updateCheckBusy}>
                 <ExternalLink size={15} />
-                <span>Open Microsoft Store</span>
+                <span>{t("Open Microsoft Store")}</span>
               </Button>
             ) : (
               <Button type="button" variant="primary" onClick={() => void openUpdateReleasesPage()} disabled={updateCheckBusy}>
                 <ExternalLink size={15} />
-                <span>GitHub Releases</span>
+                <span>{t("GitHub Releases")}</span>
               </Button>
             )}
             {updateIsWindowsStore ? (
               <Button type="button" variant="ghost" onClick={() => void openUpdateReleasesPage()} disabled={updateCheckBusy}>
                 <ExternalLink size={14} />
-                <span>View releases</span>
+                <span>{t("View releases")}</span>
               </Button>
             ) : null}
           </div>
@@ -2359,10 +2355,10 @@ export function ProjectToolbar({
       </DialogRoot>
 
       {bundle && visibleRuntimeServices.length && runtimePanelOpen ? (
-        <section className="runtime-panel" aria-label="Runtime services">
+        <section className="runtime-panel" aria-label={t("Runtime services")}>
           <div className="runtime-panel-header">
-            <b>Runtime</b>
-            <small>{runningRuntimeCount} running</small>
+            <b>{t("Runtime")}</b>
+            <small>{t("{{runningRuntimeCount}} running", { runningRuntimeCount: runningRuntimeCount })}</small>
           </div>
           <div className="runtime-service-grid">
             {visibleRuntimeServices.map((service) => {
@@ -2375,13 +2371,13 @@ export function ProjectToolbar({
                   <div className="runtime-service-main">
                     <b>{service.label}</b>
                     <span>{service.status}</span>
-                    <span>{service.kind} · {runtimeCwdLabel(service.relativeCwd)}</span>
+                    <span>{t("{{kind}} · {{value2}}", { kind: service.kind, value2: runtimeCwdLabel(service.relativeCwd) })}</span>
                   </div>
                   <div className="runtime-service-meta" title={service.command}>
                     <span>{service.command}</span>
-                    {service.pid ? <span>pid {service.pid}</span> : null}
+                    {service.pid ? <span>{t("pid {{pid}}", { pid: service.pid })}</span> : null}
                     <RuntimeUrlLinks urls={urls} />
-                    {service.ports.length ? <span>ports {service.ports.join(", ")}</span> : null}
+                    {service.ports.length ? <span>{t("ports {{value1}}", { value1: service.ports.join(", ") })}</span> : null}
                   </div>
                   <div className={`runtime-insight runtime-insight-${insight.tone}`}>
                     <b>{insight.label}</b>
@@ -2391,7 +2387,7 @@ export function ProjectToolbar({
                     <button
                       type="button"
                       className="runtime-service-log"
-                      title="Open full runtime logs"
+                      title={t("Open full runtime logs")}
                       onClick={() => setSelectedRuntimeLogId(service.id)}
                     >
                       [{latestLog.stream}] {renderRuntimeTextWithLinks(latestLog.text.trim())}
@@ -2400,15 +2396,15 @@ export function ProjectToolbar({
                   <div className="runtime-service-actions">
                     <Button type="button" size="sm" onClick={() => setSelectedRuntimeLogId(service.id)}>
                       <Activity size={14} />
-                      <span>Logs</span>
+                      <span>{t("Logs")}</span>
                     </Button>
                     <Button type="button" size="sm" onClick={() => void restartRuntimeService(service.id)}>
                       <RefreshCw size={14} />
-                      <span>Restart</span>
+                      <span>{t("Restart")}</span>
                     </Button>
                     <Button type="button" size="sm" onClick={() => void stopRuntimeService(service.id)} disabled={!running}>
                       <X size={14} />
-                      <span>Stop</span>
+                      <span>{t("Stop")}</span>
                     </Button>
                   </div>
                 </article>
@@ -2420,13 +2416,13 @@ export function ProjectToolbar({
 
       <DialogRoot open={cleanLayoutConfirmOpen} onOpenChange={setCleanLayoutConfirmOpen}>
         <DialogContent
-          title="Clean this layout?"
-          description="Rearrange all nodes in the current flow into a grid."
+          title={t("Clean this layout?")}
+          description={t("Rearrange all nodes in the current flow into a grid.")}
         >
           <div className="confirm-summary">
             <div className="confirm-summary-grid">
-              <span><b>Effect</b>Every node in this flow will be repositioned into a clean grid.</span>
-              <span><b>Warning</b>Existing node positions will be overwritten. You can undo this layout change with Cmd/Ctrl+Z.</span>
+              <span><b>{t("Effect")}</b>{t("Every node in this flow will be repositioned into a clean grid.")}</span>
+              <span><b>{t("Warning")}</b>{t("Existing node positions will be overwritten. You can undo this layout change with Cmd/Ctrl+Z.")}</span>
             </div>
           </div>
           <div className="dialog-actions">
@@ -2439,27 +2435,27 @@ export function ProjectToolbar({
               }}
             >
               <LayoutGrid size={15} />
-              <span>Clean layout</span>
+              <span>{t("Clean layout")}</span>
             </Button>
-            <Button type="button" onClick={() => setCleanLayoutConfirmOpen(false)}>Cancel</Button>
+            <Button type="button" onClick={() => setCleanLayoutConfirmOpen(false)}>{t("Cancel")}</Button>
           </div>
         </DialogContent>
       </DialogRoot>
 
       <DialogRoot open={logicReviewOpen} onOpenChange={setLogicReviewOpen}>
         <DialogContent
-          title="Review flow logic"
-          description="Choose how much of the graph the chat agent should check for contradictions, missing information, and connections that do not make sense."
+          title={t("Review flow logic")}
+          description={t("Choose how much of the graph the chat agent should check for contradictions, missing information, and connections that do not make sense.")}
         >
           <div className="confirm-summary">
             <div className="confirm-summary-grid">
-              <span><b>Current flow</b>Review “{activeFlow?.name ?? "Current flow"}” and its linked detail flows in a new flow-scoped chat.</span>
-              <span><b>All project flows</b>Review every flow together, including duplicated responsibilities, conflicting assumptions, and unclear cross-flow handoffs.</span>
+              <span><b>{t("Current flow")}</b>{t("Review “")}{activeFlow?.name ?? t("Current flow")}{t("” and its linked detail flows in a new flow-scoped chat.")}</span>
+              <span><b>{t("All project flows")}</b>{t("Review every flow together, including duplicated responsibilities, conflicting assumptions, and unclear cross-flow handoffs.")}</span>
             </div>
-            <p className="confirm-note">This starts a read-only chat review. It will not edit the graph, change source files, or queue a run.</p>
+            <p className="confirm-note">{t("This starts a read-only chat review. It will not edit the graph, change source files, or queue a run.")}</p>
           </div>
           <div className="scoped-action-block">
-            <span className="scoped-action-label">Choose a review scope</span>
+            <span className="scoped-action-label">{t("Choose a review scope")}</span>
             <div className="action-grid">
               <Button
                 type="button"
@@ -2468,19 +2464,19 @@ export function ProjectToolbar({
                 onClick={() => activeFlow && startLogicReview({ kind: "flow", name: activeFlow.name })}
               >
                 <ChevronRight size={15} />
-                <span>Current flow</span>
+                <span>{t("Current flow")}</span>
               </Button>
               <Button
                 type="button"
                 onClick={() => bundle && startLogicReview({ kind: "project", name: bundle.project.name })}
               >
                 <LayoutGrid size={15} />
-                <span>All project flows</span>
+                <span>{t("All project flows")}</span>
               </Button>
             </div>
           </div>
           <div className="dialog-actions">
-            <Button type="button" onClick={() => setLogicReviewOpen(false)}>Cancel</Button>
+            <Button type="button" onClick={() => setLogicReviewOpen(false)}>{t("Cancel")}</Button>
           </div>
         </DialogContent>
       </DialogRoot>
@@ -2491,15 +2487,15 @@ export function ProjectToolbar({
         {exportDocumentFormat ? (
           <DialogContent
             className="project-export-dialog"
-            title={`Export ${exportDocumentFormat.toUpperCase()}`}
-            description="Choose the flows to include. All flows are selected by default for a project-scope export."
+            title={t("Export {{value1}}", { value1: exportDocumentFormat.toUpperCase() })}
+            description={t("Choose the flows to include. All flows are selected by default for a project-scope export.")}
           >
             <div className="project-export-toolbar">
               <div>
                 <Badge tone={selectedExportFlowIds.length === (bundle?.flows.length ?? 0) ? "accent" : "neutral"}>
-                  {selectedExportFlowIds.length === (bundle?.flows.length ?? 0) ? "Project scope" : "Custom scope"}
+                  {selectedExportFlowIds.length === (bundle?.flows.length ?? 0) ? t("Project scope") : t("Custom scope")}
                 </Badge>
-                <span>{selectedExportFlowIds.length} of {bundle?.flows.length ?? 0} flows selected</span>
+                <span>{t("{{length}} of {{value2}} flows selected", { length: selectedExportFlowIds.length, value2: bundle?.flows.length ?? 0 })}</span>
               </div>
               <div className="action-row compact">
                 <Button
@@ -2507,17 +2503,13 @@ export function ProjectToolbar({
                   size="sm"
                   disabled={exportDocumentBusy || !bundle?.flows.length}
                   onClick={() => setSelectedExportFlowIds(bundle?.flows.map((flow) => flow.id) ?? [])}
-                >
-                  Select all
-                </Button>
+                >{t("{{value1}} {{value2}}", { value1: t("Select all"), value2: " " })}</Button>
                 <Button
                   type="button"
                   size="sm"
                   disabled={exportDocumentBusy || !selectedExportFlowIds.length}
                   onClick={() => setSelectedExportFlowIds([])}
-                >
-                  Deselect all
-                </Button>
+                >{t("{{value1}} {{value2}}", { value1: t("Deselect all"), value2: " " })}</Button>
               </div>
             </div>
             <div className="project-export-flow-list">
@@ -2535,7 +2527,7 @@ export function ProjectToolbar({
                     />
                     <span>
                       <strong>{flow.name}</strong>
-                      <small>{flow.nodes.length} nodes · {flow.edges.length} connections{flow.ignored ? " · Ignored" : ""}</small>
+                      <small>{t("{{length}} nodes · {{length2}} connections {{value3}}", { length: flow.nodes.length, length2: flow.edges.length, value3: flow.ignored ? " · Ignored" : "" })}</small>
                     </span>
                   </label>
                 );
@@ -2549,9 +2541,9 @@ export function ProjectToolbar({
                 onClick={() => void confirmProjectDocumentExport()}
               >
                 {exportDocumentBusy ? <Loader2 className="spin" size={15} /> : <Download size={15} />}
-                Export {exportDocumentFormat.toUpperCase()} ({selectedExportFlowIds.length})
+                {t("Export")}{" "}{exportDocumentFormat.toUpperCase()} ({selectedExportFlowIds.length})
               </Button>
-              <Button type="button" disabled={exportDocumentBusy} onClick={() => setExportDocumentFormat(null)}>Cancel</Button>
+              <Button type="button" disabled={exportDocumentBusy} onClick={() => setExportDocumentFormat(null)}>{t("Cancel")}</Button>
             </div>
           </DialogContent>
         ) : null}
@@ -2562,24 +2554,24 @@ export function ProjectToolbar({
       }}>
         {pendingImplementScope ? (
           <DialogContent
-            title="Start AI Implement with Gaia?"
-            description={`${gaiaAgent.title} will take the selected implementation scope and effort.`}
+            title={t("Start AI Implement with Gaia?")}
+            description={t("{{title}} will take the selected implementation scope and effort.", { title: gaiaAgent.title })}
           >
             <div className="confirm-summary">
               <div className="confirm-badges">
-                <Badge tone="accent">Scope: {pendingImplementScope.kind === "project" ? "Project" : pendingImplementScope.kind === "flow" ? "Flow" : "Nodes"}</Badge>
-                <Badge tone="neutral">Effort: {implementationEffortLabel}</Badge>
+                <Badge tone="accent">{t("Scope: {{value1}}", { value1: pendingImplementScope.kind === "project" ? "Project" : pendingImplementScope.kind === "flow" ? "Flow" : "Nodes" })}</Badge>
+                <Badge tone="neutral">{t("Effort: {{implementationEffortLabel}}", { implementationEffortLabel: implementationEffortLabel })}</Badge>
               </div>
               <div className="confirm-summary-grid">
-                <span><b>Target</b>{implementScopePhrase(pendingImplementScope)}</span>
-                <span><b>What happens</b>A new run is added to the queue, planning starts first, and follow-up approvals or questions appear in Runs if needed.</span>
+                <span><b>{t("Target")}</b>{implementScopePhrase(pendingImplementScope)}</span>
+                <span><b>{t("What happens")}</b>{t("A new run is added to the queue, planning starts first, and follow-up approvals or questions appear in Runs if needed.")}</span>
               </div>
               <p className="confirm-note">
                 {pendingImplementScope.kind === "project"
-                  ? "Use this when the work may touch multiple flows, modules, or graph areas."
+                  ? t("Use this when the work may touch multiple flows, modules, or graph areas.")
                   : pendingImplementScope.kind === "flow"
-                    ? "Use this when the work should stay centered on the current flow, with only related supporting changes outside it."
-                    : "Use this when the work should stay centered on the selected node set, while still allowing the agent to inspect nearby context."}
+                    ? t("Use this when the work should stay centered on the current flow, with only related supporting changes outside it.")
+                    : t("Use this when the work should stay centered on the selected node set, while still allowing the agent to inspect nearby context.")}
               </p>
             </div>
             <div className="dialog-actions">
@@ -2592,9 +2584,9 @@ export function ProjectToolbar({
                 }}
               >
                 <Sparkles size={15} />
-                <span>Start Run</span>
+                <span>{t("Start Run")}</span>
               </Button>
-              <Button type="button" onClick={() => setPendingImplementScope(null)}>Cancel</Button>
+              <Button type="button" onClick={() => setPendingImplementScope(null)}>{t("Cancel")}</Button>
             </div>
           </DialogContent>
         ) : null}
@@ -2606,13 +2598,13 @@ export function ProjectToolbar({
       }}>
         {selectedRuntimeLogService ? (
           <DialogContent
-            title={`${selectedRuntimeLogService.label} Runtime Logs`}
-            description={`${selectedRuntimeLogService.status} · ${selectedRuntimeLogService.command}`}
+            title={t("{{label}} Runtime Logs", { label: selectedRuntimeLogService.label })}
+            description={t("{{status}} · {{command}}", { status: selectedRuntimeLogService.status, command: selectedRuntimeLogService.command })}
             className="runtime-log-dialog"
           >
             <div className="runtime-log-summary">
               <span>{runtimeCwdLabel(selectedRuntimeLogService.relativeCwd)}</span>
-              {selectedRuntimeLogService.pid ? <span>pid {selectedRuntimeLogService.pid}</span> : null}
+              {selectedRuntimeLogService.pid ? <span>{t("pid {{pid}}", { pid: selectedRuntimeLogService.pid })}</span> : null}
               <RuntimeUrlLinks urls={runtimeUrls(selectedRuntimeLogService)} />
             </div>
             {(() => {
@@ -2624,20 +2616,20 @@ export function ProjectToolbar({
                 </div>
               );
             })()}
-            <div className="runtime-log-view" role="log" aria-label={`${selectedRuntimeLogService.label} runtime output`}>
+            <div className="runtime-log-view" role="log" aria-label={t("{{label}} runtime output", { label: selectedRuntimeLogService.label })}>
               {selectedRuntimeLogService.logs.length ? selectedRuntimeLogService.logs.map((line, index) => (
                 <div key={`${line.at}-${index}`} className={`runtime-log-line runtime-log-${line.stream}`}>
-                  <span className="runtime-log-stream">[{line.stream}]</span>
+                  <span className="runtime-log-stream">{t("[ {{stream}} ]", { stream: line.stream })}</span>
                   <span className="runtime-log-text">{renderRuntimeTextWithLinks(line.text.trimEnd())}</span>
                 </div>
               )) : (
-                <p>No runtime output captured yet.</p>
+                <p>{t("No runtime output captured yet.")}</p>
               )}
             </div>
             <TextArea
               rows={3}
               value={runtimeDebugGuidance}
-              placeholder="Optional guidance for Pandora"
+              placeholder={t("Optional guidance for Pandora")}
               onChange={(event) => setRuntimeDebugGuidance(event.target.value)}
             />
             <div className="dialog-actions">
@@ -2653,9 +2645,9 @@ export function ProjectToolbar({
                 }}
               >
                 <Bug size={15} />
-                <span>Debug This Output</span>
+                <span>{t("Debug This Output")}</span>
               </Button>
-              <Button type="button" onClick={() => setSelectedRuntimeLogId(null)}>Close</Button>
+              <Button type="button" onClick={() => setSelectedRuntimeLogId(null)}>{t("Close")}</Button>
             </div>
           </DialogContent>
         ) : null}
@@ -2663,15 +2655,15 @@ export function ProjectToolbar({
 
       <DialogRoot open={bugReviewOpen} onOpenChange={setBugReviewOpen}>
         <DialogContent
-          title="Review Bug Reports"
-          description="Edit the reports, choose exactly which bugs to fix, or resolve reports that no longer need work."
+          title={t("Review Bug Reports")}
+          description={t("Edit the reports, choose exactly which bugs to fix, or resolve reports that no longer need work.")}
           className="bug-review-dialog"
         >
           <div className="bug-review-toolbar">
-            <span>{selectedBugIds.length} of {openBugReports.length} selected</span>
+            <span>{t("{{length}} of {{length2}} selected", { length: selectedBugIds.length, length2: openBugReports.length })}</span>
             <div className="action-row compact">
-              <Button type="button" size="sm" onClick={() => setSelectedBugIds(openBugReports.map((incident) => incident.id))}>Select all</Button>
-              <Button type="button" size="sm" onClick={() => setSelectedBugIds([])}>Clear</Button>
+              <Button type="button" size="sm" onClick={() => setSelectedBugIds(openBugReports.map((incident) => incident.id))}>{t("Select all")}</Button>
+              <Button type="button" size="sm" onClick={() => setSelectedBugIds([])}>{t("Clear")}</Button>
             </div>
           </div>
           <div className="bug-review-list">
@@ -2688,24 +2680,24 @@ export function ProjectToolbar({
                         ? [...new Set([...current, incident.id])]
                         : current.filter((id) => id !== incident.id))}
                     />
-                    <span>Include in next fix run</span>
+                    <span>{t("Include in next fix run")}</span>
                     <Badge tone={incident.priority === "urgent" || incident.priority === "high" ? "danger" : "neutral"}>{incident.priority}</Badge>
                   </label>
                   <div className="form-grid bug-review-fields">
-                    <Field label="Title">
+                    <Field label={t("Title")}>
                       <TextInput
                         value={edit.title}
                         onChange={(event) => setBugEdits((current) => ({ ...current, [incident.id]: { ...edit, title: event.target.value } }))}
                       />
                     </Field>
-                    <Field label="Description">
+                    <Field label={t("Description")}>
                       <TextArea
                         rows={4}
                         value={edit.description}
                         onChange={(event) => setBugEdits((current) => ({ ...current, [incident.id]: { ...edit, description: event.target.value } }))}
                       />
                     </Field>
-                    <Field label="Priority">
+                    <Field label={t("Priority")}>
                       <Select
                         value={edit.priority}
                         onValueChange={(priority) => setBugEdits((current) => ({
@@ -2713,24 +2705,22 @@ export function ProjectToolbar({
                           [incident.id]: { ...edit, priority: priority as DebugIncident["priority"] }
                         }))}
                         options={[
-                          { value: "low", label: "Low" },
-                          { value: "normal", label: "Normal" },
-                          { value: "high", label: "High" },
-                          { value: "urgent", label: "Urgent" }
+                          { value: "low", label: t("Low") },
+                          { value: "normal", label: t("Normal") },
+                          { value: "high", label: t("High") },
+                          { value: "urgent", label: t("Urgent") }
                         ]}
                       />
                     </Field>
                   </div>
                   <div className="action-row compact">
-                    <Tooltip content="Save this report's edited title, description, and priority without starting Pandora.">
+                    <Tooltip content={t("Save this report's edited title, description, and priority without starting Pandora.")}>
                       <Button type="button" size="sm" variant="primary" onClick={() => void saveBugEdit(incident.id)}>
-                        <Save size={14} /> Update
-                      </Button>
+                        <Save size={14} /> {" "}{t("Update")}{" "}</Button>
                     </Tooltip>
-                    <Tooltip content="Remove this report from the open bug list. This does not run Pandora or delete project files.">
+                    <Tooltip content={t("Remove this report from the open bug list. This does not run Pandora or delete project files.")}>
                       <Button type="button" size="sm" variant="danger" onClick={() => setRemoveBugIncidentId(incident.id)}>
-                        <Trash2 size={14} /> Remove
-                      </Button>
+                        <Trash2 size={14} /> {" "}{t("Remove")}{" "}</Button>
                     </Tooltip>
                   </div>
                 </section>
@@ -2744,9 +2734,9 @@ export function ProjectToolbar({
               disabled={!selectedBugIds.length || runChangeBlocked}
               onClick={() => void fixSelectedBugReports()}
             >
-              <Bug size={16} /> Fix selected ({selectedBugIds.length})
+              <Bug size={16} /> {" "}{t("Fix selected (")}{selectedBugIds.length})
             </Button>
-            <Button type="button" onClick={() => setBugReviewOpen(false)}>Close</Button>
+            <Button type="button" onClick={() => setBugReviewOpen(false)}>{t("Close")}</Button>
           </div>
         </DialogContent>
       </DialogRoot>
@@ -2755,13 +2745,13 @@ export function ProjectToolbar({
         if (!open) setRemoveBugIncidentId(null);
       }}>
         <DialogContent
-          title="Remove this bug report?"
-          description="It will be removed from the open bug list and excluded from future fix runs."
+          title={t("Remove this bug report?")}
+          description={t("It will be removed from the open bug list and excluded from future fix runs.")}
         >
           <div className="confirm-summary">
             <div className="confirm-summary-grid">
-              <span><b>Report</b>{openBugReports.find((incident) => incident.id === removeBugIncidentId)?.title ?? "Selected bug report"}</span>
-              <span><b>Effect</b>Pandora will not start, and no project source files will be changed.</span>
+              <span><b>{t("Report")}</b>{openBugReports.find((incident) => incident.id === removeBugIncidentId)?.title ?? t("Selected bug report")}</span>
+              <span><b>{t("Effect")}</b>{t("Pandora will not start, and no project source files will be changed.")}</span>
             </div>
           </div>
           <div className="dialog-actions">
@@ -2776,48 +2766,47 @@ export function ProjectToolbar({
                 void updateBugIncident(incidentId, { status: "resolved" });
               }}
             >
-              <Trash2 size={15} /> Remove report
-            </Button>
-            <Button type="button" onClick={() => setRemoveBugIncidentId(null)}>Cancel</Button>
+              <Trash2 size={15} /> {" "}{t("Remove report")}{" "}</Button>
+            <Button type="button" onClick={() => setRemoveBugIncidentId(null)}>{t("Cancel")}</Button>
           </div>
         </DialogContent>
       </DialogRoot>
 
       <DialogRoot open={reportBugOpen} onOpenChange={setReportBugOpen}>
         <DialogContent
-          title="Report Bug"
-          description="Create an open bug incident for Pandora — Debug & Recovery."
+          title={t("Report Bug")}
+          description={t("Create an open bug incident for Pandora — Debug & Recovery.")}
         >
           <div className="form-grid">
-            <Field label="Title">
+            <Field label={t("Title")}>
               <TextInput
                 value={bugDraft.title}
-                placeholder="Todo count fails after refresh"
+                placeholder={t("Todo count fails after refresh")}
                 onChange={(event) => setBugDraft((current) => ({ ...current, title: event.target.value }))}
               />
             </Field>
-            <Field label="Priority">
+            <Field label={t("Priority")}>
               <Select
                 value={bugDraft.priority}
                 onValueChange={(priority) => setBugDraft((current) => ({ ...current, priority }))}
                 options={[
-                  { value: "low", label: "Low" },
-                  { value: "normal", label: "Normal" },
-                  { value: "high", label: "High" },
-                  { value: "urgent", label: "Urgent" }
+                  { value: "low", label: t("Low") },
+                  { value: "normal", label: t("Normal") },
+                  { value: "high", label: t("High") },
+                  { value: "urgent", label: t("Urgent") }
                 ]}
               />
             </Field>
-            <Field label="Description" hint="Include what you expected, what happened, and how to reproduce it.">
+            <Field label={t("Description")} hint={t("Include what you expected, what happened, and how to reproduce it.")}>
               <TextArea
                 value={bugDraft.description}
                 rows={5}
-                placeholder="After adding a todo, refreshing the page shows an internal server error."
+                placeholder={t("After adding a todo, refreshing the page shows an internal server error.")}
                 onChange={(event) => setBugDraft((current) => ({ ...current, description: event.target.value }))}
               />
             </Field>
             {providerSupportsImages(enabledProvider) ? (
-              <Field label="Images" hint="Attach screenshots for image-capable providers.">
+              <Field label={t("Images")} hint={t("Attach screenshots for image-capable providers.")}>
                 <div className="attachment-picker-row">
                   <Button
                     type="button"
@@ -2832,9 +2821,9 @@ export function ProjectToolbar({
                     }}
                   >
                     <ImagePlus size={16} />
-                    <span>Add Images</span>
+                    <span>{t("Add Images")}</span>
                   </Button>
-                  {bugDraft.filePaths.length ? <span>{bugDraft.filePaths.length} selected</span> : null}
+                  {bugDraft.filePaths.length ? <span>{t("{{length}} selected", { length: bugDraft.filePaths.length })}</span> : null}
                 </div>
               </Field>
             ) : null}
@@ -2847,59 +2836,76 @@ export function ProjectToolbar({
               onClick={() => void submitBugReport()}
             >
               <Bug size={16} />
-              <span>Report Bug</span>
+              <span>{t("Report Bug")}</span>
             </Button>
             <Button type="button" onClick={() => setReportBugOpen(false)}>
-              <span>Cancel</span>
+              <span>{t("Cancel")}</span>
             </Button>
           </div>
         </DialogContent>
       </DialogRoot>
 
       <DialogRoot open={settingsOpen} onOpenChange={setSettingsOpen}>
-        {draft || settingsTab === "shortcuts" ? (
+        {draft || settingsTab === "shortcuts" || settingsTab === "general" ? (
           <DialogContent
-            title={draft ? "Project Settings" : "App Settings"}
+            title={draft ? t("Project Settings") : t("App Settings")}
             description={draft
-              ? "Provider, command, context, web search, and permission settings. Context is assembled automatically from the loaded project model."
-              : "App-global preferences that apply across every project."}
+              ? t("Provider, command, context, web search, and permission settings. Context is assembled automatically from the loaded project model.")
+              : t("App-global preferences that apply across every project.")}
             className="settings-modal"
             draggable
             resizable
           >
             <TabsRoot value={settingsTab} onValueChange={setSettingsTab} className="settings-tabs">
               <TabsList className="ui-tabs-list">
-                {draft ? <TabsTrigger value="general">General</TabsTrigger> : null}
-                <TabsTrigger value="shortcuts">Shortcuts</TabsTrigger>
+                <TabsTrigger value="general">{t("General")}</TabsTrigger>
+                <TabsTrigger value="shortcuts">{t("Shortcuts")}</TabsTrigger>
                 {draft ? (
                   <>
-                    <TabsTrigger value="providers">LLM Providers</TabsTrigger>
-                    <TabsTrigger value="commands">Build Targets</TabsTrigger>
-                    <TabsTrigger value="agent-memory">Agent Instructions</TabsTrigger>
-                    <TabsTrigger value="security">Security</TabsTrigger>
-                    <TabsTrigger value="context">Context</TabsTrigger>
-                    <TabsTrigger value="policy">LLM Profiles</TabsTrigger>
-                    <TabsTrigger value="capabilities">MCP Skills</TabsTrigger>
-                    <TabsTrigger value="advanced">Advanced</TabsTrigger>
+                    <TabsTrigger value="providers">{t("LLM Providers")}</TabsTrigger>
+                    <TabsTrigger value="commands">{t("Build Targets")}</TabsTrigger>
+                    <TabsTrigger value="agent-memory">{t("Agent Instructions")}</TabsTrigger>
+                    <TabsTrigger value="security">{t("Security")}</TabsTrigger>
+                    <TabsTrigger value="context">{t("Context")}</TabsTrigger>
+                    <TabsTrigger value="policy">{t("LLM Profiles")}</TabsTrigger>
+                    <TabsTrigger value="capabilities">{t("MCP Skills")}</TabsTrigger>
+                    <TabsTrigger value="advanced">{t("Advanced")}</TabsTrigger>
                   </>
                 ) : null}
               </TabsList>
 
-              {draft ? (
-                <>
               <TabsContent value="general" className="settings-tab-content narrow">
-                <Field label="Project name" hint="Shown in the sidebar, exported bundles, context, and run handoffs.">
-                  <TextInput
-                    value={detailsDraft.name}
-                    onChange={(event) => setDetailsDraft({ name: event.target.value })}
+                {draft ? (
+                  <Field label={t("Project name")} hint={t("Shown in the sidebar, exported bundles, context, and run handoffs.")}>
+                    <TextInput
+                      value={detailsDraft.name}
+                      onChange={(event) => setDetailsDraft({ name: event.target.value })}
+                    />
+                  </Field>
+                ) : null}
+                <Field label={t("app.language")} hint={t("app.languageHint")}>
+                  <Select
+                    value={localeState.preference}
+                    onValueChange={(value) => void updateLocale(value as LocalePreference)}
+                    options={[
+                      { value: "system", label: t("app.languageSystem") },
+                      { value: "en", label: t("app.languageEnglish") },
+                      { value: "fr", label: t("app.languageFrench") }
+                    ]}
                   />
                 </Field>
-                <Field label="Default code app" hint="ArchiCode opens project folders with this app.">
+                <small>{t("app.languageResolved", {
+                  language: t(localeState.resolvedLocale === "fr" ? "app.languageFrench" : "app.languageEnglish")
+                })}</small>
+
+                {draft ? (
+                  <>
+                <Field label={t("Default code app")} hint={t("ArchiCode opens project folders with this app.")}>
                   <Select
                     value={codeIdeDraft.applicationPath}
-                    placeholder={codeIdeApplicationsBusy ? "Finding installed coding apps…" : "Choose a code application"}
+                    placeholder={codeIdeApplicationsBusy ? t("Finding installed coding apps…") : t("Choose a code application")}
                     disabled={codeIdeApplicationsBusy}
-                    ariaLabel="Default code app"
+                    ariaLabel={t("Default code app")}
                     onValueChange={(applicationPath) => {
                       if (applicationPath === CHOOSE_CODE_APPLICATION_OPTION_VALUE) {
                         void chooseCodeIdeApplication();
@@ -2916,7 +2922,7 @@ export function ProjectToolbar({
                       })),
                       {
                         value: CHOOSE_CODE_APPLICATION_OPTION_VALUE,
-                        label: "Choose another application…"
+                        label: t("Choose another application…")
                       }
                     ]}
                     showScrollIndicator
@@ -2925,9 +2931,9 @@ export function ProjectToolbar({
                 <Switch
                   checked={draft.autoFocusSelectedNode}
                   onCheckedChange={(checked) => updateDraft({ autoFocusSelectedNode: checked })}
-                  label="Center canvas on selected node"
+                  label={t("Center canvas on selected node")}
                 />
-                <small>When enabled, selecting a node from the canvas or sidebar pans and zooms the canvas to that node.</small>
+                <small>{t("When enabled, selecting a node from the canvas or sidebar pans and zooms the canvas to that node.")}</small>
                 <Switch
                   checked={draft.notifications.jobFinished}
                   onCheckedChange={(checked) => updateDraft({
@@ -2936,7 +2942,7 @@ export function ProjectToolbar({
                       jobFinished: checked
                     }
                   })}
-                  label="Show system notifications when jobs finish"
+                  label={t("Show system notifications when jobs finish")}
                 />
                 <Switch
                   checked={draft.notifications.reviewRequired}
@@ -2946,9 +2952,9 @@ export function ProjectToolbar({
                       reviewRequired: checked
                     }
                   })}
-                  label="Show system notifications when reviews need attention"
+                  label={t("Show system notifications when reviews need attention")}
                 />
-                <Field label="UI scale" hint="App-local display zoom for text and controls. Stored on this machine, not in project files.">
+                <Field label={t("UI scale")} hint={t("App-local display zoom for text and controls. Stored on this machine, not in project files.")}>
                   <Select
                     value={String(uiScale)}
                     onValueChange={(value) => setUiScale(Number(value) as typeof uiScale)}
@@ -2959,7 +2965,7 @@ export function ProjectToolbar({
                     ]}
                   />
                 </Field>
-                <Field label="Archi personality" hint="Choose how Archi Research chat speaks in new and resumed chats. Stored on this machine across all projects.">
+                <Field label={t("Archi personality")} hint={t("Choose how Archi Research chat speaks in new and resumed chats. Stored on this machine across all projects.")}>
                   <Select
                     value={globalResearchPersonality}
                     onValueChange={(value) => setGlobalResearchPersonality(value as GlobalResearchPersonality)}
@@ -2971,24 +2977,24 @@ export function ProjectToolbar({
                     showScrollIndicator
                   />
                 </Field>
-                <Field label="Verbosity" hint="Choose whether Research chat uses the normal concise prompt or the extra warm, chatty, verbose response-style directive. Stored on this machine across all projects.">
+                <Field label={t("Verbosity")} hint={t("Choose whether Research chat uses the normal concise prompt or the extra warm, chatty, verbose response-style directive. Stored on this machine across all projects.")}>
                   <Select
                     value={globalResearchVerbosity}
                     onValueChange={(value) => setGlobalResearchVerbosity(value as GlobalResearchVerbosity)}
                     options={[
-                      { value: "default", label: "Default" },
-                      { value: "chatty", label: "Chatty" }
+                      { value: "default", label: t("Default") },
+                      { value: "chatty", label: t("Chatty") }
                     ]}
                   />
                 </Field>
-                <Field label="Canvas background" hint="Choose the graph surface color. Neutral gray is the default because it stays readable in light and dark themes.">
+                <Field label={t("Canvas background")} hint={t("Choose the graph surface color. Neutral gray is the default because it stays readable in light and dark themes.")}>
                   <div className="canvas-background-grid">
                     {canvasBackgroundOptions.map((option) => (
                       <button
                         key={option.value}
                         type="button"
                         className={draft.canvasBackground === option.value ? "is-active" : ""}
-                        aria-label={`Use ${option.label} canvas background`}
+                        aria-label={t("Use {{label}} canvas background", { label: option.label })}
                         title={option.description}
                         onClick={() => updateDraft({ canvasBackground: option.value })}
                       >
@@ -3001,34 +3007,38 @@ export function ProjectToolbar({
                     ))}
                   </div>
                 </Field>
-                <Field label="Canvas edges" hint="Keep the current routed edges or switch to curved edges across the graph.">
+                <Field label={t("Canvas edges")} hint={t("Keep the current routed edges or switch to curved edges across the graph.")}>
                   <Select
                     value={draft.canvasEdgeStyle}
                     onValueChange={(value) => updateDraft({
                       canvasEdgeStyle: value as ProjectSettings["canvasEdgeStyle"]
                     })}
                     options={[
-                      { value: "current", label: "Current routed edges" },
-                      { value: "curved", label: "Curved edges" }
+                      { value: "current", label: t("Current routed edges") },
+                      { value: "curved", label: t("Curved edges") }
                     ]}
                   />
                 </Field>
+                  </>
+                ) : null}
               </TabsContent>
 
+              {draft ? (
+                <>
               <TabsContent value="providers" className="settings-tab-content provider-settings-tab">
                 <div className="provider-settings-intro">
-                  <p className="settings-note">Provider cards are saved on this computer and reused across projects. The enabled card supplies the default model for chat and build agents unless a chat selection or LLM Profile overrides it.</p>
+                  <p className="settings-note">{t("Provider cards are saved on this computer and reused across projects. The enabled card supplies the default model for chat and build agents unless a chat selection or LLM Profile overrides it.")}</p>
                   {showMacKeychainNote ? (
                     <details className="settings-keychain-disclosure">
-                      <summary><ShieldCheck size={13} /> macOS Keychain</summary>
-                      <span>API keys are stored in Keychain. Saving or using a saved key may ask you to allow ArchiCode to access it.</span>
+                      <summary><ShieldCheck size={13} /> {" "}{t("macOS Keychain")}</summary>
+                      <span>{t("API keys are stored in Keychain. Saving or using a saved key may ask you to allow ArchiCode to access it.")}</span>
                     </details>
                   ) : null}
                 </div>
                 <div className="provider-profile-toolbar">
                   <Button type="button" size="sm" onClick={() => addProviderProfile()}>
                     <Plus size={14} />
-                    <span>New Provider</span>
+                    <span>{t("New Provider")}</span>
                   </Button>
                 </div>
                 <div className="provider-editor-list">
@@ -3057,30 +3067,30 @@ export function ProjectToolbar({
                             <span>
                               <Button type="button" size="sm" onClick={() => void checkDraftProvider(provider.id)}>
                                 <Activity size={14} />
-                                <span>Check</span>
+                                <span>{t("Check")}</span>
                               </Button>
                             </span>
                           </Tooltip>
-                          <IconButton type="button" title="Duplicate provider profile" onClick={() => duplicateProvider(provider.id)}>
+                          <IconButton type="button" title={t("Duplicate provider profile")} onClick={() => duplicateProvider(provider.id)}>
                             <Copy size={16} />
                           </IconButton>
                           <IconButton
                             type="button"
-                            title="Delete provider profile"
+                            title={t("Delete provider profile")}
                             onClick={() => removeProvider(provider.id)}
                           >
                             <Trash2 size={16} />
                           </IconButton>
                         </div>
                       </div>
-                      <Field label="Profile name">
+                      <Field label={t("Profile name")}>
                         <TextInput
                           data-provider-name-input={provider.id}
                           value={provider.label}
                           onChange={(event) => updateProvider(provider.id, { label: event.target.value })}
                         />
                       </Field>
-                      <Field label="LLM Provider Source">
+                      <Field label={t("LLM Provider Source")}>
                         <Select
                           value={provider.kind}
                           onValueChange={(value) => changeProviderKind(provider.id, value as ProviderKind)}
@@ -3089,32 +3099,30 @@ export function ProjectToolbar({
                       </Field>
                       <small>{providerDescription(provider.kind)}</small>
                       {providerHealth[provider.id] ? (
-                        <small className={providerHealth[provider.id].ok ? "health-ok" : "health-bad"}>
-                          {providerHealth[provider.id].status}: {providerHealth[provider.id].message}
-                        </small>
+                        <small className={providerHealth[provider.id].ok ? "health-ok" : "health-bad"}>{t("{{status}}: {{message}}", { status: providerHealth[provider.id].status, message: providerHealth[provider.id].message })}</small>
                       ) : null}
                       {provider.kind === "offline-manual" ? (
-                        <small>This is a non-AI offline mode for using ArchiCode as a living diagram, run ledger, artifact browser, and permissioned command shell. It cannot plan or code with an LLM until another provider is selected.</small>
+                        <small>{t("This is a non-AI offline mode for using ArchiCode as a living diagram, run ledger, artifact browser, and permissioned command shell. It cannot plan or code with an LLM until another provider is selected.")}</small>
                       ) : provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local" || provider.kind === "antigravity-local" || provider.kind === "grok-local" || provider.kind === "kimi-local" ? (
                         <>
                           {renderProviderModelField(provider, provider.kind === "codex-local" ? "configured Codex default" : provider.kind === "claude-local" ? "configured Claude default" : provider.kind === "opencode-local" ? "provider/model" : provider.kind === "antigravity-local" ? "configured agy default" : provider.kind === "kimi-local" ? "configured Kimi default" : "configured Grok Build default")}
                           {provider.kind === "codex-local" ? renderOutputVerbosityField(provider) : null}
                           {renderContextWindowField(provider)}
-                          <Field label="Local command">
+                          <Field label={t("Local command")}>
                             <TextInput
                               value={provider.localCommand ?? (provider.kind === "codex-local" ? "codex" : provider.kind === "claude-local" ? "claude" : provider.kind === "opencode-local" ? "opencode" : provider.kind === "antigravity-local" ? "agy" : provider.kind === "kimi-local" ? "kimi" : "grok")}
                               placeholder={provider.kind === "codex-local" ? "codex" : provider.kind === "claude-local" ? "claude" : provider.kind === "opencode-local" ? "opencode" : provider.kind === "antigravity-local" ? "agy" : provider.kind === "kimi-local" ? "kimi" : "grok"}
                               onChange={(event) => updateProvider(provider.id, { localCommand: event.target.value || undefined })}
                             />
                           </Field>
-                          {provider.kind === "kimi-local" ? null : <Field label={provider.kind === "opencode-local" || provider.kind === "antigravity-local" || provider.kind === "grok-local" ? "Agent" : provider.kind === "codex-local" ? "Profile" : "Settings override"}>
+                          {provider.kind === "kimi-local" ? null : <Field label={provider.kind === "opencode-local" || provider.kind === "antigravity-local" || provider.kind === "grok-local" ? t("Agent") : provider.kind === "codex-local" ? t("Profile") : t("Settings override")}>
                             <TextInput
                               value={provider.localProfile ?? ""}
-                              placeholder={provider.kind === "codex-local" ? "optional Codex profile" : provider.kind === "claude-local" ? "optional Claude settings profile" : provider.kind === "opencode-local" ? "optional OpenCode agent" : provider.kind === "antigravity-local" ? "optional Antigravity agent" : "optional Grok Build agent"}
+                              placeholder={provider.kind === "codex-local" ? t("optional Codex profile") : provider.kind === "claude-local" ? t("optional Claude settings profile") : provider.kind === "opencode-local" ? t("optional OpenCode agent") : provider.kind === "antigravity-local" ? t("optional Antigravity agent") : t("optional Grok Build agent")}
                               onChange={(event) => updateProvider(provider.id, { localProfile: event.target.value || undefined })}
                             />
                           </Field>}
-                          <Field label={`${provider.kind === "codex-local" ? "Codex" : provider.kind === "claude-local" ? "Claude" : provider.kind === "opencode-local" ? "OpenCode" : provider.kind === "antigravity-local" ? "Antigravity" : provider.kind === "kimi-local" ? "Kimi Code" : "Grok Build"} command access`}>
+                          <Field label={t("{{value1}} command access", { value1: provider.kind === "codex-local" ? "Codex" : provider.kind === "claude-local" ? "Claude" : provider.kind === "opencode-local" ? "OpenCode" : provider.kind === "antigravity-local" ? "Antigravity" : provider.kind === "kimi-local" ? "Kimi Code" : "Grok Build" })}>
                             <Select
                               value={provider.localSandbox ?? "read-only"}
                               onValueChange={(value) => updateProvider(provider.id, {
@@ -3126,30 +3134,30 @@ export function ProjectToolbar({
                           <small>{provider.kind === "codex-local"
                             ? codexLocalCommandAccessHint
                             : provider.kind === "claude-local"
-                              ? "Claude Code uses permission modes instead of a true filesystem sandbox. ArchiCode maps these access levels to read-only planning, auto-accepted workspace edits, or full bypass mode."
+                              ? t("Claude Code uses permission modes instead of a true filesystem sandbox. ArchiCode maps these access levels to read-only planning, auto-accepted workspace edits, or full bypass mode.")
                               : provider.kind === "opencode-local"
-                                ? "OpenCode runs once per request. Write-capable build phases add --auto; use OpenCode permissions/config for finer-grained tool restrictions."
+                                ? t("OpenCode runs once per request. Write-capable build phases add --auto; use OpenCode permissions/config for finer-grained tool restrictions.")
                                 : provider.kind === "antigravity-local"
-                                  ? "Antigravity uses plan+sandbox for read-only phases, accept-edits+sandbox for workspace writes, and bypasses permissions only in full-access mode."
+                                  ? t("Antigravity uses plan+sandbox for read-only phases, accept-edits+sandbox for workspace writes, and bypasses permissions only in full-access mode.")
                                   : provider.kind === "kimi-local"
-                                    ? "Kimi print mode is autonomous, so ArchiCode injects first-match static deny rules in an isolated Kimi home. Read-only blocks edits and shell tools; workspace write allows project Write/Edit but leaves shell, delegated agents, and MCP denied. Full access falls back to the user's Kimi rules."
-                                  : "Grok Build uses dontAsk plus its read-only sandbox for review phases, and bypassPermissions inside the selected workspace/off sandbox only for write-capable phases."}</small>
+                                    ? t("Kimi print mode is autonomous, so ArchiCode injects first-match static deny rules in an isolated Kimi home. Read-only blocks edits and shell tools; workspace write allows project Write/Edit but leaves shell, delegated agents, and MCP denied. Full access falls back to the user's Kimi rules.")
+                                  : t("Grok Build uses dontAsk plus its read-only sandbox for review phases, and bypassPermissions inside the selected workspace/off sandbox only for write-capable phases.")}</small>
                           {provider.kind === "antigravity-local" || provider.kind === "kimi-local" ? (
-                            <small>{provider.kind === "kimi-local" ? <>Kimi receives a fresh one-shot <code>kimi --prompt</code> call in a temporary Kimi home. The temporary session is removed afterward; the signed-in credential store remains shared.</> : <>Antigravity always runs through one-shot <code>agy --print</code> calls; ArchiCode owns conversation continuity.</>}</small>
+                            <small>{provider.kind === "kimi-local" ? <>{t("Kimi receives a fresh one-shot")}{" "}<code>{t("kimi --prompt")}</code> {" "}{t("call in a temporary Kimi home. The temporary session is removed afterward; the signed-in credential store remains shared.")}</> : <>{t("Antigravity always runs through one-shot")}{" "}<code>{t("agy --print")}</code> {" "}{t("calls; ArchiCode owns conversation continuity.")}</>}</small>
                           ) : (
                             <>
                               <Switch
                                 checked={Boolean(provider.ephemeral)}
                                 onCheckedChange={(checked) => updateProvider(provider.id, { ephemeral: checked })}
-                                label={provider.kind === "codex-local" ? "Use throwaway Codex sessions" : provider.kind === "claude-local" ? "Disable Claude session persistence" : provider.kind === "opencode-local" ? "Delete OpenCode sessions after each call" : "Delete Grok Build sessions after each call"}
+                                label={provider.kind === "codex-local" ? t("Use throwaway Codex sessions") : provider.kind === "claude-local" ? t("Disable Claude session persistence") : provider.kind === "opencode-local" ? t("Delete OpenCode sessions after each call") : t("Delete Grok Build sessions after each call")}
                               />
                               <small>{provider.kind === "codex-local"
-                                ? <>Adds <code>--ephemeral</code> for local Codex runs. ArchiCode still saves runs and artifacts, but Codex should not reuse or save its own CLI session state.</>
+                                ? <>{t("Adds")}{" "}<code>{t("--ephemeral")}</code> {" "}{t("for local Codex runs. ArchiCode still saves runs and artifacts, but Codex should not reuse or save its own CLI session state.")}</>
                                 : provider.kind === "claude-local"
-                                  ? <>Adds <code>--no-session-persistence</code> for local Claude runs. ArchiCode still saves runs and artifacts, but Claude should not reuse or save its own CLI session state.</>
+                                  ? <>{t("Adds")}{" "}<code>{t("--no-session-persistence")}</code> {" "}{t("for local Claude runs. ArchiCode still saves runs and artifacts, but Claude should not reuse or save its own CLI session state.")}</>
                                   : provider.kind === "opencode-local"
-                                    ? <>Runs <code>opencode session delete</code> after the one-shot response. ArchiCode still saves its own runs and artifacts.</>
-                                    : <>Adds <code>--no-memory</code> and runs <code>grok sessions delete</code> after the one-shot response. ArchiCode still saves its own runs and artifacts.</>}</small>
+                                    ? <>{t("Runs")}{" "}<code>{t("opencode session delete")}</code> {" "}{t("after the one-shot response. ArchiCode still saves its own runs and artifacts.")}</>
+                                    : <>{t("Adds")}{" "}<code>{t("--no-memory")}</code> {" "}{t("and runs")}{" "}<code>{t("grok sessions delete")}</code> {" "}{t("after the one-shot response. ArchiCode still saves its own runs and artifacts.")}</>}</small>
                             </>
                           )}
                         </>
@@ -3158,7 +3166,7 @@ export function ProjectToolbar({
                           {renderProviderModelField(provider, provider.kind === "anthropic-compatible" ? "claude-sonnet-4-6" : "gpt-5.5")}
                           {provider.kind === "openai-compatible" ? renderOutputVerbosityField(provider) : null}
                           {renderContextWindowField(provider)}
-                          <Field label="Base URL">
+                          <Field label={t("Base URL")}>
                             <TextInput
                               value={provider.baseUrl ?? ""}
                               placeholder={provider.kind === "anthropic-compatible" ? "https://api.anthropic.com" : "https://api.openai.com/v1"}
@@ -3166,7 +3174,7 @@ export function ProjectToolbar({
                             />
                           </Field>
                           {provider.kind === "openai-compatible" ? (
-                            <Field label="Endpoint" hint={openAiEndpointHint(provider)}>
+                            <Field label={t("Endpoint")} hint={openAiEndpointHint(provider)}>
                               <Select
                                 value={provider.openAiEndpointMode ?? "auto"}
                                 onValueChange={(value) => updateProvider(provider.id, {
@@ -3180,20 +3188,20 @@ export function ProjectToolbar({
                                       ? `Auto (${openAiEndpointLabel(provider.detectedOpenAiEndpointMode)})`
                                       : "Auto (recommended)"
                                   },
-                                  { value: "responses", label: "Responses API" },
-                                  { value: "chat-completions", label: "Chat Completions" }
+                                  { value: "responses", label: t("Responses API") },
+                                  { value: "chat-completions", label: t("Chat Completions") }
                                 ]}
                               />
                             </Field>
                           ) : null}
-                          <Field label="API key" hint="Saved locally on this computer and hidden from project JSON.">
+                          <Field label={t("API key")} hint={t("Saved locally on this computer and hidden from project JSON.")}>
                             <div className="secret-input-row">
                               <TextInput
                                 type={visibleApiKeyIds.has(provider.id) ? "text" : "password"}
                                 value={providerApiKeyValue(provider)}
                                 placeholder={savedApiKeyIds.has(provider.id)
-                                  ? "Saved API key (hidden)"
-                                  : provider.kind === "anthropic-compatible" ? "Paste Anthropic API key" : "Paste OpenAI API key"}
+                                  ? t("Saved API key (hidden)")
+                                  : provider.kind === "anthropic-compatible" ? t("Paste Anthropic API key") : t("Paste OpenAI API key")}
                                 autoComplete="off"
                                 spellCheck={false}
                                 onPaste={() => setPendingModelCheckIds((current) => new Set(current).add(provider.id))}
@@ -3204,7 +3212,7 @@ export function ProjectToolbar({
                               />
                               <IconButton
                                 type="button"
-                                title={visibleApiKeyIds.has(provider.id) ? "Hide API key" : "Show API key"}
+                                title={visibleApiKeyIds.has(provider.id) ? t("Hide API key") : t("Show API key")}
                                 onClick={() => setVisibleApiKeyIds((current) => {
                                   const next = new Set(current);
                                   if (next.has(provider.id)) next.delete(provider.id);
@@ -3216,7 +3224,7 @@ export function ProjectToolbar({
                               </IconButton>
                             </div>
                             {savedApiKeyIds.has(provider.id) && !providerApiKeyValue(provider) ? (
-                              <small>Saved key will be used. Paste a new key here to replace it.</small>
+                              <small>{t("Saved key will be used. Paste a new key here to replace it.")}</small>
                             ) : null}
                           </Field>
                         </>
@@ -3230,13 +3238,13 @@ export function ProjectToolbar({
                 <Switch
                   checked={draft.buildTargetsLocked}
                   onCheckedChange={(buildTargetsLocked) => updateDraft({ buildTargetsLocked })}
-                  label="Lock build targets"
-                  tooltip="Prevents AI Build, Run, Debug, command inference, and runtime-profile reconciliation from changing the configured build command or run targets. You can still edit them manually here."
+                  label={t("Lock build targets")}
+                  tooltip={t("Prevents AI Build, Run, Debug, command inference, and runtime-profile reconciliation from changing the configured build command or run targets. You can still edit them manually here.")}
                 />
-                <Field label="Project build command" hint="Used by the toolbar Build button and by AI runs when they verify generated changes.">
+                <Field label={t("Project build command")} hint={t("Used by the toolbar Build button and by AI runs when they verify generated changes.")}>
                   <TextInput value={draft.defaultBuildCommand} onChange={(event) => updateDraft({ defaultBuildCommand: event.target.value })} />
                 </Field>
-                <Field label="Run targets" hint="Editable JSON run target profiles. Targets can discover, launch, wait for, diagnose, recover, and run app commands for single-target and multi-target projects.">
+                <Field label={t("Run targets")} hint={t("Editable JSON run target profiles. Targets can discover, launch, wait for, diagnose, recover, and run app commands for single-target and multi-target projects.")}>
                   <TextArea
                     value={runProfilesDraft}
                     rows={Math.max(8, draft.runTargetProfiles.length * 8)}
@@ -3260,11 +3268,10 @@ export function ProjectToolbar({
 
               <TabsContent value="agent-memory" className="settings-tab-content narrow">
                 <p className="settings-note settings-agent-instructions-note">
-                  ArchiCode loads every existing instruction file into both Chat and Build context, regardless of the selected LLM provider. Put shared guidance in <code>AGENTS.md</code>, and avoid repeating or contradicting rules across files.
-                </p>
+                  {t("ArchiCode loads every existing instruction file into both Chat and Build context, regardless of the selected LLM provider. Put shared guidance in")}{" "}<code>{t("AGENTS.md")}</code>{t(", and avoid repeating or contradicting rules across files.")}{" "}</p>
                 <Field
-                  label="Agent instructions"
-                  hint={`${agentInstructions.exists ? "Editing" : "Will create"} ${agentInstructions.path}. The selector chooses which real project file to edit; it does not control which files agents receive.`}
+                  label={t("Agent instructions")}
+                  hint={t("{{value1}}{{path}}. The selector chooses which real project file to edit; it does not control which files agents receive.", { value1: agentInstructions.exists ? "Editing" : "Will create", path: agentInstructions.path })}
                 >
                   <Select
                     value={agentInstructions.path}
@@ -3287,7 +3294,7 @@ export function ProjectToolbar({
                     }}
                     options={agentInstructionFiles.map((file) => ({
                       value: file.path,
-                      label: `${file.path} ${file.exists ? "(exists)" : "(will create)"}${file.preferred ? " (default)" : ""}`
+                      label: t("{{path}}{{value2}}{{value3}}", { path: file.path, value2: file.exists ? "(exists)" : "(will create)", value3: file.preferred ? " (default)" : "" })
                     }))}
                   />
                   <TextArea
@@ -3305,7 +3312,7 @@ export function ProjectToolbar({
                       setAgentInstructionsError(null);
                     }}
                   />
-                  <small>{agentInstructionsDirty ? "Unsaved changes" : agentInstructions.exists ? `${agentInstructions.path} loaded` : `${agentInstructions.path} does not exist yet`}</small>
+                  <small>{agentInstructionsDirty ? t("Unsaved changes") : agentInstructions.exists ? t("{{path}} loaded", { path: agentInstructions.path }) : t("{{path}} does not exist yet", { path: agentInstructions.path })}</small>
                   {agentInstructionsError ? <small className="settings-validation-error">{agentInstructionsError}</small> : null}
                 </Field>
               </TabsContent>
@@ -3313,8 +3320,8 @@ export function ProjectToolbar({
               <TabsContent value="security" className="settings-tab-content narrow">
                 <section className="settings-security-group">
                   <div className="settings-security-group-head">
-                    <strong>Permission gates</strong>
-                    <small>Choose where runs pause for human approval.</small>
+                    <strong>{t("Permission gates")}</strong>
+                    <small>{t("Choose where runs pause for human approval.")}</small>
                   </div>
                   <Switch
                     checked={draft.webSearch.enabled}
@@ -3325,10 +3332,10 @@ export function ProjectToolbar({
                         persistSearchArtifacts: true
                       }
                     })}
-                    label="Allow LLM providers to search online when needed"
-                    tooltip="Allows enabled LLM providers and ArchiCode web tools to use online search when a run needs current external information. Search summaries and citations are always saved as artifacts."
+                    label={t("Allow LLM providers to search online when needed")}
+                    tooltip={t("Allows enabled LLM providers and ArchiCode web tools to use online search when a run needs current external information. Search summaries and citations are always saved as artifacts.")}
                   />
-                  <Field label="Web search backend" hint="Choose whether web search comes from the active model/provider or from ArchiCode's internal Brave Search tool.">
+                  <Field label={t("Web search backend")} hint={t("Choose whether web search comes from the active model/provider or from ArchiCode's internal Brave Search tool.")}>
                     <Select
                       value={draft.webSearch.provider}
                       onValueChange={(value) => updateDraft({
@@ -3338,41 +3345,41 @@ export function ProjectToolbar({
                         }
                       })}
                       options={[
-                        { value: "native", label: "Native provider search" },
-                        { value: "brave", label: "Brave via ArchiCode" }
+                        { value: "native", label: t("Native provider search") },
+                        { value: "brave", label: t("Brave via ArchiCode") }
                       ]}
                     />
                   </Field>
                   <small>{draft.webSearch.provider === "native"
-                    ? "Use provider-native web search when the selected model/endpoint supports it. Models without native search stay web-disabled except for direct URL fetches and any separately configured MCP tools."
-                    : "Use ArchiCode's built-in Brave Search tool so any provider can search through the same backend."}</small>
+                    ? t("Use provider-native web search when the selected model/endpoint supports it. Models without native search stay web-disabled except for direct URL fetches and any separately configured MCP tools.")
+                    : t("Use ArchiCode's built-in Brave Search tool so any provider can search through the same backend.")}</small>
                   {draft.webSearch.provider === "brave" ? (
                     <>
                       {showMacKeychainNote ? (
-                        <p className="settings-note settings-keychain-note">On macOS, Brave API keys are stored in Keychain. Saving or using a saved key may ask you to allow ArchiCode to access it.</p>
+                        <p className="settings-note settings-keychain-note">{t("On macOS, Brave API keys are stored in Keychain. Saving or using a saved key may ask you to allow ArchiCode to access it.")}</p>
                       ) : null}
-                      <Field label="Brave Search API key" hint="Saved locally on this computer and hidden from project JSON.">
+                      <Field label={t("Brave Search API key")} hint={t("Saved locally on this computer and hidden from project JSON.")}>
                         <div className="secret-input-row">
                           <TextInput
                             type={visibleBraveApiKey ? "text" : "password"}
                             value={webSearchSecretsDraft.braveApiKey}
                             placeholder={savedWebSearchSecrets.brave
-                              ? "Saved Brave API key (hidden)"
-                              : "Paste Brave Search API key"}
+                              ? t("Saved Brave API key (hidden)")
+                              : t("Paste Brave Search API key")}
                             autoComplete="off"
                             spellCheck={false}
                             onChange={(event) => setWebSearchSecretsDraft({ braveApiKey: event.target.value })}
                           />
                           <IconButton
                             type="button"
-                            title={visibleBraveApiKey ? "Hide Brave API key" : "Show Brave API key"}
+                            title={visibleBraveApiKey ? t("Hide Brave API key") : t("Show Brave API key")}
                             onClick={() => setVisibleBraveApiKey((current) => !current)}
                           >
                             {visibleBraveApiKey ? <EyeOff size={18} /> : <Eye size={18} />}
                           </IconButton>
                         </div>
                         {savedWebSearchSecrets.brave && !webSearchSecretsDraft.braveApiKey ? (
-                          <small>Saved key will be used. Paste a new key here to replace it.</small>
+                          <small>{t("Saved key will be used. Paste a new key here to replace it.")}</small>
                         ) : null}
                       </Field>
                     </>
@@ -3380,20 +3387,20 @@ export function ProjectToolbar({
                   <Switch
                     checked={draft.autoApproveShellCommands}
                     onCheckedChange={(checked) => updateDraft({ autoApproveShellCommands: checked })}
-                    label="Auto-approve commands allowed by filesystem policy"
-                    tooltip="Applies to implementation/build/debug shell commands such as setup, verification, run-target, and finite console commands. Planning review, source-change review, and Research chat approvals use separate toggles. High-risk commands still pause for manual approval even when this is enabled."
+                    label={t("Auto-approve commands allowed by filesystem policy")}
+                    tooltip={t("Applies to implementation/build/debug shell commands such as setup, verification, run-target, and finite console commands. Planning review, source-change review, and Research chat approvals use separate toggles. High-risk commands still pause for manual approval even when this is enabled.")}
                   />
                   <Switch
                     checked={draft.planningReviewMode === "manual"}
                     onCheckedChange={(checked) => updateDraft({ planningReviewMode: checked ? "manual" : "auto" })}
-                    label="Review plans before coding"
-                    tooltip="When enabled, Gaia's AI Implement run pauses after planning so you can approve or reject the plan before any coding phase starts."
+                    label={t("Review plans before coding")}
+                    tooltip={t("When enabled, Gaia's AI Implement run pauses after planning so you can approve or reject the plan before any coding phase starts.")}
                   />
                   <Switch
                     checked={draft.codeReviewMode === "manual"}
                     onCheckedChange={(checked) => updateDraft({ codeReviewMode: checked ? "manual" : "auto-apply" })}
-                    label="Review source changes before verification"
-                    tooltip="When enabled, generated source diffs wait for your review before ArchiCode continues to verification."
+                    label={t("Review source changes before verification")}
+                    tooltip={t("When enabled, generated source diffs wait for your review before ArchiCode continues to verification.")}
                   />
                   <Switch
                     checked={draft.filesystem.blockOutsideProjectPaths}
@@ -3403,20 +3410,20 @@ export function ProjectToolbar({
                         blockOutsideProjectPaths: checked
                       }
                     })}
-                    label="Block command paths outside project and allowed roots"
-                    tooltip="When enabled, commands that reference paths outside the project root or additional allowed roots are blocked before execution."
+                    label={t("Block command paths outside project and allowed roots")}
+                    tooltip={t("When enabled, commands that reference paths outside the project root or additional allowed roots are blocked before execution.")}
                   />
                   <Switch
                     checked={draft.stopOnUnansweredQuestions}
                     onCheckedChange={(checked) => updateDraft({ stopOnUnansweredQuestions: checked })}
-                    label="Require answers before manual plan approval"
-                    tooltip="When enabled, manual plan approval is blocked until open planning questions are answered or dismissed. Turn it off to approve a plan while skipping those questions."
+                    label={t("Require answers before manual plan approval")}
+                    tooltip={t("When enabled, manual plan approval is blocked until open planning questions are answered or dismissed. Turn it off to approve a plan while skipping those questions.")}
                   />
                   <Switch
                     checked={draft.purgeResolvedNotesOnApproval}
                     onCheckedChange={(checked) => updateDraft({ purgeResolvedNotesOnApproval: checked })}
-                    label="Purge resolved node notes when a node is approved"
-                    tooltip="Automatically deletes resolved node notes after approving a node, keeping only open notes and active questions."
+                    label={t("Purge resolved node notes when a node is approved")}
+                    tooltip={t("Automatically deletes resolved node notes after approving a node, keeping only open notes and active questions.")}
                   />
                   <Switch
                     checked={draft.researchAutoApproveGraphChanges.includeDestructive}
@@ -3426,24 +3433,24 @@ export function ProjectToolbar({
                         includeDestructive: checked
                       }
                     })}
-                    label="Chat auto-approval also includes destructive actions"
-                    tooltip="When Chat auto-approve is enabled, it also applies graph deletions without showing a review card."
+                    label={t("Chat auto-approval also includes destructive actions")}
+                    tooltip={t("When Chat auto-approve is enabled, it also applies graph deletions without showing a review card.")}
                   />
-                  <Field label="Graph change history retention" hint="Resolved graph-change records older than this are moved to a cold archive file and dropped from the hot ledger. Pending changes are always kept.">
+                  <Field label={t("Graph change history retention")} hint={t("Resolved graph-change records older than this are moved to a cold archive file and dropped from the hot ledger. Pending changes are always kept.")}>
                     <Select
                       value={draft.graphChangeRetention}
                       onValueChange={(value) => updateDraft({ graphChangeRetention: value as typeof draft.graphChangeRetention })}
                       options={[
-                        { value: "1day", label: "1 day" },
-                        { value: "1week", label: "1 week" },
-                        { value: "2weeks", label: "2 weeks" },
-                        { value: "1month", label: "1 month" },
-                        { value: "3months", label: "3 months" },
-                        { value: "never", label: "Never (keep all)" }
+                        { value: "1day", label: t("1 day") },
+                        { value: "1week", label: t("1 week") },
+                        { value: "2weeks", label: t("2 weeks") },
+                        { value: "1month", label: t("1 month") },
+                        { value: "3months", label: t("3 months") },
+                        { value: "never", label: t("Never (keep all)") }
                       ]}
                     />
                   </Field>
-                  <Field label="Trusted command allowlist" hint="Commands listed here are treated as approved when filesystem checks pass. Put one exact command per line.">
+                  <Field label={t("Trusted command allowlist")} hint={t("Commands listed here are treated as approved when filesystem checks pass. Put one exact command per line.")}>
                     <TextArea
                       value={draft.allowedShellCommands.join("\n")}
                       rows={5}
@@ -3456,8 +3463,8 @@ export function ProjectToolbar({
 
                 <section className="settings-security-group">
                   <div className="settings-security-group-head">
-                    <strong>Agent tool permissions</strong>
-                    <small>Choose which built-in ArchiCode tools run agents may use.</small>
+                    <strong>{t("Agent tool permissions")}</strong>
+                    <small>{t("Choose which built-in ArchiCode tools run agents may use.")}</small>
                   </div>
                   <Switch
                     checked={draft.agentTools.projectFiles}
@@ -3467,8 +3474,8 @@ export function ProjectToolbar({
                         projectFiles: checked
                       }
                     })}
-                    label="Allow run agents to list, search, and read project files"
-                    tooltip="Lets implementation runs use built-in tools to list, search, and read files inside the project before making decisions."
+                    label={t("Allow run agents to list, search, and read project files")}
+                    tooltip={t("Lets implementation runs use built-in tools to list, search, and read files inside the project before making decisions.")}
                   />
                   <Switch
                     checked={draft.agentTools.runArtifacts}
@@ -3478,8 +3485,8 @@ export function ProjectToolbar({
                         runArtifacts: checked
                       }
                     })}
-                    label="Allow run agents to inspect runs and artifacts"
-                    tooltip="Lets implementation runs inspect previous run records, plans, diffs, logs, and saved artifacts for context."
+                    label={t("Allow run agents to inspect runs and artifacts")}
+                    tooltip={t("Lets implementation runs inspect previous run records, plans, diffs, logs, and saved artifacts for context.")}
                   />
                   <Switch
                     checked={draft.agentTools.console}
@@ -3489,8 +3496,8 @@ export function ProjectToolbar({
                         console: checked
                       }
                     })}
-                    label="Allow run agents to execute safe finite console commands"
-                    tooltip="Lets implementation runs execute bounded commands through ArchiCode's console guard when command approval and filesystem policy allow it."
+                    label={t("Allow run agents to execute safe finite console commands")}
+                    tooltip={t("Lets implementation runs execute bounded commands through ArchiCode's console guard when command approval and filesystem policy allow it.")}
                   />
                   <Switch
                     checked={draft.agentTools.subagents?.mergeConflictResolution ?? true}
@@ -3506,8 +3513,8 @@ export function ProjectToolbar({
                         }
                       }
                     })}
-                    label="Allow Solomon — Merge Arbiter"
-                    tooltip="Lets Research chat ask approval to run Solomon for git merge conflicts. Solomon reads conflicted files, writes the approved resolution, and verifies it."
+                    label={t("Allow Solomon — Merge Arbiter")}
+                    tooltip={t("Lets Research chat ask approval to run Solomon for git merge conflicts. Solomon reads conflicted files, writes the approved resolution, and verifies it.")}
                   />
                   <Switch
                     checked={draft.agentTools.subagents?.graphReconciliation ?? true}
@@ -3523,8 +3530,8 @@ export function ProjectToolbar({
                         }
                       }
                     })}
-                    label="Allow Picasso — Graph Architect"
-                    tooltip="Lets chat and run agents delegate read-only graph assessment plus detailed graph design, refinement, and reconciliation. Picasso never applies changes directly; proposed changes require review and may follow a successful Solomon run."
+                    label={t("Allow Picasso — Graph Architect")}
+                    tooltip={t("Lets chat and run agents delegate read-only graph assessment plus detailed graph design, refinement, and reconciliation. Picasso never applies changes directly; proposed changes require review and may follow a successful Solomon run.")}
                   />
                   <Switch
                     checked={draft.agentTools.subagents?.sherlockResearch ?? true}
@@ -3540,8 +3547,8 @@ export function ProjectToolbar({
                         }
                       }
                     })}
-                    label="Allow Sherlock — Research Detective"
-                    tooltip="Lets chat and run agents delegate substantial read-only codebase, online, or topic research to an isolated evidence-focused subagent."
+                    label={t("Allow Sherlock — Research Detective")}
+                    tooltip={t("Lets chat and run agents delegate substantial read-only codebase, online, or topic research to an isolated evidence-focused subagent.")}
                   />
                   <Switch
                     checked={draft.agentTools.subagents?.delphiTesting ?? true}
@@ -3557,17 +3564,17 @@ export function ProjectToolbar({
                         }
                       }
                     })}
-                    label="Allow Delphi — Test & Runtime Oracle"
-                    tooltip="Lets chat and build/debug runs delegate bounded test, visual, runtime, and emulator audits. Delphi can approval-gated start an existing Run App profile, wait for it, and stop only what it started; missing tools use a separate setup card."
+                    label={t("Allow Delphi — Test & Runtime Oracle")}
+                    tooltip={t("Lets chat and build/debug runs delegate bounded test, visual, runtime, and emulator audits. Delphi can approval-gated start an existing Run App profile, wait for it, and stop only what it started; missing tools use a separate setup card.")}
                   />
                 </section>
 
                 <section className="settings-security-group">
                   <div className="settings-security-group-head">
-                    <strong>Filesystem gates</strong>
-                    <small>Limit where ArchiCode-run commands can work.</small>
+                    <strong>{t("Filesystem gates")}</strong>
+                    <small>{t("Limit where ArchiCode-run commands can work.")}</small>
                   </div>
-                <Field label="Filesystem policy" hint="Controls ArchiCode-run commands, not the Codex Local provider sandbox. Project-write allows the project root and additional allowed roots.">
+                <Field label={t("Filesystem policy")} hint={t("Controls ArchiCode-run commands, not the Codex Local provider sandbox. Project-write allows the project root and additional allowed roots.")}>
                   <Select
                     value={draft.filesystem.policy}
                     onValueChange={(value) => updateDraft({
@@ -3577,17 +3584,17 @@ export function ProjectToolbar({
                       }
                     })}
                     options={[
-                      { value: "read-only", label: "read-only" },
-                      { value: "project-write", label: "project-write" },
-                      { value: "full-access", label: "full-access" }
+                      { value: "read-only", label: t("read-only") },
+                      { value: "project-write", label: t("project-write") },
+                      { value: "full-access", label: t("full-access") }
                     ]}
                   />
                 </Field>
-                <Field label="Additional allowed roots" hint="Project root is always allowed. Full-access disables root checks and should be temporary.">
+                <Field label={t("Additional allowed roots")} hint={t("Project root is always allowed. Full-access disables root checks and should be temporary.")}>
                   <TextArea
                     rows={5}
                     value={draft.filesystem.allowedRoots.join("\n")}
-                    placeholder="Optional absolute paths, one per line"
+                    placeholder={t("Optional absolute paths, one per line")}
                     onChange={(event) => updateDraft({
                       filesystem: {
                         ...draft.filesystem,
@@ -3597,18 +3604,18 @@ export function ProjectToolbar({
                   />
                 </Field>
                 <div className="policy-list">
-                  {draft.shellPolicies.length === 0 ? <small>No reusable command approvals saved yet.</small> : null}
+                  {draft.shellPolicies.length === 0 ? <small>{t("No reusable command approvals saved yet.")}</small> : null}
                   {draft.shellPolicies.map((policy) => (
                     <article key={policy.id}>
                       <strong>{policy.command}</strong>
-                      <span>{policy.risk} risk{policy.cwd ? ` · ${policy.cwd}` : ""}</span>
+                      <span>{t("{{risk}} risk {{value2}}", { risk: policy.risk, value2: policy.cwd ? ` · ${policy.cwd}` : "" })}</span>
                       <Button
                         type="button"
                         size="sm"
                         onClick={() => updateDraft({ shellPolicies: draft.shellPolicies.filter((item) => item.id !== policy.id) })}
                       >
                         <X size={14} />
-                        <span>Remove</span>
+                        <span>{t("Remove")}</span>
                       </Button>
                     </article>
                   ))}
@@ -3620,36 +3627,36 @@ export function ProjectToolbar({
                 {contextBudgetPlan ? (
                   <section className="context-budget-card">
                     <div>
-                      <strong>Automatic model budget</strong>
-                      <span>{contextBudgetPlan.providerLabel} · {contextBudgetPlan.modelLabel}</span>
+                      <strong>{t("Automatic model budget")}</strong>
+                      <span>{t("{{providerLabel}} · {{modelLabel}}", { providerLabel: contextBudgetPlan.providerLabel, modelLabel: contextBudgetPlan.modelLabel })}</span>
                     </div>
                     <dl>
                       <div>
-                        <dt>Window</dt>
-                        <dd>{formatTokenCount(contextBudgetPlan.modelContextTokens)} · {contextBudgetSourceLabel(contextBudgetPlan.source)}</dd>
+                        <dt>{t("Window")}</dt>
+                        <dd>{t("{{value1}} · {{value2}}", { value1: formatTokenCount(contextBudgetPlan.modelContextTokens), value2: contextBudgetSourceLabel(contextBudgetPlan.source) })}</dd>
                       </div>
                       <div>
-                        <dt>Usable context</dt>
+                        <dt>{t("Usable context")}</dt>
                         <dd>{formatTokenCount(contextBudgetPlan.usableContextTokens)}</dd>
                       </div>
                       <div>
-                        <dt>Compact at</dt>
+                        <dt>{t("Compact at")}</dt>
                         <dd>{formatTokenCount(contextBudgetPlan.compactionThreshold)}</dd>
                       </div>
                       <div>
-                        <dt>Response reserve</dt>
+                        <dt>{t("Response reserve")}</dt>
                         <dd>{formatTokenCount(contextBudgetPlan.responseReserveTokens)}</dd>
                       </div>
                       <div>
-                        <dt>Summary reserve</dt>
+                        <dt>{t("Summary reserve")}</dt>
                         <dd>{formatTokenCount(contextBudgetPlan.summaryReserveTokens)}</dd>
                       </div>
                       <div>
-                        <dt>Artifacts / runs</dt>
-                        <dd>{contextBudgetPlan.artifactLimit} / {contextBudgetPlan.recentRunLimit}</dd>
+                        <dt>{t("Artifacts / runs")}</dt>
+                        <dd>{t("{{artifactLimit}} / {{recentRunLimit}}", { artifactLimit: contextBudgetPlan.artifactLimit, recentRunLimit: contextBudgetPlan.recentRunLimit })}</dd>
                       </div>
                     </dl>
-                    <small>ArchiCode adjusts compaction and context selection from the active provider/model. Unknown custom models use conservative limits.</small>
+                    <small>{t("ArchiCode adjusts compaction and context selection from the active provider/model. Unknown custom models use conservative limits.")}</small>
                   </section>
                 ) : null}
                 <div className="switch-grid">
@@ -3670,11 +3677,11 @@ export function ProjectToolbar({
                 <Switch
                   checked={draft.contextBudgetMode === "manual"}
                   onCheckedChange={(checked) => updateDraft({ contextBudgetMode: checked ? "manual" : "auto" })}
-                  label="Use manual context limits"
+                  label={t("Use manual context limits")}
                 />
                 {draft.contextBudgetMode === "manual" ? (
                   <div className="settings-two-col">
-                    <Field label="Recent run limit">
+                    <Field label={t("Recent run limit")}>
                       <TextInput
                         type="number"
                         min={0}
@@ -3685,7 +3692,7 @@ export function ProjectToolbar({
                         })}
                       />
                     </Field>
-                    <Field label="Artifact limit">
+                    <Field label={t("Artifact limit")}>
                       <TextInput
                         type="number"
                         min={0}
@@ -3696,7 +3703,7 @@ export function ProjectToolbar({
                         })}
                       />
                     </Field>
-                    <Field label="Compaction threshold">
+                    <Field label={t("Compaction threshold")}>
                       <TextInput
                         type="number"
                         min={1000}
@@ -3704,7 +3711,7 @@ export function ProjectToolbar({
                         onChange={(event) => updateDraft({ compactionThreshold: Number(event.target.value) })}
                       />
                     </Field>
-                    <Field label="Token budget">
+                    <Field label={t("Token budget")}>
                       <TextInput
                         type="number"
                         min={1000}
@@ -3720,8 +3727,7 @@ export function ProjectToolbar({
                 {enabledProvider ? (
                   <>
                     <p className="settings-note llm-profile-provider-note">
-                      Editing profiles for <strong>{enabledProvider.label}</strong>. Model choices are remembered separately for each provider card.
-                    </p>
+                      {t("Editing profiles for")}{" "}<strong>{enabledProvider.label}</strong>{t(". Model choices are remembered separately for each provider card.")}{" "}</p>
                     <div className="provider-editor-list llm-profile-list">
                       {phaseProfileGroups.map((group) => (
                         <section key={group.id} className="llm-profile-group" data-llm-profile-group={group.id}>
@@ -3742,8 +3748,8 @@ export function ProjectToolbar({
                       ))}
                       <section className="llm-profile-group" data-llm-profile-group="specialists">
                         <div className="llm-profile-section-heading">
-                          <strong>Specialist agents</strong>
-                          <small>Independent profiles; Default inherits the selected provider model, including a chat-specific model when spawned from that chat.</small>
+                          <strong>{t("Specialist agents")}</strong>
+                          <small>{t("Independent profiles; Default inherits the selected provider model, including a chat-specific model when spawned from that chat.")}</small>
                         </div>
                         <div className="llm-profile-group-grid">
                           {subagentProfiles.map((profile) => renderModelPolicyCard(
@@ -3758,7 +3764,7 @@ export function ProjectToolbar({
                     </div>
                   </>
                 ) : (
-                  <small>Select an LLM provider to edit phase policies.</small>
+                  <small>{t("Select an LLM provider to edit phase policies.")}</small>
                 )}
               </TabsContent>
 
@@ -3772,61 +3778,61 @@ export function ProjectToolbar({
                   >
                     <span>
                       {skillsCollapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
-                      <strong>Project Skills</strong>
+                      <strong>{t("Project Skills")}</strong>
                     </span>
-                    <Badge tone="neutral">{projectSkills.length} found</Badge>
+                    <Badge tone="neutral">{t("{{length}} found", { length: projectSkills.length })}</Badge>
                   </button>
                   {!skillsCollapsed ? (
                     <div className="capability-panel-body">
-                  <small>Project-local skills live in <code>.archicode/skills</code> and are injected into agent and research prompts when enabled.</small>
+                  <small>{t("Project-local skills live in")}{" "}<code>{t(".archicode/skills")}</code> {" "}{t("and are injected into agent and research prompts when enabled.")}</small>
                   <div className="policy-list">
-                    {projectSkills.length === 0 ? <small>No project skills created yet.</small> : null}
+                    {projectSkills.length === 0 ? <small>{t("No project skills created yet.")}</small> : null}
                     {projectSkills.map((skill) => {
                       const enabled = draft.skills.enabledSkillIds.includes(skill.id);
                       return (
                         <article key={skill.id}>
                           <strong>{skill.title}</strong>
-                          <span>{skill.id}{skill.description ? ` · ${skill.description}` : ""}</span>
+                          <span>{t("{{id}} {{value2}}", { id: skill.id, value2: skill.description ? ` · ${skill.description}` : "" })}</span>
                           <Switch
                             checked={enabled}
                             onCheckedChange={(checked) => toggleSkill(skill.id, checked)}
-                            label={enabled ? "Enabled" : "Disabled"}
+                            label={enabled ? t("Enabled") : t("Disabled")}
                           />
                         </article>
                       );
                     })}
                   </div>
                   <div className="settings-two-col">
-                    <Field label="Skill id">
+                    <Field label={t("Skill id")}>
                       <TextInput
                         value={skillDraft.id}
-                        placeholder="react-ui-review"
+                        placeholder={t("react-ui-review")}
                         onChange={(event) => setSkillDraft((current) => ({ ...current, id: event.target.value }))}
                       />
                     </Field>
-                    <Field label="Title">
+                    <Field label={t("Title")}>
                       <TextInput
                         value={skillDraft.title}
-                        placeholder="React UI Review"
+                        placeholder={t("React UI Review")}
                         onChange={(event) => setSkillDraft((current) => ({ ...current, title: event.target.value }))}
                       />
                     </Field>
                   </div>
-                  <Field label="Description">
+                  <Field label={t("Description")}>
                     <TextInput
                       value={skillDraft.description}
-                      placeholder="Guidance for React UI implementation work."
+                      placeholder={t("Guidance for React UI implementation work.")}
                       onChange={(event) => setSkillDraft((current) => ({ ...current, description: event.target.value }))}
                     />
                   </Field>
-                  <Field label="When to use">
+                  <Field label={t("When to use")}>
                     <TextArea
                       rows={3}
                       value={skillDraft.whenToUse}
                       onChange={(event) => setSkillDraft((current) => ({ ...current, whenToUse: event.target.value }))}
                     />
                   </Field>
-                  <Field label="Instructions">
+                  <Field label={t("Instructions")}>
                     <TextArea
                       rows={5}
                       value={skillDraft.instructions}
@@ -3842,7 +3848,7 @@ export function ProjectToolbar({
                     }}
                   >
                     <Plus size={16} />
-                    <span>Create Skill</span>
+                    <span>{t("Create Skill")}</span>
                   </Button>
                     </div>
                   ) : null}
@@ -3857,27 +3863,27 @@ export function ProjectToolbar({
                   >
                     <span>
                       {mcpCollapsed ? <ChevronRight size={16} /> : <ChevronDown size={16} />}
-                      <strong>MCP Servers</strong>
+                      <strong>{t("MCP Servers")}</strong>
                     </span>
-                    <Badge tone="neutral">{draft.mcp.servers.filter((server) => server.enabled).length} enabled</Badge>
+                    <Badge tone="neutral">{t("{{length}} enabled", { length: draft.mcp.servers.filter((server) => server.enabled).length })}</Badge>
                   </button>
                   {!mcpCollapsed ? (
                     <div className="capability-panel-body">
-                  <small>Enabled MCP servers stay discoverable to API and local providers during agent runs. Trusted means auto-approved execution; Ask means pause on the exact tool call in the run card before continuing.</small>
+                  <small>{t("Enabled MCP servers stay discoverable to API and local providers during agent runs. Trusted means auto-approved execution; Ask means pause on the exact tool call in the run card before continuing.")}</small>
                   <div className="mcp-marketplace">
                     <div className="provider-card-head">
-                      <strong>Marketplace</strong>
-                      <Badge tone="neutral">{mcpRegistryEntries.length ? `${mcpRegistryEntries.length} found` : "Registry"}</Badge>
+                      <strong>{t("Marketplace")}</strong>
+                      <Badge tone="neutral">{mcpRegistryEntries.length ? t("{{length}} found", { length: mcpRegistryEntries.length }) : t("Registry")}</Badge>
                     </div>
                     <div className="mcp-marketplace-sections">
                       <div className="mcp-marketplace-section">
                         <div>
-                          <strong>Browse Registry</strong>
-                          <small>Load the registry catalog page-by-page.</small>
+                          <strong>{t("Browse Registry")}</strong>
+                          <small>{t("Load the registry catalog page-by-page.")}</small>
                         </div>
                         <Button type="button" disabled={mcpRegistryLoading} onClick={() => void browseRegistryServers()}>
                           <LayoutGrid size={16} />
-                          <span>Browse</span>
+                          <span>{t("Browse")}</span>
                         </Button>
                       </div>
                       <form
@@ -3888,17 +3894,17 @@ export function ProjectToolbar({
                         }}
                       >
                         <div>
-                          <strong>Search Registry</strong>
-                          <small>Find servers by name, package, or description.</small>
+                          <strong>{t("Search Registry")}</strong>
+                          <small>{t("Find servers by name, package, or description.")}</small>
                         </div>
                         <TextInput
                           value={mcpRegistryQuery}
-                          placeholder="Search MCP registry"
+                          placeholder={t("Search MCP registry")}
                           onChange={(event) => setMcpRegistryQuery(event.target.value)}
                         />
                         <Button type="submit" disabled={mcpRegistryLoading}>
                           <Search size={16} />
-                          <span>Search</span>
+                          <span>{t("Search")}</span>
                         </Button>
                       </form>
                     </div>
@@ -3906,22 +3912,18 @@ export function ProjectToolbar({
                     {mcpRegistryHasStarted || mcpRegistryLoading || mcpRegistryNotice ? (
                       <div className="mcp-marketplace-result-shell">
                         <div className="mcp-marketplace-results-head">
-                          <strong>{mcpRegistryMode === "browse" ? "Browse Results" : "Search Results"}</strong>
-                          <small>
-                            {mcpRegistryLoading ? "Loading..." : `${mcpRegistryEntries.length} loaded`}
-                            {mcpRegistryMode === "search" && mcpRegistryActiveQuery ? ` for "${mcpRegistryActiveQuery}"` : ""}
-                            {mcpRegistryCount ? ` · ${mcpRegistryCount} checked` : ""}
-                          </small>
+                          <strong>{mcpRegistryMode === "browse" ? t("Browse Results") : t("Search Results")}</strong>
+                          <small>{t("{{value1}} {{value2}} {{value3}}", { value1: mcpRegistryLoading ? "Loading..." : `${mcpRegistryEntries.length} loaded`, value2: mcpRegistryMode === "search" && mcpRegistryActiveQuery ? ` for "${mcpRegistryActiveQuery}"` : "", value3: mcpRegistryCount ? ` · ${mcpRegistryCount} checked` : "" })}</small>
                         </div>
                         <div className="mcp-marketplace-controls">
-                          <Field label="Category">
+                          <Field label={t("Category")}>
                             <Select
                               value={mcpRegistryCategory}
                               onValueChange={updateMcpRegistryCategory}
                               options={mcpRegistryCategoryOptions}
                             />
                           </Field>
-                          <Field label="Sort">
+                          <Field label={t("Sort")}>
                             <Select
                               value={mcpRegistrySort}
                               onValueChange={updateMcpRegistrySort}
@@ -3933,12 +3935,12 @@ export function ProjectToolbar({
                           {mcpRegistryLoading ? (
                             <div className="mcp-marketplace-loading">
                               <RefreshCw size={15} />
-                              <span>Loading MCP registry servers...</span>
+                              <span>{t("Loading MCP registry servers...")}</span>
                             </div>
                           ) : null}
                           {!mcpRegistryLoading && mcpRegistryEntries.length === 0 ? (
                             <small>
-                              {mcpRegistryMode === "search" ? "No registry servers matched this search yet." : "No registry servers matched this filter yet."}
+                              {mcpRegistryMode === "search" ? t("No registry servers matched this search yet.") : t("No registry servers matched this filter yet.")}
                             </small>
                           ) : null}
                           {mcpRegistryEntries.map((entry) => {
@@ -3959,13 +3961,9 @@ export function ProjectToolbar({
                                 </span>
                                 <div>
                                   <strong>{entry.title}</strong>
-                                  <span>{entry.name}{entry.version ? ` · ${entry.version}` : ""}</span>
+                                  <span>{t("{{name}} {{value2}}", { name: entry.name, value2: entry.version ? ` · ${entry.version}` : "" })}</span>
                                   {entry.description ? <small>{entry.description}</small> : null}
-                                  <small>
-                                    {entry.packageSummary}
-                                    {entry.install?.runtime ? ` · ${entry.install.runtime}${entry.install.runtimeAvailable ? "" : " missing"}` : ""}
-                                    {requiredSecrets.length ? ` · needs ${requiredSecrets.join(", ")}` : ""}
-                                  </small>
+                                  <small>{t("{{packageSummary}} {{value2}} {{value3}}", { packageSummary: entry.packageSummary, value2: entry.install?.runtime ? ` · ${entry.install.runtime}${entry.install.runtimeAvailable ? "" : " missing"}` : "", value3: requiredSecrets.length ? ` · needs ${requiredSecrets.join(", ")}` : "" })}</small>
                                   {entry.repositoryUrl || entry.websiteUrl ? (
                                     <div className="mcp-marketplace-links">
                                       {entry.repositoryUrl ? (
@@ -3978,7 +3976,7 @@ export function ProjectToolbar({
                                           }}
                                         >
                                           <ExternalLink size={12} />
-                                          <span>Repository</span>
+                                          <span>{t("Repository")}</span>
                                         </a>
                                       ) : null}
                                       {entry.websiteUrl ? (
@@ -3991,7 +3989,7 @@ export function ProjectToolbar({
                                           }}
                                         >
                                           <ExternalLink size={12} />
-                                          <span>Website</span>
+                                          <span>{t("Website")}</span>
                                         </a>
                                       ) : null}
                                     </div>
@@ -4012,7 +4010,7 @@ export function ProjectToolbar({
                                   onClick={() => void installRegistryServer(entry)}
                                 >
                                   <Download size={14} />
-                                  <span>{alreadyInstalled ? "Update" : entry.install?.secrets.some((secret) => secret.required) ? "Install" : "Install & Connect"}</span>
+                                  <span>{alreadyInstalled ? t("Update") : entry.install?.secrets.some((secret) => secret.required) ? t("Install") : t("Install & Connect")}</span>
                                 </Button>
                                 {!entry.installable ? <small>{entry.installMessage}</small> : null}
                               </article>
@@ -4022,7 +4020,7 @@ export function ProjectToolbar({
                         {mcpRegistryNextCursor ? (
                           <Button type="button" size="sm" disabled={mcpRegistryLoading} onClick={() => void loadMoreRegistryServers()}>
                             <RefreshCw size={14} />
-                            <span>{mcpRegistryEntries.length === 0 ? "Search Deeper" : "Load More"}</span>
+                            <span>{mcpRegistryEntries.length === 0 ? t("Search Deeper") : t("Load More")}</span>
                           </Button>
                         ) : null}
                       </div>
@@ -4040,10 +4038,10 @@ export function ProjectToolbar({
                       }}
                     >
                       <PlugZap size={16} />
-                      <span>Import Codex Config</span>
+                      <span>{t("Import Codex Config")}</span>
                     </Button>
                   </div>
-                  <Field label="Import JSON" hint='Paste {"mcpServers": {"name": {"command": "...", "args": []}}}'>
+                  <Field label={t("Import JSON")} hint={t("Paste {\"mcpServers\": {\"name\": {\"command\": \"...\", \"args\": []}}}")}>
                     <TextArea
                       rows={4}
                       value={mcpJsonImport}
@@ -4062,63 +4060,63 @@ export function ProjectToolbar({
                     }}
                   >
                     <Upload size={16} />
-                    <span>Import JSON Servers</span>
+                    <span>{t("Import JSON Servers")}</span>
                   </Button>
                   <div className="settings-two-col">
-                    <Field label="Server id">
+                    <Field label={t("Server id")}>
                       <TextInput value={mcpDraft.id} onChange={(event) => setMcpDraft((current) => ({ ...current, id: event.target.value }))} />
                     </Field>
-                    <Field label="Label">
+                    <Field label={t("Label")}>
                       <TextInput value={mcpDraft.label} onChange={(event) => setMcpDraft((current) => ({ ...current, label: event.target.value }))} />
                     </Field>
-                    <Field label="Transport">
+                    <Field label={t("Transport")}>
                       <Select
                         value={mcpDraft.transport}
                         onValueChange={(transport) => setMcpDraft((current) => ({ ...current, transport }))}
                         options={[
-                          { value: "stdio", label: "stdio" },
-                          { value: "streamable-http", label: "Streamable HTTP" }
+                          { value: "stdio", label: t("stdio") },
+                          { value: "streamable-http", label: t("Streamable HTTP") }
                         ]}
                       />
                     </Field>
                     {mcpDraft.transport === "stdio" ? (
-                      <Field label="Command">
-                        <TextInput value={mcpDraft.command} placeholder="npx" onChange={(event) => setMcpDraft((current) => ({ ...current, command: event.target.value }))} />
+                      <Field label={t("Command")}>
+                        <TextInput value={mcpDraft.command} placeholder={t("npx")} onChange={(event) => setMcpDraft((current) => ({ ...current, command: event.target.value }))} />
                       </Field>
                     ) : (
-                      <Field label="URL">
+                      <Field label={t("URL")}>
                         <TextInput value={mcpDraft.url} placeholder="http://127.0.0.1:3000/mcp" onChange={(event) => setMcpDraft((current) => ({ ...current, url: event.target.value }))} />
                       </Field>
                     )}
                   </div>
-                  <Field label="Arguments" hint="One argument per line for stdio servers.">
+                  <Field label={t("Arguments")} hint={t("One argument per line for stdio servers.")}>
                     <TextArea rows={3} value={mcpDraft.args} onChange={(event) => setMcpDraft((current) => ({ ...current, args: event.target.value }))} />
                   </Field>
                   <Button type="button" disabled={!mcpDraft.id.trim() || !mcpDraft.label.trim()} onClick={addMcpDraftServer}>
                     <Plus size={16} />
-                    <span>Add MCP Server</span>
+                    <span>{t("Add MCP Server")}</span>
                   </Button>
                   <div className="policy-list">
-                    {draft.mcp.servers.length === 0 ? <small>No MCP servers configured.</small> : null}
+                    {draft.mcp.servers.length === 0 ? <small>{t("No MCP servers configured.")}</small> : null}
                     {draft.mcp.servers.map((server) => {
                       const refreshed = mcpServers.find((item) => item.id === server.id) ?? server;
                       return (
                         <article key={server.id}>
                           <strong>{server.label}</strong>
-                          <span>{server.transport} · {server.tools.length || refreshed.tools.length} tools{server.lastError ? ` · ${server.lastError}` : ""}</span>
+                          <span>{t("{{transport}} · {{length}} tools {{value3}}", { transport: server.transport, length: server.tools.length || refreshed.tools.length, value3: server.lastError ? ` · ${server.lastError}` : "" })}</span>
                           <Switch
                             checked={server.enabled}
                             onCheckedChange={(checked) => updateMcpDraftServer(server.id, { enabled: checked })}
-                            label={server.enabled ? "Enabled" : "Disabled"}
+                            label={server.enabled ? t("Enabled") : t("Disabled")}
                           />
                           <Switch
                             checked={server.trusted}
                             onCheckedChange={(checked) => updateMcpDraftServer(server.id, { trusted: checked })}
-                            label={server.trusted ? "Trusted" : "Ask"}
+                            label={server.trusted ? t("Trusted") : t("Ask")}
                           />
                           <Button type="button" size="sm" disabled={capabilityBusy} onClick={() => void refreshDraftMcpServer(server.id)}>
                             <RefreshCw size={14} />
-                            <span>Refresh</span>
+                            <span>{t("Refresh")}</span>
                           </Button>
                           <Button
                             type="button"
@@ -4131,10 +4129,10 @@ export function ProjectToolbar({
                             })}
                           >
                             <X size={14} />
-                            <span>Remove</span>
+                            <span>{t("Remove")}</span>
                           </Button>
                           {server.env.length ? (
-                            <Field label="Environment">
+                            <Field label={t("Environment")}>
                               <TextArea
                                 rows={Math.max(2, server.env.length)}
                                 value={mcpKeyValuesToText(server.env)}
@@ -4143,7 +4141,7 @@ export function ProjectToolbar({
                             </Field>
                           ) : null}
                           {server.headers.length ? (
-                            <Field label="HTTP Headers">
+                            <Field label={t("HTTP Headers")}>
                               <TextArea
                                 rows={Math.max(2, server.headers.length)}
                                 value={mcpKeyValuesToText(server.headers)}
@@ -4164,85 +4162,85 @@ export function ProjectToolbar({
                 <section className="speech-settings-panel">
                   <div className="speech-settings-head">
                     <div>
-                      <strong>Local Agent Environment</strong>
-                      <small>Machine-local hints passed to LLM agents so they use the right shell and project folder.</small>
+                      <strong>{t("Local Agent Environment")}</strong>
+                      <small>{t("Machine-local hints passed to LLM agents so they use the right shell and project folder.")}</small>
                     </div>
-                    <Badge tone="neutral">Local</Badge>
+                    <Badge tone="neutral">{t("Local")}</Badge>
                   </div>
                   <div className="settings-two-col">
-                    <Field label="Operating system" hint="Detected by the desktop app and stored only in this project's local ArchiCode state.">
+                    <Field label={t("Operating system")} hint={t("Detected by the desktop app and stored only in this project's local ArchiCode state.")}>
                       <TextInput readOnly value={localEnvironment.operatingSystem} />
                     </Field>
-                    <Field label="Agent shell" hint="Tell LLM agents which console shell to assume for commands and examples.">
+                    <Field label={t("Agent shell")} hint={t("Tell LLM agents which console shell to assume for commands and examples.")}>
                       <TextInput
                         value={localEnvironment.agentShell}
-                        placeholder="powershell.exe"
+                        placeholder={t("powershell.exe")}
                         onChange={(event) => updateLocalEnvironment({ agentShell: event.target.value })}
                       />
                     </Field>
                   </div>
-                  <Field label="Project folder" hint="The absolute folder loaded on this machine. This is not written to shareable project.json.">
+                  <Field label={t("Project folder")} hint={t("The absolute folder loaded on this machine. This is not written to shareable project.json.")}>
                     <TextInput readOnly value={localEnvironment.projectRoot || rootPath || bundle?.project.rootPath || ""} />
                   </Field>
                 </section>
                 <section className="speech-settings-panel">
                   <div className="speech-settings-head">
                     <div>
-                      <strong>Semantic Index</strong>
-                      <small>Local meaning-based retrieval for codebase imports, research chat, and AI build context.</small>
+                      <strong>{t("Semantic Index")}</strong>
+                      <small>{t("Local meaning-based retrieval for codebase imports, research chat, and AI build context.")}</small>
                     </div>
                     <Badge tone={semanticIndexStatus?.state === "ready" ? "success" : semanticIndexStatus?.state === "error" || semanticIndexStatus?.state === "unavailable" || semanticIndexStatus?.state === "partial" || semanticIndexStatus?.state === "stale" || semanticIndexStatus?.state === "graph-only" ? "warning" : "neutral"}>
-                      {semanticIndexStatus?.state === "ready" ? "Ready" : semanticIndexStatus?.state === "graph-only" ? "Graph only" : semanticIndexStatus?.state === "indexing" ? "Indexing" : semanticIndexStatus?.state === "empty" ? "Empty" : semanticIndexStatus?.state === "disabled" ? "Off" : semanticIndexStatus?.state === "partial" ? "Partial" : semanticIndexStatus?.state === "stale" ? "Stale" : semanticIndexStatus?.state === "unavailable" ? "Unavailable" : semanticIndexStatus?.state === "error" ? "Error" : "Checking"}
+                      {semanticIndexStatus?.state === "ready" ? t("Ready") : semanticIndexStatus?.state === "graph-only" ? t("Graph only") : semanticIndexStatus?.state === "indexing" ? t("Indexing") : semanticIndexStatus?.state === "empty" ? t("Empty") : semanticIndexStatus?.state === "disabled" ? t("Off") : semanticIndexStatus?.state === "partial" ? t("Partial") : semanticIndexStatus?.state === "stale" ? t("Stale") : semanticIndexStatus?.state === "unavailable" ? t("Unavailable") : semanticIndexStatus?.state === "error" ? t("Error") : t("Checking")}
                     </Badge>
                   </div>
                   <Switch
                     checked={draft.semanticIndex.enabled}
                     onCheckedChange={(enabled) => updateDraft({ semanticIndex: { ...draft.semanticIndex, enabled } })}
-                    label="Use local semantic indexing"
-                    tooltip="Uses the bundled CPU embedding model to improve functional grouping and retrieve related graph context. The disposable index stays outside Git."
+                    label={t("Use local semantic indexing")}
+                    tooltip={t("Uses the bundled CPU embedding model to improve functional grouping and retrieve related graph context. The disposable index stays outside Git.")}
                   />
                   <div className="settings-two-col">
-                    <Field label="Model" hint="Both models are bundled. Changing this machine-local preference clears incompatible vectors and rebuilds the active project's index.">
+                    <Field label={t("Model")} hint={t("Both models are bundled. Changing this machine-local preference clears incompatible vectors and rebuilds the active project's index.")}>
                       <Select
                         value={semanticModelPreference}
                         onValueChange={(value) => void switchSemanticModel(value as "bge-small-en-v1.5" | "minilm-l6-v2")}
                         disabled={semanticModelSwitching}
                         options={[
-                          { value: "bge-small-en-v1.5", label: "BGE Small · Higher quality (Default)" },
-                          { value: "minilm-l6-v2", label: "MiniLM · Faster" }
+                          { value: "bge-small-en-v1.5", label: t("BGE Small · Higher quality (Default)") },
+                          { value: "minilm-l6-v2", label: t("MiniLM · Faster") }
                         ]}
                       />
                     </Field>
-                    <Field label="Indexed items" hint="Graph records, file summaries, and token-safe source chunks in this machine-local cache.">
-                      <TextInput readOnly value={(semanticIndexStatus?.indexedItems ?? 0).toLocaleString()} />
+                    <Field label={t("Indexed items")} hint={t("Graph records, file summaries, and token-safe source chunks in this machine-local cache.")}>
+                      <TextInput readOnly value={formatNumber((semanticIndexStatus?.indexedItems ?? 0))} />
                     </Field>
-                    <Field label="Graph records" hint="Architecture nodes, notes, and rules available for graph-to-graph semantic context.">
-                      <TextInput readOnly value={(semanticIndexStatus?.graphItems ?? 0).toLocaleString()} />
+                    <Field label={t("Graph records")} hint={t("Architecture nodes, notes, and rules available for graph-to-graph semantic context.")}>
+                      <TextInput readOnly value={formatNumber((semanticIndexStatus?.graphItems ?? 0))} />
                     </Field>
-                    <Field label="Code records" hint="File summaries and source chunks available for Possible semantic matches.">
-                      <TextInput readOnly value={(semanticIndexStatus?.codeItems ?? 0).toLocaleString()} />
+                    <Field label={t("Code records")} hint={t("File summaries and source chunks available for Possible semantic matches.")}>
+                      <TextInput readOnly value={formatNumber((semanticIndexStatus?.codeItems ?? 0))} />
                     </Field>
-                    <Field label="Cache size" hint="Stored in ArchiCode application data, never in the project repository.">
+                    <Field label={t("Cache size")} hint={t("Stored in ArchiCode application data, never in the project repository.")}>
                       <TextInput readOnly value={formatBytes(semanticIndexStatus?.cacheSizeBytes ?? 0)} />
                     </Field>
-                    <Field label="Last updated">
-                      <TextInput readOnly value={semanticIndexStatus?.updatedAt ? new Date(semanticIndexStatus.updatedAt).toLocaleString() : "Not built yet"} />
+                    <Field label={t("Last updated")}>
+                      <TextInput readOnly value={semanticIndexStatus?.updatedAt ? formatDateTime(new Date(semanticIndexStatus.updatedAt)) : "Not built yet"} />
                     </Field>
-                    <Field label="Code coverage" hint="Every eligible source file must be covered before the index reports Ready.">
-                      <TextInput readOnly value={semanticIndexStatus?.coverage ? `${semanticIndexStatus.coverage.indexedFiles.toLocaleString()} / ${semanticIndexStatus.coverage.eligibleFiles.toLocaleString()} files` : "Not measured yet"} />
+                    <Field label={t("Code coverage")} hint={t("Every eligible source file must be covered before the index reports Ready.")}>
+                      <TextInput readOnly value={semanticIndexStatus?.coverage ? `${formatNumber(semanticIndexStatus.coverage.indexedFiles)} / ${formatNumber(semanticIndexStatus.coverage.eligibleFiles)} files` : "Not measured yet"} />
                     </Field>
-                    <Field label="Source chunks" hint="Tokenizer-safe chunks spanning the full eligible source, grouped by functions, classes, methods, and components.">
-                      <TextInput readOnly value={(semanticIndexStatus?.coverage?.chunks ?? 0).toLocaleString()} />
+                    <Field label={t("Source chunks")} hint={t("Tokenizer-safe chunks spanning the full eligible source, grouped by functions, classes, methods, and components.")}>
+                      <TextInput readOnly value={formatNumber((semanticIndexStatus?.coverage?.chunks ?? 0))} />
                     </Field>
-                    <Field label="Components indexed" hint="Function, class, method, component, interface, type, and related symbol spans detected across the repository.">
-                      <TextInput readOnly value={(semanticIndexStatus?.coverage?.symbols ?? 0).toLocaleString()} />
+                    <Field label={t("Components indexed")} hint={t("Function, class, method, component, interface, type, and related symbol spans detected across the repository.")}>
+                      <TextInput readOnly value={formatNumber((semanticIndexStatus?.coverage?.symbols ?? 0))} />
                     </Field>
-                    <Field label="Source lines covered">
-                      <TextInput readOnly value={semanticIndexStatus?.coverage ? `${semanticIndexStatus.coverage.indexedSourceLines.toLocaleString()} / ${semanticIndexStatus.coverage.sourceLines.toLocaleString()}` : "Not measured yet"} />
+                    <Field label={t("Source lines covered")}>
+                      <TextInput readOnly value={semanticIndexStatus?.coverage ? `${formatNumber(semanticIndexStatus.coverage.indexedSourceLines)} / ${formatNumber(semanticIndexStatus.coverage.sourceLines)}` : "Not measured yet"} />
                     </Field>
                   </div>
                   <div>
-                    <Field label="Related nodes per AI context" hint="Explicit scope and real graph neighbors always take priority.">
+                    <Field label={t("Related nodes per AI context")} hint={t("Explicit scope and real graph neighbors always take priority.")}>
                       <TextInput
                         type="number"
                         min={0}
@@ -4255,30 +4253,30 @@ export function ProjectToolbar({
                   <div className="action-row">
                     <Button type="button" size="sm" disabled={semanticIndexBusy || !draft.semanticIndex.enabled} onClick={() => void rebuildSemanticIndex()}>
                       {semanticIndexBusy ? <Loader2 size={14} className="is-spinning" /> : <BrainCircuit size={14} />}
-                      <span>Rebuild Code Index</span>
+                      <span>{t("Rebuild Code Index")}</span>
                     </Button>
                     <Button type="button" size="sm" disabled={semanticIndexBusy || !(semanticIndexStatus?.indexedItems ?? 0)} onClick={() => void clearSemanticIndexCache()}>
                       <Trash2 size={14} />
-                      <span>Clear Cache</span>
+                      <span>{t("Clear Cache")}</span>
                     </Button>
                     <Button type="button" size="sm" disabled={semanticIndexBusy} onClick={() => void refreshSemanticIndexStatus()}>
                       <RefreshCw size={14} />
-                      <span>Refresh Status</span>
+                      <span>{t("Refresh Status")}</span>
                     </Button>
                   </div>
-                  <small>{semanticIndexProgress ?? semanticIndexStatus?.message ?? "Checking semantic index health…"}</small>
+                  <small>{semanticIndexProgress ?? semanticIndexStatus?.message ?? t("Checking semantic index health…")}</small>
                   {semanticIndexStatus?.error ? <small className="settings-validation-error">{semanticIndexStatus.error}</small> : null}
                   {semanticIndexNotice ? <small className="speech-setup-status">{semanticIndexNotice}</small> : null}
-                  <small>Save settings after changing the toggle. Import and AI features fall back to structural context if this service is unavailable.</small>
+                  <small>{t("Save settings after changing the toggle. Import and AI features fall back to structural context if this service is unavailable.")}</small>
                 </section>
                 <section className="speech-settings-panel">
                   <div className="speech-settings-head">
                     <div>
-                      <strong>Hosted MCP</strong>
-                      <small>Local Streamable HTTP endpoint for external Codex and Claude Code clients.</small>
+                      <strong>{t("Hosted MCP")}</strong>
+                      <small>{t("Local Streamable HTTP endpoint for external Codex and Claude Code clients.")}</small>
                     </div>
                     <Badge tone={externalMcpHostStatus?.running ? "success" : draft.externalMcpHost.enabled ? "warning" : "neutral"}>
-                      {externalMcpHostStatus?.running ? "Running" : draft.externalMcpHost.enabled ? "Save to start" : "Off"}
+                      {externalMcpHostStatus?.running ? t("Running") : draft.externalMcpHost.enabled ? t("Save to start") : t("Off")}
                     </Badge>
                   </div>
                   <Switch
@@ -4289,14 +4287,14 @@ export function ProjectToolbar({
                         enabled: checked
                       }
                     })}
-                    label="Host ArchiCode MCP on localhost"
-                    tooltip="Starts a local MCP endpoint after saving settings. External clients with the token can read and apply validated graph changes."
+                    label={t("Host ArchiCode MCP on localhost")}
+                    tooltip={t("Starts a local MCP endpoint after saving settings. External clients with the token can read and apply validated graph changes.")}
                   />
                   <div className="settings-two-col">
-                    <Field label="Endpoint" hint="The hosted MCP path is bound to 127.0.0.1 only.">
+                    <Field label={t("Endpoint")} hint={t("The hosted MCP path is bound to 127.0.0.1 only.")}>
                       <TextInput readOnly value={externalMcpHostStatus?.endpoint ?? `http://${draft.externalMcpHost.host}:${draft.externalMcpHost.port}/mcp`} />
                     </Field>
-                    <Field label="Port" hint="Use another port if the default is already in use.">
+                    <Field label={t("Port")} hint={t("Use another port if the default is already in use.")}>
                       <TextInput
                         type="number"
                         min={1024}
@@ -4319,19 +4317,19 @@ export function ProjectToolbar({
                         requireToken: checked
                       }
                     })}
-                    label="Require bearer token"
-                    tooltip="Protects the write-capable local endpoint from other local processes that do not have the generated token."
+                    label={t("Require bearer token")}
+                    tooltip={t("Protects the write-capable local endpoint from other local processes that do not have the generated token.")}
                   />
                   {draft.externalMcpHost.requireToken ? (
-                    <Field label="Bearer token" hint="Stored only in this project's local ArchiCode state. Regenerating restarts the hosted endpoint if it is running.">
+                    <Field label={t("Bearer token")} hint={t("Stored only in this project's local ArchiCode state. Regenerating restarts the hosted endpoint if it is running.")}>
                       <TextInput readOnly type="password" value={externalMcpHostStatus?.token ?? ""} />
                     </Field>
                   ) : null}
                   <div className="settings-copy-note">
-                    <strong>Codex app setup</strong>
-                    <small>Use Settings - MCP servers - Connect to a custom MCP.</small>
-                    <small>Paste the URL above, leave bearer token env var empty, then add direct headers.</small>
-                    <small><code>Authorization</code> = bearer token, <code>default_tools_approval_mode</code> = <code>auto</code>.</small>
+                    <strong>{t("Codex app setup")}</strong>
+                    <small>{t("Use Settings - MCP servers - Connect to a custom MCP.")}</small>
+                    <small>{t("Paste the URL above, leave bearer token env var empty, then add direct headers.")}</small>
+                    <small><code>{t("Authorization")}</code> {" "}{t("= bearer token,")}{" "}<code>{t("default_tools_approval_mode")}</code> = <code>{t("auto")}</code>.</small>
                   </div>
                   <div className="action-row">
                     <Button
@@ -4340,7 +4338,7 @@ export function ProjectToolbar({
                       onClick={() => void refreshExternalMcpHostStatus()}
                     >
                       <RefreshCw size={14} />
-                      <span>Refresh</span>
+                      <span>{t("Refresh")}</span>
                     </Button>
                     <Button
                       type="button"
@@ -4349,7 +4347,7 @@ export function ProjectToolbar({
                       onClick={() => copyExternalMcpText(externalMcpHostStatus?.endpoint ?? "", "Endpoint")}
                     >
                       <Copy size={14} />
-                      <span>Copy URL</span>
+                      <span>{t("Copy URL")}</span>
                     </Button>
                     <Button
                       type="button"
@@ -4358,7 +4356,7 @@ export function ProjectToolbar({
                       onClick={() => copyExternalMcpText(externalMcpHostStatus?.token ?? "", "Token")}
                     >
                       <Copy size={14} />
-                      <span>Copy Token</span>
+                      <span>{t("Copy Token")}</span>
                     </Button>
                     <Button
                       type="button"
@@ -4367,7 +4365,7 @@ export function ProjectToolbar({
                       onClick={() => copyExternalMcpText(externalMcpHostStatus?.codexConfig ?? "", "Codex app setup")}
                     >
                       <Copy size={14} />
-                      <span>Copy Codex App Setup</span>
+                      <span>{t("Copy Codex App Setup")}</span>
                     </Button>
                     <Button
                       type="button"
@@ -4376,7 +4374,7 @@ export function ProjectToolbar({
                       onClick={() => copyExternalMcpText(externalMcpHostStatus?.claudeConfig ?? "", "Claude config")}
                     >
                       <Copy size={14} />
-                      <span>Copy Claude Config</span>
+                      <span>{t("Copy Claude Config")}</span>
                     </Button>
                     <Button
                       type="button"
@@ -4385,27 +4383,25 @@ export function ProjectToolbar({
                       onClick={() => void regenerateExternalMcpHostToken()}
                     >
                       {externalMcpHostBusy ? <Loader2 size={14} className="is-spinning" /> : <ShieldCheck size={14} />}
-                      <span>Regenerate Token</span>
+                      <span>{t("Regenerate Token")}</span>
                     </Button>
                   </div>
-                  <small>
-                    Write mode: direct validated apply. External clients can change graph data when hosting is enabled and they have the token.
-                  </small>
+                  <small>{t("{{value1}} {{value2}}", { value1: t("Write mode: direct validated apply. External clients can change graph data when hosting is enabled and they have the token."), value2: " " })}</small>
                   {externalMcpHostStatus?.error ? <small className="settings-validation-error">{externalMcpHostStatus.error}</small> : null}
                   {externalMcpHostNotice ? <small className="speech-setup-status">{externalMcpHostNotice}</small> : null}
                 </section>
                 <section className="speech-settings-panel">
                   <div className="speech-settings-head">
                     <div>
-                      <strong>Voice mode</strong>
-                      <small>Choose one audio owner for Research chat.</small>
+                      <strong>{t("Voice mode")}</strong>
+                      <small>{t("Choose one audio owner for Research chat.")}</small>
                     </div>
                     <Badge tone={voiceDraft.mode === "openai-realtime" && codexRealtimeStatus?.realtimeAvailable ? "success" : "neutral"}>
-                      {voiceDraft.mode === "openai-realtime" ? "OpenAI realtime" : "Local"}
+                      {voiceDraft.mode === "openai-realtime" ? t("OpenAI realtime") : t("Local")}
                     </Badge>
                   </div>
                   <div className="settings-two-col">
-                    <Field label="Mode" hint="OpenAI Realtime uses the separately saved OpenAI API key and is independent of the normal chat provider.">
+                    <Field label={t("Mode")} hint={t("OpenAI Realtime uses the separately saved OpenAI API key and is independent of the normal chat provider.")}>
                       <Select
                         value={voiceDraft.mode}
                         onValueChange={(value) => {
@@ -4417,16 +4413,16 @@ export function ProjectToolbar({
                           }
                         }}
                         options={[
-                          { value: "local", label: "Local STT/TTS" },
-                          { value: "openai-realtime", label: "OpenAI Realtime" }
+                          { value: "local", label: t("Local STT/TTS") },
+                          { value: "openai-realtime", label: t("OpenAI Realtime") }
                         ]}
                       />
                     </Field>
                     <Field
-                      label="OpenAI realtime voice"
+                      label={t("OpenAI realtime voice")}
                       hint={voiceDraft.mode === "openai-realtime"
-                        ? "Used by direct OpenAI Realtime WebRTC sessions."
-                        : "Available when OpenAI Realtime is selected."}
+                        ? t("Used by direct OpenAI Realtime WebRTC sessions.")
+                        : t("Available when OpenAI Realtime is selected.")}
                     >
                       <Select
                         disabled={voiceDraft.mode !== "openai-realtime"}
@@ -4442,10 +4438,10 @@ export function ProjectToolbar({
                       />
                     </Field>
                     <Field
-                      label="OpenAI realtime model"
+                      label={t("OpenAI realtime model")}
                       hint={voiceDraft.mode === "openai-realtime"
-                        ? "Used only for live audio sessions, not normal chat responses."
-                        : "Available when OpenAI Realtime is selected."}
+                        ? t("Used only for live audio sessions, not normal chat responses.")
+                        : t("Available when OpenAI Realtime is selected.")}
                     >
                       <Select
                         disabled={voiceDraft.mode !== "openai-realtime"}
@@ -4461,21 +4457,21 @@ export function ProjectToolbar({
                       />
                     </Field>
                     <Field
-                      label="OpenAI realtime API key"
-                      hint="Stored by ArchiCode in the main process and used only to mint short-lived Realtime client credentials."
+                      label={t("OpenAI realtime API key")}
+                      hint={t("Stored by ArchiCode in the main process and used only to mint short-lived Realtime client credentials.")}
                     >
                       <div className="secret-input-row">
                         <TextInput
                           type={visibleCodexRealtimeApiKey ? "text" : "password"}
                           autoComplete="off"
                           spellCheck={false}
-                          placeholder={savedCodexRealtimeSecrets.openAiApiKey ? "Saved API key" : "sk-..."}
+                          placeholder={savedCodexRealtimeSecrets.openAiApiKey ? t("Saved API key") : "sk-..."}
                           disabled={voiceDraft.mode !== "openai-realtime"}
                           value={codexRealtimeSecretsDraft.openAiApiKey}
                           onChange={(event) => setCodexRealtimeSecretsDraft({ openAiApiKey: event.target.value })}
                         />
                         <IconButton
-                          title={visibleCodexRealtimeApiKey ? "Hide API key" : "Show API key"}
+                          title={visibleCodexRealtimeApiKey ? t("Hide API key") : t("Show API key")}
                           disabled={voiceDraft.mode !== "openai-realtime"}
                           onClick={() => setVisibleCodexRealtimeApiKey((current) => !current)}
                         >
@@ -4487,23 +4483,23 @@ export function ProjectToolbar({
                   <div className="speech-test-actions">
                     <Button type="button" size="sm" disabled={codexRealtimeBusy} onClick={() => void refreshCodexRealtimeStatus()}>
                       {codexRealtimeBusy ? <Loader2 size={14} className="is-spinning" /> : <RefreshCw size={14} />}
-                      <span>Check OpenAI realtime</span>
+                      <span>{t("Check OpenAI realtime")}</span>
                     </Button>
                     <small>
-                      {codexRealtimeNotice ?? "Check availability before using OpenAI Realtime."}
+                      {codexRealtimeNotice ?? t("Check availability before using OpenAI Realtime.")}
                     </small>
                   </div>
                 </section>
                 <section className="speech-settings-panel">
                   <div className="speech-settings-head">
                     <div>
-                      <strong>Voice input (STT)</strong>
-                      <small>Local speech-to-text uses a downloadable Transformers.js Whisper base model.</small>
+                      <strong>{t("Voice input (STT)")}</strong>
+                      <small>{t("Local speech-to-text uses a downloadable Transformers.js Whisper base model.")}</small>
                     </div>
                     {speechStatus?.runtimeAvailable ? (
-                      <Badge tone="success">Ready</Badge>
+                      <Badge tone="success">{t("Ready")}</Badge>
                     ) : (
-                      <Badge tone="warning">Setup needed</Badge>
+                      <Badge tone="warning">{t("Setup needed")}</Badge>
                     )}
                   </div>
                   <Switch
@@ -4515,21 +4511,21 @@ export function ProjectToolbar({
                       });
                       if (checked) setVoiceDraft((current) => ({ ...current, mode: "local" }));
                     }}
-                    label="Enable voice input"
-                    tooltip="Shows the microphone action in scoped research chat and allows local speech transcription."
+                    label={t("Enable voice input")}
+                    tooltip={t("Shows the microphone action in scoped research chat and allows local speech transcription.")}
                   />
                   <div className="settings-two-col">
-                    <Field label="Active speech model" hint="Choose the model used by chat voice input and the setup test.">
+                    <Field label={t("Active speech model")} hint={t("Choose the model used by chat voice input and the setup test.")}>
                       <Select
                         value={speechDraft.modelId}
                         onValueChange={(value) => selectSpeechModel(value as SpeechSettings["modelId"])}
                         options={[
-                          { value: "base", label: "Multilingual base" },
-                          { value: "base.en", label: "English optimized base" }
+                          { value: "base", label: t("Multilingual base") },
+                          { value: "base.en", label: t("English optimized base") }
                         ]}
                       />
                     </Field>
-                    <Field label="Speech language" hint="Transformers.js Whisper does not auto-detect language yet; choose the spoken language for multilingual input.">
+                    <Field label={t("Speech language")} hint={t("Transformers.js Whisper does not auto-detect language yet; choose the spoken language for multilingual input.")}>
                       <Select
                         value={speechDraft.modelId === "base.en" ? "english" : normalizeSpeechLanguage(speechDraft.language)}
                         onValueChange={(value) => setSpeechDraft({
@@ -4546,8 +4542,8 @@ export function ProjectToolbar({
                       ...speechDraft,
                       translateToEnglish: speechDraft.modelId === "base.en" ? false : checked
                     })}
-                    label="Translate multilingual speech to English"
-                    tooltip="For the multilingual base model, asks Whisper to return English text from non-English speech."
+                    label={t("Translate multilingual speech to English")}
+                    tooltip={t("For the multilingual base model, asks Whisper to return English text from non-English speech.")}
                   />
                   <div className="speech-model-list">
                     {(speechStatus?.models ?? []).map((model) => {
@@ -4569,10 +4565,10 @@ export function ProjectToolbar({
                           }}
                         >
                           <div className="speech-model-meta">
-                            <strong>{model.id === "base" ? "Multilingual base" : "English optimized base"}</strong>
-                            <small>{model.label} · {model.approximateSize}{model.sizeBytes ? ` · ${formatBytes(model.sizeBytes)} on disk` : ""}</small>
+                            <strong>{model.id === "base" ? t("Multilingual base") : t("English optimized base")}</strong>
+                            <small>{t("{{label}} · {{approximateSize}} {{value3}}", { label: model.label, approximateSize: model.approximateSize, value3: model.sizeBytes ? ` · ${formatBytes(model.sizeBytes)} on disk` : "" })}</small>
                           </div>
-                          <Badge tone={model.downloaded ? "success" : "neutral"}>{model.downloaded ? "Downloaded" : "Not downloaded"}</Badge>
+                          <Badge tone={model.downloaded ? "success" : "neutral"}>{model.downloaded ? t("Downloaded") : t("Not downloaded")}</Badge>
                           <Button
                             type="button"
                             size="sm"
@@ -4591,7 +4587,7 @@ export function ProjectToolbar({
                             ) : (
                               <Download size={14} />
                             )}
-                            <span>{isDeleting ? "Deleting" : model.downloaded ? "Delete" : "Download"}</span>
+                            <span>{isDeleting ? t("Deleting") : model.downloaded ? t("Delete") : t("Download")}</span>
                           </Button>
                         </article>
                       );
@@ -4605,7 +4601,7 @@ export function ProjectToolbar({
                       onClick={() => void runSpeechSetupTest()}
                     >
                       {speechTestBusy ? <Loader2 size={16} className="is-spinning" /> : speechTestRecording ? <Square size={16} /> : <Mic size={16} />}
-                      <span>{speechTestRecording ? "Stop and transcribe" : "Record test"}</span>
+                      <span>{speechTestRecording ? t("Stop and transcribe") : t("Record test")}</span>
                     </Button>
                     <Button
                       type="button"
@@ -4613,12 +4609,12 @@ export function ProjectToolbar({
                       onClick={() => void refreshSpeechStatus(speechDraft.modelId)}
                     >
                       <RefreshCw size={14} />
-                      <span>Refresh</span>
+                      <span>{t("Refresh")}</span>
                     </Button>
                     <small>
                       {activeSpeechModel?.downloaded
-                        ? `${activeSpeechModel.label} is ready for testing.`
-                        : "Download the active model before testing."}
+                        ? t("{{label}} is ready for testing.", { label: activeSpeechModel.label })
+                        : t("Download the active model before testing.")}
                     </small>
                   </div>
                   {speechSetupProgress || speechSetupNotice || speechSetupError ? (
@@ -4628,7 +4624,7 @@ export function ProjectToolbar({
                   ) : null}
                   {speechTestTranscript ? (
                     <div className="speech-test-result">
-                      <strong>Test transcript</strong>
+                      <strong>{t("Test transcript")}</strong>
                       <p>{speechTestTranscript}</p>
                     </div>
                   ) : null}
@@ -4636,13 +4632,13 @@ export function ProjectToolbar({
                 <section className="speech-settings-panel">
                   <div className="speech-settings-head">
                     <div>
-                      <strong>Voice output (TTS)</strong>
-                      <small>Local text-to-speech uses a downloadable Transformers.js Kokoro 82M q8 model.</small>
+                      <strong>{t("Voice output (TTS)")}</strong>
+                      <small>{t("Local text-to-speech uses a downloadable Transformers.js Kokoro 82M q8 model.")}</small>
                     </div>
                     {ttsStatus?.runtimeAvailable ? (
-                      <Badge tone="success">Ready</Badge>
+                      <Badge tone="success">{t("Ready")}</Badge>
                     ) : (
-                      <Badge tone="warning">Setup needed</Badge>
+                      <Badge tone="warning">{t("Setup needed")}</Badge>
                     )}
                   </div>
                   <Switch
@@ -4654,11 +4650,11 @@ export function ProjectToolbar({
                       });
                       if (checked) setVoiceDraft((current) => ({ ...current, mode: "local" }));
                     }}
-                    label="Enable voice output"
-                    tooltip="Shows speaker actions on assistant messages and allows local text-to-speech playback."
+                    label={t("Enable voice output")}
+                    tooltip={t("Shows speaker actions on assistant messages and allows local text-to-speech playback.")}
                   />
                   <div className="settings-two-col">
-                    <Field label="Active TTS model" hint="Choose the model used by assistant message playback and the setup test.">
+                    <Field label={t("Active TTS model")} hint={t("Choose the model used by assistant message playback and the setup test.")}>
                       <Select
                         value={ttsDraft.modelId}
                         onValueChange={(value) => setTtsDraft({
@@ -4666,11 +4662,11 @@ export function ProjectToolbar({
                           modelId: value as TtsSettings["modelId"]
                         })}
                         options={(ttsStatus?.models.length ? ttsStatus.models : [
-                          { id: "kokoro-82m", label: "Kokoro 82M q8" }
+                          { id: "kokoro-82m", label: t("Kokoro 82M q8") }
                         ]).map((model) => ({ value: model.id, label: model.label }))}
                       />
                     </Field>
-                    <Field label="Voice" hint={activeTtsVoice ? activeTtsVoice.description : "Choose the voice used for assistant playback."}>
+                    <Field label={t("Voice")} hint={activeTtsVoice ? activeTtsVoice.description : t("Choose the voice used for assistant playback.")}>
                       <Select
                         value={ttsDraft.voiceId}
                         onValueChange={(value) => setTtsDraft({
@@ -4682,7 +4678,7 @@ export function ProjectToolbar({
                     </Field>
                   </div>
                   <div className="settings-two-col">
-                    <Field label="Speech speed" hint="Use 1.0 for natural speed; Kokoro supports a small speed adjustment range.">
+                    <Field label={t("Speech speed")} hint={t("Use 1.0 for natural speed; Kokoro supports a small speed adjustment range.")}>
                       <TextInput
                         type="number"
                         min={0.8}
@@ -4701,8 +4697,8 @@ export function ProjectToolbar({
                         ...ttsDraft,
                         autoplay: checked
                       })}
-                      label="Autoplay assistant replies"
-                      tooltip="Automatically reads new assistant messages aloud after they finish generating."
+                      label={t("Autoplay assistant replies")}
+                      tooltip={t("Automatically reads new assistant messages aloud after they finish generating.")}
                     />
                   </div>
                   <div className="speech-model-list">
@@ -4726,9 +4722,9 @@ export function ProjectToolbar({
                         >
                           <div className="speech-model-meta">
                             <strong>{model.label}</strong>
-                            <small>{model.modelId} · {model.approximateSize}{model.sizeBytes ? ` · ${formatBytes(model.sizeBytes)} on disk` : ""}</small>
+                            <small>{t("{{modelId}} · {{approximateSize}} {{value3}}", { modelId: model.modelId, approximateSize: model.approximateSize, value3: model.sizeBytes ? ` · ${formatBytes(model.sizeBytes)} on disk` : "" })}</small>
                           </div>
-                          <Badge tone={model.downloaded ? "success" : "neutral"}>{model.downloaded ? "Downloaded" : "Not downloaded"}</Badge>
+                          <Badge tone={model.downloaded ? "success" : "neutral"}>{model.downloaded ? t("Downloaded") : t("Not downloaded")}</Badge>
                           <Button
                             type="button"
                             size="sm"
@@ -4747,7 +4743,7 @@ export function ProjectToolbar({
                             ) : (
                               <Download size={14} />
                             )}
-                            <span>{isDeleting ? "Deleting" : model.downloaded ? "Delete" : "Download"}</span>
+                            <span>{isDeleting ? t("Deleting") : model.downloaded ? t("Delete") : t("Download")}</span>
                           </Button>
                         </article>
                       );
@@ -4761,7 +4757,7 @@ export function ProjectToolbar({
                       onClick={() => void playTtsSetupTest()}
                     >
                       {ttsTestBusy ? <Loader2 size={16} className="is-spinning" /> : <Volume2 size={16} />}
-                      <span>Play test</span>
+                      <span>{t("Play test")}</span>
                     </Button>
                     <Button
                       type="button"
@@ -4769,12 +4765,12 @@ export function ProjectToolbar({
                       onClick={() => void refreshTtsStatus(ttsDraft.modelId)}
                     >
                       <RefreshCw size={14} />
-                      <span>Refresh</span>
+                      <span>{t("Refresh")}</span>
                     </Button>
                     <small>
                       {activeTtsModel?.downloaded
-                        ? `${activeTtsModel.label} is ready for ${activeTtsVoice?.label ?? ttsDraft.voiceId}.`
-                        : "Download the active model before testing."}
+                        ? t("{{label}} is ready for {{voiceId}}.", { label: activeTtsModel.label, voiceId: activeTtsVoice?.label ?? ttsDraft.voiceId })
+                        : t("Download the active model before testing.")}
                     </small>
                   </div>
                   {ttsSetupProgress || ttsSetupNotice || ttsSetupError ? (
@@ -4785,10 +4781,10 @@ export function ProjectToolbar({
                 </section>
                 <section className="settings-maintenance-row">
                   <div>
-                    <strong>Purge resolved notes</strong>
-                    <small>Deletes resolved node notes from this project. Open notes remain available to users and agents.</small>
+                    <strong>{t("Purge resolved notes")}</strong>
+                    <small>{t("Deletes resolved node notes from this project. Open notes remain available to users and agents.")}</small>
                   </div>
-                  <Tooltip content="Deletes all resolved notes from this project after confirmation. Open notes are kept.">
+                  <Tooltip content={t("Deletes all resolved notes from this project after confirmation. Open notes are kept.")}>
                     <span className="toolbar-tooltip-target">
                       <Button
                         type="button"
@@ -4802,17 +4798,17 @@ export function ProjectToolbar({
                         }}
                       >
                         <Trash2 size={16} />
-                        <span>Purge resolved</span>
+                        <span>{t("Purge resolved")}</span>
                       </Button>
                     </span>
                   </Tooltip>
                 </section>
                 <section className="danger-zone">
                   <div>
-                    <strong>Remove this project from ArchiCode</strong>
-                    <small>ArchiCode will forget its saved information for this project, including the project map, nodes and flows, notes, run records, chat history, and ArchiCode settings. Your source code and regular project files will stay untouched. Opening this folder in ArchiCode later will require importing it again to rebuild the map.</small>
+                    <strong>{t("Remove this project from ArchiCode")}</strong>
+                    <small>{t("ArchiCode will forget its saved information for this project, including the project map, nodes and flows, notes, run records, chat history, and ArchiCode settings. Your source code and regular project files will stay untouched. Opening this folder in ArchiCode later will require importing it again to rebuild the map.")}</small>
                   </div>
-                  <Tooltip content="Removes ArchiCode's saved project information, but not your source files. Reopening this folder in ArchiCode will require a new import.">
+                  <Tooltip content={t("Removes ArchiCode's saved project information, but not your source files. Reopening this folder in ArchiCode will require a new import.")}>
                     <span className="toolbar-tooltip-target">
                       <Button
                         type="button"
@@ -4824,7 +4820,7 @@ export function ProjectToolbar({
                         }}
                       >
                         <Trash2 size={16} />
-                        <span>Remove from ArchiCode</span>
+                        <span>{t("Remove from ArchiCode")}</span>
                       </Button>
                     </span>
                   </Tooltip>
@@ -4839,7 +4835,7 @@ export function ProjectToolbar({
             <div className="dialog-actions">
               <Button type="button" onClick={() => setSettingsOpen(false)}>
                 <X size={16} />
-                <span>Cancel</span>
+                <span>{t("Cancel")}</span>
               </Button>
               <Button
                 variant="primary"
@@ -4900,13 +4896,13 @@ export function ProjectToolbar({
                 disabled={settingsSaveBusy || !detailsDraft.name.trim() || Boolean(runProfilesError)}
               >
                 {settingsSaveBusy ? <Loader2 size={16} className="is-spinning" /> : <Save size={16} />}
-                <span>{settingsSaveBusy ? "Saving..." : "Save"}</span>
+                <span>{settingsSaveBusy ? t("Saving...") : t("Save")}</span>
               </Button>
             </div>
           )}
           </DialogContent>
                 ) : (
-                  <small>Choose a provider before editing phase policy.</small>
+                  <small>{t("Choose a provider before editing phase policy.")}</small>
                 )}
       </DialogRoot>
       <ResyncCodebaseDialog open={resyncCodebaseOpen} onOpenChange={setResyncCodebaseOpen} />

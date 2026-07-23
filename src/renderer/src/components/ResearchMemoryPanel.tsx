@@ -1,3 +1,5 @@
+import { formatDateTime } from "@renderer/i18n";
+import { t } from "@renderer/i18n";
 import { AlertCircle, Archive, BookMarked, Brain, Check, CheckCircle2, ChevronDown, ChevronUp, Circle, Copy, Download, FileJson, Files, FileText, History, ListTodo, Loader2, MessageSquare, Mic, Paperclip, Pencil, Pin, PinOff, Play, Plus, RefreshCw, Send, ShieldCheck, Sparkles, Split, Square, Volume2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
@@ -76,31 +78,31 @@ export function ResearchMemoryPanel({ session }: { session: ResearchChatSession 
       </PopoverTrigger>
       <PopoverContent className="research-memory-popover" align="start" side="bottom" sideOffset={6}>
         <div className="research-memory-popover-head">
-          <strong>Research memory</strong>
+          <strong>{t("Research memory")}</strong>
           <div className="research-memory-badges">
-            {activeWork.length ? <Badge tone="accent">{activeWork.length} active</Badge> : null}
-            {openTodos.length ? <Badge tone="warning">{openTodos.length} todo{openTodos.length === 1 ? "" : "s"}</Badge> : null}
-            {openQuestions.length ? <Badge tone="accent">{openQuestions.length} question{openQuestions.length === 1 ? "" : "s"}</Badge> : null}
-            {memory.links.length ? <Badge tone="neutral">{memory.links.length} link{memory.links.length === 1 ? "" : "s"}</Badge> : null}
+            {activeWork.length ? <Badge tone="accent">{t("{{length}} active", { length: activeWork.length })}</Badge> : null}
+            {openTodos.length ? <Badge tone="warning">{t("{{length}} todo {{value2}}", { length: openTodos.length, value2: openTodos.length === 1 ? "" : "s" })}</Badge> : null}
+            {openQuestions.length ? <Badge tone="accent">{t("{{length}} question {{value2}}", { length: openQuestions.length, value2: openQuestions.length === 1 ? "" : "s" })}</Badge> : null}
+            {memory.links.length ? <Badge tone="neutral">{t("{{length}} link {{value2}}", { length: memory.links.length, value2: memory.links.length === 1 ? "" : "s" })}</Badge> : null}
           </div>
         </div>
         {memory.summary.trim() ? <p>{memory.summary.trim()}</p> : null}
         <div className="research-memory-grid">
-          {activeWork.length ? <MemoryList title="Active work" items={activeWork.map(formatResearchOrchestrationTodo)} /> : null}
-          {decisions.length ? <MemoryList title="Decisions" items={decisions.map((item) => item.text)} /> : null}
-          {openTodos.length ? <MemoryList title="Todos" items={openTodos.map((item) => `${item.title}${item.notes ? ` - ${item.notes}` : ""}`)} /> : null}
-          {openQuestions.length ? <MemoryList title="Questions" items={openQuestions.map((item) => item.question)} /> : null}
-          {links.length ? <MemoryList title="Links" items={links.map((item) => item.title ? `${item.title}: ${item.url}` : item.url)} /> : null}
-          {facts.length ? <MemoryList title="Facts" items={facts.map((item) => item.text)} /> : null}
-          {assumptions.length ? <MemoryList title="Assumptions" items={assumptions.map((item) => item.text)} /> : null}
-          {graphRefs.length ? <MemoryList title="Graph refs" items={graphRefs.map(formatMemoryGraphRef)} /> : null}
-          {runRefs.length ? <MemoryList title="Run refs" items={runRefs.map(formatMemoryRunRef)} /> : null}
-          {fileRefs.length ? <MemoryList title="File refs" items={fileRefs.map(formatMemoryFileRef)} /> : null}
-          {artifactRefs.length ? <MemoryList title="Artifact refs" items={artifactRefs.map(formatMemoryArtifactRef)} /> : null}
-          {imageRefs.length ? <MemoryList title="Image refs" items={imageRefs.map(formatMemoryImageRef)} /> : null}
-          {debugFindings.length ? <MemoryList title="Debug" items={debugFindings.map((item) => item.text)} /> : null}
+          {activeWork.length ? <MemoryList title={t("Active work")} items={activeWork.map(formatResearchOrchestrationTodo)} /> : null}
+          {decisions.length ? <MemoryList title={t("Decisions")} items={decisions.map((item) => item.text)} /> : null}
+          {openTodos.length ? <MemoryList title={t("Todos")} items={openTodos.map((item) => `${item.title}${item.notes ? ` - ${item.notes}` : ""}`)} /> : null}
+          {openQuestions.length ? <MemoryList title={t("Questions")} items={openQuestions.map((item) => item.question)} /> : null}
+          {links.length ? <MemoryList title={t("Links")} items={links.map((item) => item.title ? `${item.title}: ${item.url}` : item.url)} /> : null}
+          {facts.length ? <MemoryList title={t("Facts")} items={facts.map((item) => item.text)} /> : null}
+          {assumptions.length ? <MemoryList title={t("Assumptions")} items={assumptions.map((item) => item.text)} /> : null}
+          {graphRefs.length ? <MemoryList title={t("Graph refs")} items={graphRefs.map(formatMemoryGraphRef)} /> : null}
+          {runRefs.length ? <MemoryList title={t("Run refs")} items={runRefs.map(formatMemoryRunRef)} /> : null}
+          {fileRefs.length ? <MemoryList title={t("File refs")} items={fileRefs.map(formatMemoryFileRef)} /> : null}
+          {artifactRefs.length ? <MemoryList title={t("Artifact refs")} items={artifactRefs.map(formatMemoryArtifactRef)} /> : null}
+          {imageRefs.length ? <MemoryList title={t("Image refs")} items={imageRefs.map(formatMemoryImageRef)} /> : null}
+          {debugFindings.length ? <MemoryList title={t("Debug")} items={debugFindings.map((item) => item.text)} /> : null}
         </div>
-        {memory.lastUpdateError ? <small className="research-memory-error">Memory update failed: {memory.lastUpdateError}</small> : null}
+        {memory.lastUpdateError ? <small className="research-memory-error">{t("Memory update failed: {{lastUpdateError}}", { lastUpdateError: memory.lastUpdateError })}</small> : null}
       </PopoverContent>
     </PopoverRoot>
   );
@@ -169,15 +171,15 @@ export function ProjectMemoryNotesPanel({ projectRoot, refreshKey }: { projectRo
       </PopoverTrigger>
       <PopoverContent className="research-memory-popover" align="start" side="bottom" sideOffset={6}>
         <div className="research-memory-popover-head">
-          <strong>Project memory notes</strong>
+          <strong>{t("Project memory notes")}</strong>
           <div className="research-memory-badges">
-            <Badge tone="neutral">Across chats</Badge>
+            <Badge tone="neutral">{t("Across chats")}</Badge>
             <Button variant="ghost" size="sm" onClick={() => setIncludeArchived((current) => !current)}>
-              {includeArchived ? "Hide archived" : "Show archived"}
+              {includeArchived ? t("Hide archived") : t("Show archived")}
             </Button>
           </div>
         </div>
-        <p>Small, important knowledge retained for this project. Notes are local and may be scoped to a flow, subflow, or node.</p>
+        <p>{t("Small, important knowledge retained for this project. Notes are local and may be scoped to a flow, subflow, or node.")}</p>
         {notes.length ? (
           <div className="research-knowledge-list">
             {notes.map((note) => (
@@ -185,18 +187,18 @@ export function ProjectMemoryNotesPanel({ projectRoot, refreshKey }: { projectRo
                 <div className="research-knowledge-card-head">
                   <div>
                     <strong>{note.title}</strong>
-                    <small>{projectMemoryScopeLabel(note)} · revision {note.revision}{note.status === "stale" ? " · stale" : ""}</small>
+                    <small>{t("{{value1}} · revision {{revision}} {{value3}}", { value1: projectMemoryScopeLabel(note), revision: note.revision, value3: note.status === "stale" ? " · stale" : "" })}</small>
                   </div>
                   <div className="research-knowledge-actions">
                     <IconButton
-                      title={note.pinned ? "Unpin memory note" : "Pin memory note"}
+                      title={note.pinned ? t("Unpin memory note") : t("Pin memory note")}
                       disabled={updatingId === note.id}
                       onClick={() => void update(note, { pinned: !note.pinned })}
                     >
                       {note.pinned ? <PinOff size={13} /> : <Pin size={13} />}
                     </IconButton>
                     <IconButton
-                      title={note.status === "archived" ? "Restore memory note" : "Archive memory note"}
+                      title={note.status === "archived" ? t("Restore memory note") : t("Archive memory note")}
                       disabled={updatingId === note.id}
                       onClick={() => void update(note, { status: note.status === "archived" ? "active" : "archived" })}
                     >
@@ -205,11 +207,11 @@ export function ProjectMemoryNotesPanel({ projectRoot, refreshKey }: { projectRo
                   </div>
                 </div>
                 <p>{note.body}</p>
-                {note.artifactIds.length ? <small>Artifacts: {note.artifactIds.join(", ")}</small> : null}
+                {note.artifactIds.length ? <small>{t("Artifacts: {{value1}}", { value1: note.artifactIds.join(", ") })}</small> : null}
               </article>
             ))}
           </div>
-        ) : loading ? <small>Loading project memory…</small> : <small>No project memory notes yet.</small>}
+        ) : loading ? <small>{t("Loading project memory…")}</small> : <small>{t("No project memory notes yet.")}</small>}
         {error ? <small className="research-memory-error">{error}</small> : null}
       </PopoverContent>
     </PopoverRoot>
@@ -257,16 +259,16 @@ export function ChatArtifactsPanel({ projectRoot, session, refreshKey }: { proje
       </PopoverTrigger>
       <PopoverContent className="research-memory-popover" align="end" side="bottom" sideOffset={6}>
         <div className="research-memory-popover-head">
-          <strong>Chat artifacts</strong>
-          <Badge tone="neutral">This chat only</Badge>
+          <strong>{t("Chat artifacts")}</strong>
+          <Badge tone="neutral">{t("This chat only")}</Badge>
         </div>
-        <p>Large reports and working files created for this chat are loaded only when requested.</p>
+        <p>{t("Large reports and working files created for this chat are loaded only when requested.")}</p>
         <div className="research-chat-artifact-layout">
           <div className="research-knowledge-list">
             {artifacts.map((artifact) => (
               <button key={artifact.id} type="button" className={preview?.artifactId === artifact.id ? "research-artifact-row is-active" : "research-artifact-row"} onClick={() => void readPreview(artifact)}>
                 <strong>{artifact.title}</strong>
-                <small>{artifact.mediaType ?? "text"} · revision {artifact.revision ?? 1}</small>
+                <small>{t("{{value1}} · revision {{value2}}", { value1: artifact.mediaType ?? "text", value2: artifact.revision ?? 1 })}</small>
                 {artifact.summary ? <span>{artifact.summary}</span> : null}
               </button>
             ))}
@@ -274,9 +276,9 @@ export function ChatArtifactsPanel({ projectRoot, session, refreshKey }: { proje
           {preview ? (
             <div className="research-chat-artifact-preview">
               <div className="research-knowledge-card-head">
-                <strong>{selectedArtifact?.title ?? "Artifact preview"}</strong>
+                <strong>{selectedArtifact?.title ?? t("Artifact preview")}</strong>
                 {selectedArtifact ? (
-                  <Button variant="ghost" size="sm" onClick={() => void window.archicode.openProjectFile(projectRoot, selectedArtifact.path)}>Open file</Button>
+                  <Button variant="ghost" size="sm" onClick={() => void window.archicode.openProjectFile(projectRoot, selectedArtifact.path)}>{t("Open file")}</Button>
                 ) : null}
               </div>
               <pre>{preview.text.slice(0, 20_000)}</pre>
@@ -352,12 +354,12 @@ export function ResearchHistoryList({
         <div key={session.id} className={session.id === selectedId ? "research-history-row is-active" : "research-history-row"}>
           <button type="button" onClick={() => onSelect(session.id)}>
             <strong>{session.title}</strong>
-            <small>{new Date(session.updatedAt).toLocaleString()}</small>
+            <small>{formatDateTime(new Date(session.updatedAt))}</small>
           </button>
-          <IconButton title="Rename chat" onClick={() => onRename(session.id)}>
+          <IconButton title={t("Rename chat")} onClick={() => onRename(session.id)}>
             <Pencil size={13} />
           </IconButton>
-          <IconButton title="Archive chat" onClick={() => onArchive(session.id)}>
+          <IconButton title={t("Archive chat")} onClick={() => onArchive(session.id)}>
             <Archive size={13} />
           </IconButton>
         </div>

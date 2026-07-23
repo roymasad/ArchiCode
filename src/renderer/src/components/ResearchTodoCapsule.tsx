@@ -1,3 +1,4 @@
+import { t } from "@renderer/i18n";
 import { AlertCircle, Archive, Brain, Check, CheckCircle2, ChevronDown, ChevronUp, Circle, Copy, Download, FileJson, FileText, History, ListTodo, Loader2, MessageSquare, Mic, Paperclip, Play, Plus, RefreshCw, Send, ShieldCheck, Sparkles, Split, Square, Volume2, X } from "lucide-react";
 import { useCallback, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
@@ -116,13 +117,13 @@ export function ResearchWorkCapsule({ session, items }: { session: ResearchChatS
       >
         <div className="research-todo-popover-head">
           <div>
-            <strong>{goal ? "Goal & tasks" : "Task list"}</strong>
+            <strong>{goal ? t("Goal & tasks") : t("Task list")}</strong>
             <small>{goal?.objective ?? (activeCount ? `${activeCount} active` : "No active items")}</small>
           </div>
-          {blockedCount ? <Badge tone="danger">{blockedCount} blocked</Badge> : activeCount ? <Badge tone="warning">In progress</Badge> : <Badge tone="success">Complete</Badge>}
+          {blockedCount ? <Badge tone="danger">{t("{{blockedCount}} blocked", { blockedCount: blockedCount })}</Badge> : activeCount ? <Badge tone="warning">{t("In progress")}</Badge> : <Badge tone="success">{t("Complete")}</Badge>}
         </div>
         <ul className="research-todo-list">
-          {goalItems.length ? <li className="research-todo-group-label">Goal steps <span>{goalDoneCount}/{goalItems.length}</span></li> : null}
+          {goalItems.length ? <li className="research-todo-group-label">{t("Goal steps")}{" "}<span>{t("{{goalDoneCount}} / {{length}}", { goalDoneCount: goalDoneCount, length: goalItems.length })}</span></li> : null}
           {goalItems.map((item) => (
             <li key={`${item.kind}-${item.id}`} className={`research-todo-item research-todo-item-${item.status}`}>
               <span className="research-todo-status-icon">
@@ -135,7 +136,7 @@ export function ResearchWorkCapsule({ session, items }: { session: ResearchChatS
               <Badge tone={todoStatusTone(item.status)}>{todoStatusLabel(item.status)}</Badge>
             </li>
           ))}
-          {items.length ? <li className="research-todo-group-label">Other tasks <span>{items.length}</span></li> : null}
+          {items.length ? <li className="research-todo-group-label">{t("Other tasks")}{" "}<span>{items.length}</span></li> : null}
           {items.map((item) => (
             <li key={`${item.kind}-${item.id}`} className={`research-todo-item research-todo-item-${item.status}`}>
               <span className="research-todo-status-icon">
@@ -149,7 +150,7 @@ export function ResearchWorkCapsule({ session, items }: { session: ResearchChatS
             </li>
           ))}
         </ul>
-        {doneCount && !activeCount ? <small className="research-work-checkpoint">All {doneCount} tracked work items are complete.</small> : null}
+        {doneCount && !activeCount ? <small className="research-work-checkpoint">{t("All {{doneCount}} tracked work items are complete.", { doneCount: doneCount })}</small> : null}
         {goal?.checkpointSummary ? <small className="research-work-checkpoint">{goal.checkpointSummary}</small> : null}
       </PopoverContent>
     </PopoverRoot>

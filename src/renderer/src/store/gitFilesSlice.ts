@@ -1,3 +1,4 @@
+import { t } from "@renderer/i18n";
 import { create } from "zustand";
 import type {
   ArchicodeNode,
@@ -86,7 +87,7 @@ export const createGitFilesSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
           changes: [],
           recentCommits: [],
           stashes: [],
-          message: "Git is available in the Electron app."
+          message: t("Git is available in the Electron app.")
         }
       });
       return;

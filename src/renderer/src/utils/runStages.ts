@@ -1,3 +1,4 @@
+import { t } from "@renderer/i18n";
 import type { Run } from "@shared/schema";
 import { verificationOutcome } from "./runStatus";
 
@@ -72,29 +73,29 @@ export function runStageItems(run: Run, options: RunStageOptions = {}): RunStage
 
   return [
     {
-      label: "Plan",
+      label: t("Plan"),
       tone: run.status === "preparing" || run.status === "planning" ? "accent" : planningFailed ? "danger" : planningDone ? "success" : "neutral",
-      detail: run.status === "preparing" ? "preparing" : run.status === "planning" ? "running" : planningFailed ? "failed" : planningDone ? "done" : "waiting"
+      detail: t(run.status === "preparing" ? "preparing" : run.status === "planning" ? "running" : planningFailed ? "failed" : planningDone ? "done" : "waiting")
     },
     {
-      label: "Plan review",
+      label: t("Plan review"),
       tone: run.status === "awaiting-plan-review" ? "warning" : planningDecision === "accepted" || planReviewSkipped ? "success" : planningDecision === "rejected" ? "danger" : planningDone && codingStarted ? "success" : "neutral",
-      detail: run.status === "awaiting-plan-review" ? "needed" : planningDecision === "accepted" ? "approved" : planningDecision === "rejected" ? "rejected" : planReviewSkipped ? "skipped" : planningDone && codingStarted ? "auto" : planningFailed ? "not run" : "waiting"
+      detail: t(run.status === "awaiting-plan-review" ? "needed" : planningDecision === "accepted" ? "approved" : planningDecision === "rejected" ? "rejected" : planReviewSkipped ? "skipped" : planningDone && codingStarted ? "auto" : planningFailed ? "not run" : "waiting")
     },
     {
-      label: "Code",
+      label: t("Code"),
       tone: codingNoop ? "danger" : codingNoopBenign ? "success" : run.status === "coding" || run.status === "debugging" ? "accent" : run.status === "awaiting-code-review" ? "warning" : codingChanged ? "success" : codingStarted && run.status === "failed" ? "danger" : codingStarted ? "neutral" : "neutral",
-      detail: codingNoop ? "no changes" : codingNoopBenign ? "not needed" : run.status === "coding" ? "running" : run.status === "awaiting-code-review" ? "review" : verificationRetry ? "reused" : codingChanged ? "changed" : codingStarted ? "not needed" : planningFailed ? "not run" : "waiting"
+      detail: t(codingNoop ? "no changes" : codingNoopBenign ? "not needed" : run.status === "coding" ? "running" : run.status === "awaiting-code-review" ? "review" : verificationRetry ? "reused" : codingChanged ? "changed" : codingStarted ? "not needed" : planningFailed ? "not run" : "waiting")
     },
     {
-      label: "Code review",
+      label: t("Code review"),
       tone: run.status === "awaiting-code-review" ? "warning" : codeDecision === "accepted" || codeReviewSkipped ? "success" : codeDecision === "rejected" ? "danger" : codingChanged && (verificationStarted || run.status === "succeeded") ? "success" : "neutral",
-      detail: run.status === "awaiting-code-review" ? "needed" : codeDecision === "accepted" ? "approved" : codeDecision === "rejected" ? "rejected" : codeReviewSkipped ? "skipped" : codingChanged && (verificationStarted || run.status === "succeeded") ? "auto" : "not needed"
+      detail: t(run.status === "awaiting-code-review" ? "needed" : codeDecision === "accepted" ? "approved" : codeDecision === "rejected" ? "rejected" : codeReviewSkipped ? "skipped" : codingChanged && (verificationStarted || run.status === "succeeded") ? "auto" : "not needed")
     },
     {
-      label: "Verify",
+      label: t("Verify"),
       tone: verificationFailed ? "danger" : verificationRunning ? "accent" : verificationSucceeded ? "success" : run.status === "succeeded" && !codingNoop ? "success" : "neutral",
-      detail: verificationFailed ? "failed" : verificationRunning ? "running" : verificationSucceeded ? "passed" : run.status === "succeeded" && !codingNoop ? "done" : verificationStarted ? "done" : verificationWaiting ? "waiting" : "not run"
+      detail: t(verificationFailed ? "failed" : verificationRunning ? "running" : verificationSucceeded ? "passed" : run.status === "succeeded" && !codingNoop ? "done" : verificationStarted ? "done" : verificationWaiting ? "waiting" : "not run")
     }
   ];
 }

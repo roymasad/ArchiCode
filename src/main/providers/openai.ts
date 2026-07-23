@@ -1,6 +1,6 @@
 import type { LlmPhase, PhaseModelPolicy, ProjectSettings } from "../../shared/schema";
 import type { ProviderMcpTool } from "../mcp";
-import { type Provider, type ProviderCallOptions, type ProviderImageAttachment, type RawLlmUsage, type ResearchProviderContinuation, type ResearchProviderOptions, appendTextAttachmentBlock, applyOpenRouterSessionId, createUsageAccumulator, extractContextWindowFromModels, extractModelCapabilitiesFromModels, extractModelIdsFromModels, extractionSystemPrompt, imageAttachmentsForPrompt, imageLabelText, inferModelCapabilityProfile, isOpenRouterProvider, orchestratorSystemPrompt, orchestratorUserPromptParts, orchestratorUserPromptText, phasePolicyText, reasoningEffort, researchCurrentMessageText, researchHistoryThread, researchStableContextText, researchSystemInstructions, resolveModelId } from "../providers";
+import { type Provider, type ProviderCallOptions, type ProviderImageAttachment, type RawLlmUsage, type ResearchProviderContinuation, type ResearchProviderOptions, appendTextAttachmentBlock, applyOpenRouterSessionId, createUsageAccumulator, extractContextWindowFromModels, extractModelCapabilitiesFromModels, extractModelIdsFromModels, extractionSystemPrompt, imageAttachmentsForPrompt, imageLabelText, inferModelCapabilityProfile, isOpenRouterProvider, orchestratorSystemInstructions, orchestratorUserPromptParts, orchestratorUserPromptText, phasePolicyText, reasoningEffort, researchCurrentMessageText, researchHistoryThread, researchStableContextText, researchSystemInstructions, resolveModelId } from "../providers";
 import { runAgentLoop, type AgentToolResult } from "../agentRuntime";
 import { attachProviderContinuation } from "./anthropic";
 
@@ -1325,12 +1325,12 @@ export function buildOpenAICompatibleBody(
       // joined string (implicit prefix caching needs no markers).
       if (!isOpenRouterProvider(provider)) {
         return [
-          { role: "system", content: orchestratorSystemPrompt },
+          { role: "system", content: orchestratorSystemInstructions() },
           { role: "user", content: `${parts.stable}\n${parts.volatile}` }
         ];
       }
       return [
-        { role: "system", content: [{ type: "text", text: orchestratorSystemPrompt, cache_control: { type: "ephemeral" } }] },
+        { role: "system", content: [{ type: "text", text: orchestratorSystemInstructions(), cache_control: { type: "ephemeral" } }] },
         {
           role: "user",
           content: [
@@ -1364,7 +1364,7 @@ export function buildOpenAIResponsesBody(
   const model = openAiModel(provider, policy);
   const body: Record<string, unknown> = {
     model,
-    instructions: bareExtraction ? extractionSystemPrompt : orchestratorSystemPrompt,
+    instructions: bareExtraction ? extractionSystemPrompt : orchestratorSystemInstructions(),
     input: bareExtraction ? contextText : orchestratorUserPromptText(
       contextText,
       promptSummary,

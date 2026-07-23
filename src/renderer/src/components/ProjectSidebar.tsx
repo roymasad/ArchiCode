@@ -1,3 +1,4 @@
+import { t } from "@renderer/i18n";
 import {
   Boxes,
   ChevronDown,
@@ -68,19 +69,19 @@ type FlowVisualIcon = NonNullable<NonNullable<Flow["visual"]>["icon"]>;
 type FlowVisual = NonNullable<Flow["visual"]>;
 
 const flowIconOptions: Array<{ value: FlowVisualIcon; label: string; icon: LucideIcon }> = [
-  { value: "workflow", label: "Workflow", icon: Workflow },
-  { value: "route", label: "Route", icon: Route },
-  { value: "network", label: "Network", icon: Network },
-  { value: "boxes", label: "Modules", icon: Boxes },
-  { value: "layers", label: "Layers", icon: Layers3 },
-  { value: "database", label: "Data", icon: Database },
-  { value: "cloud", label: "Cloud", icon: Cloud },
-  { value: "users", label: "Users", icon: Users },
-  { value: "shield", label: "Security", icon: ShieldCheck },
-  { value: "cpu", label: "Runtime", icon: Cpu },
-  { value: "package", label: "Package", icon: Package },
-  { value: "sparkles", label: "Ideas", icon: Sparkles },
-  { value: "compass", label: "Journey", icon: Compass }
+  { value: "workflow", label: t("Workflow"), icon: Workflow },
+  { value: "route", label: t("Route"), icon: Route },
+  { value: "network", label: t("Network"), icon: Network },
+  { value: "boxes", label: t("Modules"), icon: Boxes },
+  { value: "layers", label: t("Layers"), icon: Layers3 },
+  { value: "database", label: t("Data"), icon: Database },
+  { value: "cloud", label: t("Cloud"), icon: Cloud },
+  { value: "users", label: t("Users"), icon: Users },
+  { value: "shield", label: t("Security"), icon: ShieldCheck },
+  { value: "cpu", label: t("Runtime"), icon: Cpu },
+  { value: "package", label: t("Package"), icon: Package },
+  { value: "sparkles", label: t("Ideas"), icon: Sparkles },
+  { value: "compass", label: t("Journey"), icon: Compass }
 ];
 
 const flowIconColors = ["#7bc6d5", "#8bd39e", "#f0c66b", "#f08a7a", "#b7a7ff", "#58a6ff", "#ff9f43", "#e056a7"];
@@ -338,8 +339,8 @@ export function ProjectSidebar({
             type="button"
             className="flow-icon-trigger"
             style={visual?.color ? { color: visual.color } : undefined}
-            aria-label={`Customize icon and color for ${flowDisplayName(item)}`}
-            title={runChangeBlocked ? "A run is active, so flow appearance cannot be changed." : "Customize flow icon and color"}
+            aria-label={t("Customize icon and color for {{value1}}", { value1: flowDisplayName(item) })}
+            title={runChangeBlocked ? t("A run is active, so flow appearance cannot be changed.") : t("Customize flow icon and color")}
             disabled={runChangeBlocked}
             onClick={(event) => event.stopPropagation()}
             onDoubleClick={(event) => event.stopPropagation()}
@@ -357,13 +358,13 @@ export function ProjectSidebar({
           onOpenAutoFocus={(event) => event.preventDefault()}
         >
           <div className="flow-identity-section">
-            <span>Icon</span>
-            <div className="flow-icon-grid" aria-label={`Icon for ${flowDisplayName(item)}`}>
+            <span>{t("Icon")}</span>
+            <div className="flow-icon-grid" aria-label={t("Icon for {{value1}}", { value1: flowDisplayName(item) })}>
               <button
                 type="button"
                 className={!visual?.icon ? "is-active" : ""}
-                aria-label="Use default flow icon"
-                title="Default"
+                aria-label={t("Use default flow icon")}
+                title={t("Default")}
                 onClick={() => updateFlowVisual(item, { icon: null })}
               >
                 <GitBranch size={17} />
@@ -373,7 +374,7 @@ export function ProjectSidebar({
                   key={value}
                   type="button"
                   className={visual?.icon === value ? "is-active" : ""}
-                  aria-label={`Use ${label} flow icon`}
+                  aria-label={t("Use {{label}} flow icon", { label: label })}
                   title={label}
                   onClick={() => updateFlowVisual(item, { icon: value })}
                 >
@@ -383,13 +384,13 @@ export function ProjectSidebar({
             </div>
           </div>
           <div className="flow-identity-section">
-            <span>Color</span>
-            <div className="flow-color-grid" aria-label={`Icon color for ${flowDisplayName(item)}`}>
+            <span>{t("Color")}</span>
+            <div className="flow-color-grid" aria-label={t("Icon color for {{value1}}", { value1: flowDisplayName(item) })}>
               <button
                 type="button"
                 className={!visual?.color ? "flow-color-default is-active" : "flow-color-default"}
-                aria-label="Use default flow icon color"
-                title="Default color"
+                aria-label={t("Use default flow icon color")}
+                title={t("Default color")}
                 onClick={() => updateFlowVisual(item, { color: null })}
               >
                 <span />
@@ -400,19 +401,19 @@ export function ProjectSidebar({
                   type="button"
                   className={visual?.color === color ? "is-active" : ""}
                   style={{ backgroundColor: color }}
-                  aria-label={`Use ${color} flow icon color`}
+                  aria-label={t("Use {{color}} flow icon color", { color: color })}
                   title={color}
                   onClick={() => updateFlowVisual(item, { color })}
                 />
               ))}
-              <label className="flow-color-custom" title="Choose a custom color">
+              <label className="flow-color-custom" title={t("Choose a custom color")}>
                 <input
                   type="color"
                   value={visual?.color ?? "#7bc6d5"}
-                  aria-label="Choose a custom flow icon color"
+                  aria-label={t("Choose a custom flow icon color")}
                   onChange={(event) => updateFlowVisual(item, { color: event.target.value })}
                 />
-                <span>Custom</span>
+                <span>{t("Custom")}</span>
               </label>
             </div>
           </div>
@@ -480,23 +481,23 @@ export function ProjectSidebar({
                     }}
                     onClick={() => setActiveSubflow(subflow.id)}
                     onDoubleClick={() => { if (!historicalInspection) setRenamingSubflow({ id: subflow.id, name: subflow.name }); }}
-                    title={subflowLinkedTitle(item, subflow) ?? "Drag to nest, double-click to rename"}
+                    title={subflowLinkedTitle(item, subflow) ?? t("Drag to nest, double-click to rename")}
                   >
                     <GitBranch size={15} />
                     <span>{subflow.name}</span>
-                    <small>{subflowIgnored ? "ignored" : nodeCount}</small>
+                    <small>{subflowIgnored ? t("ignored") : nodeCount}</small>
                   </button>
                 )}
                 <div className="subflow-actions">
                   <IconButton
-                    title={subflow.ignored ? "Restore subflow to agent working set" : subflowIgnored ? "Parent subflow is ignored" : "Ignore subflow for agents"}
+                    title={subflow.ignored ? t("Restore subflow to agent working set") : subflowIgnored ? t("Parent subflow is ignored") : t("Ignore subflow for agents")}
                     disabled={runChangeBlocked || (subflowIgnored && !subflow.ignored)}
                     onClick={() => void toggleSubflowIgnored(subflow.id)}
                   >
                     {subflow.ignored ? <Eye size={14} /> : <EyeOff size={14} />}
                   </IconButton>
                   <IconButton
-                    title={`Delete ${subflow.name}`}
+                    title={t("Delete {{name}}", { name: subflow.name })}
                     onClick={() => {
                       if (window.confirm(`Delete "${subflow.name}"? Nodes and child detail flows will move up one level.`)) {
                         void deleteSubflow(subflow.id);
@@ -535,7 +536,7 @@ export function ProjectSidebar({
                   <FlowIdentityIcon visual={effectiveFlowVisual(item)} size={15} />
                   <input
                     className="ui-input flow-rename-input"
-                    aria-label={`Rename ${flowDisplayName(item)}`}
+                    aria-label={t("Rename {{value1}}", { value1: flowDisplayName(item) })}
                     value={renamingFlow.name}
                     autoFocus
                     onChange={(event) => setRenamingFlow({ id: item.id, name: event.target.value })}
@@ -575,19 +576,19 @@ export function ProjectSidebar({
                   onDoubleClick={() => { if (!historicalInspection) setRenamingFlow({ id: item.id, name: editableFlowName(item) }); }}
                   title={item.perspective
                     ? `${item.perspective.question} Confidence: ${item.perspective.confidence}. Double-click to rename.`
-                    : "Show this flow's top-level nodes. Drop a subflow here to move it to top level. Double-click to rename."}
+                    : t("Show this flow's top-level nodes. Drop a subflow here to move it to top level. Double-click to rename.")}
                 >
                   {renderFlowIdentityPicker(item)}
                   <span className="flow-name-stack">
                     <span>{flowDisplayName(item)}</span>
-                    {item.perspective ? <em>{perspectiveLabel(item)} · {item.perspective.confidence}</em> : null}
+                    {item.perspective ? <em>{t("{{value1}} · {{confidence}}", { value1: perspectiveLabel(item), confidence: item.perspective.confidence })}</em> : null}
                   </span>
-                  <small>{item.ignored ? "ignored" : topLevelCount}</small>
+                  <small>{item.ignored ? t("ignored") : topLevelCount}</small>
                 </div>
               )}
               <IconButton
                 className="flow-ignore-toggle"
-                title={item.ignored ? "Restore flow to agent working set" : "Ignore flow for agents"}
+                title={item.ignored ? t("Restore flow to agent working set") : t("Ignore flow for agents")}
                 disabled={runChangeBlocked}
                 onClick={() => toggleFlowIgnored(item)}
               >
@@ -601,12 +602,12 @@ export function ProjectSidebar({
                   type="button"
                   size="sm"
                   className="structure-add-subflow"
-                  title={runChangeBlocked ? "A run is already active or waiting for review." : "Add subflow"}
+                  title={runChangeBlocked ? t("A run is already active or waiting for review.") : t("Add subflow")}
                   disabled={runChangeBlocked}
                   onClick={createSubflow}
                 >
                   <Plus size={14} />
-                  <span>Subflow</span>
+                  <span>{t("Subflow")}</span>
                 </Button>
               </>
             ) : null}
@@ -617,27 +618,27 @@ export function ProjectSidebar({
         type="button"
         size="sm"
         className="structure-add-flow"
-        title={runChangeBlocked ? "A run is already active or waiting for review." : "Add top-level flow"}
+        title={runChangeBlocked ? t("A run is already active or waiting for review.") : t("Add top-level flow")}
         disabled={runChangeBlocked}
         onClick={() => void createFlow()}
       >
         <Plus size={14} />
-        <span>Flow</span>
+        <span>{t("Flow")}</span>
       </Button>
     </div>
   );
 
   return (
-    <aside className="project-sidebar" aria-label="Project navigation">
+    <aside className="project-sidebar" aria-label={t("Project navigation")}>
       <div className="brand-row">
         <Boxes size={24} />
         <div className="brand-title">
-          <h1>ArchiCode</h1>
+          <h1>{t("ArchiCode")}</h1>
         </div>
         {panelAction}
       </div>
       {historicalInspection ? (
-        <div className="sidebar-historical-label"><History size={14} /> Flows at {historicalInspection.entry.shortCommit}</div>
+        <div className="sidebar-historical-label"><History size={14} /> {" "}{t("Flows at")}{" "}{historicalInspection.entry.shortCommit}</div>
       ) : null}
 
       <div className="project-switcher">
@@ -645,19 +646,19 @@ export function ProjectSidebar({
           <MenuTrigger asChild>
             <Button type="button" variant="primary" className="project-create-button">
               <Plus size={16} />
-              <span>New Project</span>
+              <span>{t("New Project")}</span>
             </Button>
           </MenuTrigger>
           <MenuContent align="start">
-            <MenuLabel>New project</MenuLabel>
+            <MenuLabel>{t("New project")}</MenuLabel>
             <MenuItem disabled={!onOpenProjectLauncher} onSelect={onOpenProjectLauncher}>
               <span className="menu-item-stack">
-                <strong>Open project launcher</strong>
-                <small>Open a folder, clone from Git, or choose a template.</small>
+                <strong>{t("Open project launcher")}</strong>
+                <small>{t("Open a folder, clone from Git, or choose a template.")}</small>
               </span>
             </MenuItem>
             <MenuSeparator />
-            <MenuLabel>Start from template</MenuLabel>
+            <MenuLabel>{t("Start from template")}</MenuLabel>
             {projectTemplates.map((template) => (
               <MenuItem
                 key={template.id}
@@ -673,32 +674,32 @@ export function ProjectSidebar({
         </MenuRoot>
         <MenuRoot>
           <MenuTrigger asChild>
-            <IconButton title="Project menu" className="project-menu-button">
+            <IconButton title={t("Project menu")} className="project-menu-button">
               <MoreHorizontal size={16} />
             </IconButton>
           </MenuTrigger>
           <MenuContent align="end">
-            <MenuLabel>Current project</MenuLabel>
+            <MenuLabel>{t("Current project")}</MenuLabel>
             <MenuItem disabled={!rootPath} onSelect={() => void revealProjectFolder()}>
               <span className="menu-item-stack" title={rootPath}>
-                <strong>{bundle?.project.name ?? "No project selected"}</strong>
-                <small>{rootPath || "Open a folder to begin."}</small>
+                <strong>{bundle?.project.name ?? t("No project selected")}</strong>
+                <small>{rootPath || t("Open a folder to begin.")}</small>
               </span>
             </MenuItem>
             <MenuItem disabled={!rootPath} onSelect={() => void copyRootPath()}>
               {pathCopied ? <Check size={15} /> : <Copy size={15} />}
-              {pathCopyFailed ? "Could not copy path" : pathCopied ? "Copied path" : "Copy path"}
+              {pathCopyFailed ? t("Could not copy path") : pathCopied ? t("Copied path") : t("Copy path")}
             </MenuItem>
             <MenuSeparator />
-            <MenuLabel>Open project</MenuLabel>
+            <MenuLabel>{t("Open project")}</MenuLabel>
             <MenuItem onSelect={() => void openProjectFolder()}>
               <span className="menu-item-stack">
-                <strong>Choose Folder...</strong>
-                <small>Pick any local folder to open in ArchiCode.</small>
+                <strong>{t("Choose Folder...")}</strong>
+                <small>{t("Pick any local folder to open in ArchiCode.")}</small>
               </span>
             </MenuItem>
             <MenuSeparator />
-            <MenuLabel>Recent</MenuLabel>
+            <MenuLabel>{t("Recent")}</MenuLabel>
             {recentProjectOptions.length ? recentProjectOptions.map((project) => (
               <MenuItem key={project.rootPath} onSelect={() => void openRecentProject(project.rootPath)}>
                 <span className="menu-item-stack" title={project.rootPath}>
@@ -709,8 +710,8 @@ export function ProjectSidebar({
             )) : (
               <MenuItem disabled>
                 <span className="menu-item-stack">
-                  <strong>No recent projects yet</strong>
-                  <small>Opened projects will show up here.</small>
+                  <strong>{t("No recent projects yet")}</strong>
+                  <small>{t("Opened projects will show up here.")}</small>
                 </span>
               </MenuItem>
             )}
@@ -728,19 +729,19 @@ export function ProjectSidebar({
           <FlowIdentityIcon visual={effectiveFlowVisual(flow)} size={15} />
           <span>
             <strong>{activeScopeLabel}</strong>
-            <small>{activeSubflow ? flow?.name : flow?.perspective ? `${perspectiveLabel(flow)} · ${flow.perspective.confidence}` : "Current scope"}</small>
+            <small>{activeSubflow ? flow?.name : flow?.perspective ? t("{{value1}} · {{confidence}}", { value1: perspectiveLabel(flow), confidence: flow.perspective.confidence }) : t("Current scope")}</small>
           </span>
           <ChevronDown size={15} />
         </button>
         {flowsExpanded ? (
           <div className="sidebar-scope-body">
-            {!bundle ? <EmptyState title="No project open">Create a project or open an existing folder.</EmptyState> : (
+            {!bundle ? <EmptyState title={t("No project open")}>{t("Create a project or open an existing folder.")}</EmptyState> : (
               <>
                 <label className="search-row scope-search-row">
                   <Search size={15} />
                   <TextInput
                     value={flowSearchQuery}
-                    placeholder="Search flows and subflows"
+                    placeholder={t("Search flows and subflows")}
                     onChange={(event) => setFlowSearchQuery(event.target.value)}
                   />
                 </label>
@@ -749,7 +750,7 @@ export function ProjectSidebar({
                   if (item.name.toLowerCase().includes(normalizedFlowSearchQuery)) return true;
                   return childSubflowsForFlow(item, null).some((subflow) => subflowMatchesFlowSearch(item, subflow, normalizedFlowSearchQuery));
                 }) ? (
-                  <EmptyState title="No flows found">Try a different search.</EmptyState>
+                  <EmptyState title={t("No flows found")}>{t("Try a different search.")}</EmptyState>
                 ) : null}
               </>
             )}
@@ -760,7 +761,7 @@ export function ProjectSidebar({
       <div className="sidebar-tabs">
         <ScrollArea className="sidebar-scroll">
             {openQuestions.length ? (
-              <CommandGroup title="Needs Reply">
+              <CommandGroup title={t("Needs Reply")}>
                 <div className="node-list compact">
                   {openQuestions.map((question) => (
                     <button
@@ -773,7 +774,7 @@ export function ProjectSidebar({
                         <strong>{question.nodeTitle}</strong>
                         <small>{question.body}</small>
                       </span>
-                      <Badge tone="warning">Q</Badge>
+                      <Badge tone="warning">{t("Q")}</Badge>
                     </button>
                   ))}
                 </div>
@@ -786,34 +787,31 @@ export function ProjectSidebar({
                 <TextInput
                   ref={searchInputRef}
                   value={searchQuery}
-                  placeholder="Search current scope"
+                  placeholder={t("Search current scope")}
                   onChange={(event) => setSearchQuery(event.target.value)}
                 />
               </label>
               <div className="add-node-row">
                 <Tooltip
                   content={
-                    <span>
-                      Adds a generic node centered on the current view. Customize its type and
-                      details after creating. Examples you can set: {builtInNodeTypes.join(", ")}.
-                    </span>
+                    <span>{t("Adds a generic node centered on the current view. Customize its type and details after creating. Examples you can set: {{value1}}.", { value1: builtInNodeTypes.join(", ") })}</span>
                   }
                 >
                   <Button
                     type="button"
                     size="sm"
-                    title={runChangeBlocked ? "A run is already active or waiting for review." : "Add node"}
+                    title={runChangeBlocked ? t("A run is already active or waiting for review.") : t("Add node")}
                     disabled={runChangeBlocked}
                     onClick={() => void addNode()}
                   >
                     <Plus size={14} />
-                    <span>Node</span>
+                    <span>{t("Node")}</span>
                   </Button>
                 </Tooltip>
               </div>
               <div className="node-list sidebar-node-list">
                 {filteredNodes.length === 0 ? (
-                  <EmptyState title="No nodes found">Try a different search or add a node to this scope.</EmptyState>
+                  <EmptyState title={t("No nodes found")}>{t("Try a different search or add a node to this scope.")}</EmptyState>
                 ) : null}
                 {filteredNodes.map((node) => (
                   <button
@@ -828,7 +826,7 @@ export function ProjectSidebar({
                     type="button"
                     onClick={(event) => selectSidebarNode(event, node.id)}
                     onDoubleClick={() => centerSidebarNodeOnCanvas(node.id)}
-                    title="Double-click to center this node on the canvas"
+                    title={t("Double-click to center this node on the canvas")}
                   >
                     <span>
                       <strong>{node.title}</strong>
@@ -839,7 +837,7 @@ export function ProjectSidebar({
                         className="node-stage-badge"
                         tone={node.ignored ? "neutral" : node.flags.includes("needs-attention") ? "warning" : node.locked ? "success" : "neutral"}
                     >
-                        <span title={node.ignored ? "Ignored by agents" : node.stage}>{node.ignored ? "ignored" : sidebarStageLabels[node.stage]}</span>
+                        <span title={node.ignored ? t("Ignored by agents") : node.stage}>{node.ignored ? t("ignored") : sidebarStageLabels[node.stage]}</span>
                       </Badge>
                     </div>
                   </button>

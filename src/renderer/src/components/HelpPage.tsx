@@ -1,3 +1,4 @@
+import { t } from "@renderer/i18n";
 import { BookOpen, CheckCircle2, ExternalLink, FolderOpen, GitBranch, Keyboard, Lock, MessageSquare, Play, SlidersHorizontal, Sparkles } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { gaiaAgent, pandoraAgent } from "@shared/agentIdentities";
@@ -28,32 +29,32 @@ const helpLiveBindingOrder: ActionId[] = [
 const helpSections = [
   {
     icon: <FolderOpen size={18} />,
-    title: "Start with a real folder",
+    title: t("Start with a real folder"),
     body: "Open an existing codebase or create a template project. ArchiCode stores its own readable project model in `.archicode/` alongside the files it is helping you plan and change."
   },
   {
     icon: <GitBranch size={18} />,
-    title: "Map the work as a graph",
+    title: t("Map the work as a graph"),
     body: "Use flows, subflows, nodes, edges, stages, flags, todos, notes, attachments, and acceptance criteria to describe the system and the work that should happen next."
   },
   {
     icon: <Sparkles size={18} />,
-    title: "Let Archi work from context",
+    title: t("Let Archi work from context"),
     body: `Run AI Implement with ${gaiaAgent.name} for the whole diagram, or use node-scoped actions from the inspector. Archi, the chat research agent, can research questions, edit or create graph nodes and groups, execute builds, help verify results, and sync the graph to code after external edits when you ask.`
   },
   {
     icon: <MessageSquare size={18} />,
-    title: "Answer questions on nodes",
+    title: t("Answer questions on nodes"),
     body: "When required product or technical details are missing, the model should stop and add focused LLM questions as node notes. Answer there so future runs keep the clarification attached to the right work."
   },
   {
     icon: <Play size={18} />,
-    title: "Build, run, and debug",
+    title: t("Build, run, and debug"),
     body: `Configure build commands and run targets in Settings. ${gaiaAgent.title} handles implementation, while ${pandoraAgent.title} handles focused debugging. Their runs, runtime logs, bug reports, failed checks, artifacts, and diffs stay visible in the activity panel for review and follow-up.`
   },
   {
     icon: <Lock size={18} />,
-    title: "Review risky changes",
+    title: t("Review risky changes"),
     body: "Shell commands are permission-gated, source-file proposals are validated, and locked production nodes cannot be silently changed by the model. Keep review mode on when you want every proposal to wait for approval."
   }
 ];
@@ -112,37 +113,35 @@ export function HelpPage({ trigger }: { trigger?: ReactNode }) {
         {trigger ?? (
           <Button type="button">
             <BookOpen size={16} />
-            <span>Help</span>
+            <span>{t("Help")}</span>
           </Button>
         )}
       </DialogTrigger>
       <DialogContent
-        title="ArchiCode Help"
-        description="A concise guide to what this project is for and how to use it."
+        title={t("ArchiCode Help")}
+        description={t("A concise guide to what this project is for and how to use it.")}
         className="help-dialog"
       >
         <ScrollArea className="help-page-scroll">
           <div className="help-page">
-            <section className="help-intro" aria-label="What ArchiCode is">
-              <span className="ui-eyebrow">What it is</span>
-              <p>
-                ArchiCode is a visual-first harness for designing and evolving software projects with node-based architecture diagrams and LLM-guided workflows. It is meant to make the diagram, not a long chat thread, the durable planning surface for a project.
-              </p>
+            <section className="help-intro" aria-label={t("What ArchiCode is")}>
+              <span className="ui-eyebrow">{t("What it is")}</span>
+              <p>{t("{{value1}} {{value2}}", { value1: t("ArchiCode is a visual-first harness for designing and evolving software projects with node-based architecture diagrams and LLM-guided workflows. It is meant to make the diagram, not a long chat thread, the durable planning surface for a project."), value2: " " })}</p>
             </section>
 
-            <section className="help-quick-start" aria-label="Quick start">
-              <span className="ui-eyebrow">Quick start</span>
+            <section className="help-quick-start" aria-label={t("Quick start")}>
+              <span className="ui-eyebrow">{t("Quick start")}</span>
               <ol>
-                <li>Configure an LLM provider. It is required for model-assisted planning and code changes, which are the core workflow.</li>
-                <li>Open a project folder or create a project from a template.</li>
-                <li>Create nodes for features, components, tasks, settings, artifacts, or subflows.</li>
-                <li>Add acceptance criteria, edges, notes, and attachments to the nodes that need work.</li>
-                <li>Run AI Implement with Gaia, Build, Run App, or AI Debug with Pandora from the toolbar when the graph has enough context.</li>
-                <li>Review questions, logs, artifacts, diffs, and proposed changes before treating work as done.</li>
+                <li>{t("Configure an LLM provider. It is required for model-assisted planning and code changes, which are the core workflow.")}</li>
+                <li>{t("Open a project folder or create a project from a template.")}</li>
+                <li>{t("Create nodes for features, components, tasks, settings, artifacts, or subflows.")}</li>
+                <li>{t("Add acceptance criteria, edges, notes, and attachments to the nodes that need work.")}</li>
+                <li>{t("Run AI Implement with Gaia, Build, Run App, or AI Debug with Pandora from the toolbar when the graph has enough context.")}</li>
+                <li>{t("Review questions, logs, artifacts, diffs, and proposed changes before treating work as done.")}</li>
               </ol>
             </section>
 
-            <section className="help-section-grid" aria-label="Core workflow">
+            <section className="help-section-grid" aria-label={t("Core workflow")}>
               {helpSections.map((section) => (
                 <article key={section.title} className="help-section">
                   <div className="help-section-icon" aria-hidden="true">{section.icon}</div>
@@ -154,12 +153,12 @@ export function HelpPage({ trigger }: { trigger?: ReactNode }) {
               ))}
             </section>
 
-            <section className="help-shortcuts" aria-label="Keyboard shortcuts">
+            <section className="help-shortcuts" aria-label={t("Keyboard shortcuts")}>
               <div className="help-shortcuts-heading">
                 <Keyboard size={18} aria-hidden="true" />
                 <div>
-                  <span className="ui-eyebrow">Shortcuts</span>
-                  <h3>Canvas shortcuts</h3>
+                  <span className="ui-eyebrow">{t("Shortcuts")}</span>
+                  <h3>{t("Canvas shortcuts")}</h3>
                 </div>
               </div>
               <dl className="help-shortcut-list">
@@ -171,8 +170,8 @@ export function HelpPage({ trigger }: { trigger?: ReactNode }) {
                 ))}
               </dl>
               <div className="help-shortcuts-live">
-                <span className="ui-eyebrow">Current key bindings</span>
-                <p>These reflect your current key bindings. Customize them in Preferences :</p>
+                <span className="ui-eyebrow">{t("Current key bindings")}</span>
+                <p>{t("These reflect your current key bindings. Customize them in Preferences:")}</p>
                 <ul className="help-shortcut-list">
                   {helpLiveBindingOrder.map((id) => {
                     const descriptor = ACTION_DESCRIPTORS.find((item) => item.id === id);
@@ -188,20 +187,17 @@ export function HelpPage({ trigger }: { trigger?: ReactNode }) {
                 </ul>
                 <Button type="button" size="sm" variant="secondary" onClick={() => { setOpen(false); openProjectSettings("shortcuts"); }}>
                   <SlidersHorizontal size={14} />
-                  <span>Open Shortcuts</span>
+                  <span>{t("Open Shortcuts")}</span>
                 </Button>
               </div>
             </section>
 
-            <section className="help-footer-note" aria-label="Working model">
+            <section className="help-footer-note" aria-label={t("Working model")}>
               <CheckCircle2 size={18} aria-hidden="true" />
-              <p>
-                The intended rhythm is: model the system visually, clarify uncertainty on the relevant nodes, run focused agent work, verify the result, then keep the graph updated as the shared source of project intent.
-                If code changed outside ArchiCode, ask Archi to sync graph to code; it should first ask whether to compare uncommitted changes, changes since a commit you name, or the full codebase.
-              </p>
+              <p>{t("{{value1}} {{value2}}", { value1: t("The intended rhythm is: model the system visually, clarify uncertainty on the relevant nodes, run focused agent work, verify the result, then keep the graph updated as the shared source of project intent. If code changed outside ArchiCode, ask Archi to sync graph to code; it should first ask whether to compare uncommitted changes, changes since a commit you name, or the full codebase."), value2: " " })}</p>
             </section>
 
-            <section className="help-footer-link" aria-label="ArchiCode website">
+            <section className="help-footer-link" aria-label={t("ArchiCode website")}>
               <a
                 href={ARCHICODE_WEBSITE_URL}
                 onClick={(event) => {
@@ -210,7 +206,7 @@ export function HelpPage({ trigger }: { trigger?: ReactNode }) {
                 }}
               >
                 <ExternalLink size={14} aria-hidden="true" />
-                <span>archicode.pixel-hat.com</span>
+                <span>{t("archicode.pixel-hat.com")}</span>
               </a>
             </section>
           </div>

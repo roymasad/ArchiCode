@@ -1,3 +1,5 @@
+import { formatNumber } from "@renderer/i18n";
+import { t } from "@renderer/i18n";
 import { AlertTriangle, CheckCircle2, Sparkles } from "lucide-react";
 import type { CSSProperties } from "react";
 import { useEffect, useRef, useState } from "react";
@@ -8,30 +10,30 @@ import { useArchicodeStore, type CodebaseOnboardingDetail, type CodebaseOnboardi
 import { Button, DialogContent, DialogRoot, Field, Select } from "./ui";
 
 const levelOptions: Array<{ value: CodebaseOnboardingLevel; label: string; hint?: string }> = [
-  { value: "1", label: "1 total flow: flat overview" },
-  { value: "2", label: "2 total flows: overview + one detail flow" },
-  { value: "3", label: "3 total flows: context -> areas -> components", hint: "default" },
-  { value: "4", label: "4 total flows: context -> areas -> components -> modules" }
+  { value: "1", label: t("1 total flow: flat overview") },
+  { value: "2", label: t("2 total flows: overview + one detail flow") },
+  { value: "3", label: t("3 total flows: context -> areas -> components"), hint: t("default") },
+  { value: "4", label: t("4 total flows: context -> areas -> components -> modules") }
 ];
 
 const detailOptions: Array<{ value: CodebaseOnboardingDetail; label: string; hint?: string }> = [
-  { value: "light", label: "Light detail" },
-  { value: "balanced", label: "Balanced detail", hint: "default" },
-  { value: "deep", label: "Deep detail" }
+  { value: "light", label: t("Light detail") },
+  { value: "balanced", label: t("Balanced detail"), hint: t("default") },
+  { value: "deep", label: t("Deep detail") }
 ];
 
 const reviewEffortOptions: Array<{ value: CodebaseOnboardingReviewEffort; label: string; hint?: string }> = [
-  { value: "light", label: `Light review · up to ${codebaseReviewPartitionBudget.light} partitions` },
-  { value: "balanced", label: `Balanced review · up to ${codebaseReviewPartitionBudget.balanced} partitions`, hint: "default" },
-  { value: "deep", label: `Deep review · up to ${codebaseReviewPartitionBudget.deep} partitions` },
-  { value: "ultra", label: `Ultra review · up to ${codebaseReviewPartitionBudget.ultra} partitions` }
+  { value: "light", label: t("Light review · up to {{light}} partitions", { light: codebaseReviewPartitionBudget.light }) },
+  { value: "balanced", label: t("Balanced review · up to {{balanced}} partitions", { balanced: codebaseReviewPartitionBudget.balanced }), hint: t("default") },
+  { value: "deep", label: t("Deep review · up to {{deep}} partitions", { deep: codebaseReviewPartitionBudget.deep }) },
+  { value: "ultra", label: t("Ultra review · up to {{ultra}} partitions", { ultra: codebaseReviewPartitionBudget.ultra }) }
 ];
 
 const granularityOptions: Array<{ value: CodebaseOnboardingGranularity; label: string; hint?: string }> = [
-  { value: "system", label: "Systems: big-picture areas only" },
-  { value: "module", label: "Modules: packages and services" },
-  { value: "component", label: "Components: inside each module", hint: "default" },
-  { value: "file", label: "Files: every source file" }
+  { value: "system", label: t("Systems: big-picture areas only") },
+  { value: "module", label: t("Modules: packages and services") },
+  { value: "component", label: t("Components: inside each module"), hint: t("default") },
+  { value: "file", label: t("Files: every source file") }
 ];
 
 const depthHint = "How many drill-down levels the map has. Each level below the root becomes a nested flow you enter by opening a parent node.";
@@ -61,8 +63,8 @@ function ImportSummaryDetails({
   return (
     <details className={`onboarding-summary-details${className ? ` ${className}` : ""}`}>
       <summary>
-        <strong>{title} ({messages.length})</strong>
-        <span>View details</span>
+        <strong>{t("{{title}} ( {{length}} )", { title: title, length: messages.length })}</strong>
+        <span>{t("View details")}</span>
       </summary>
       <ul>{messages.map((message, index) => <li key={`${index}-${message}`}>{message}</li>)}</ul>
     </details>
@@ -82,7 +84,7 @@ function ImportCompletionSummary({ summary }: { summary: CodebaseMappingSummary 
   const issueMessage = summary.graph.flows === 0
     ? "No architecture flows were generated. Rerun the import; if it happens again, open the technical report before retrying."
     : summary.graph.operationsFailed > 0
-      ? `${summary.graph.operationsFailed.toLocaleString()} generated graph change${summary.graph.operationsFailed === 1 ? "" : "s"} could not be saved. Rerun the import before relying on the map.`
+      ? `${formatNumber(summary.graph.operationsFailed)} generated graph change${summary.graph.operationsFailed === 1 ? "" : "s"} could not be saved. Rerun the import before relying on the map.`
       : summary.review?.status === "failed"
         ? "The architecture review did not finish. Rerun the import to complete the quality check before relying on the map."
         : "";
@@ -91,19 +93,19 @@ function ImportCompletionSummary({ summary }: { summary: CodebaseMappingSummary 
     : "Not run";
   const hasDetailedProviderCalls = summary.providerCalls.architecture !== undefined && summary.providerCalls.review !== undefined;
   const providerCallValue = hasDetailedProviderCalls
-    ? `${summary.providerCalls.total.toLocaleString()} total · ${summary.providerCalls.architecture!.toLocaleString()} architecture · ${summary.providerCalls.review!.toLocaleString()} review · ${(summary.providerCalls.runtimeSetup ?? 0).toLocaleString()} runtime setup`
-    : `${summary.providerCalls.total.toLocaleString()} total · ${summary.providerCalls.failed.toLocaleString()} failed`;
+    ? `${formatNumber(summary.providerCalls.total)} total · ${formatNumber(summary.providerCalls.architecture!)} architecture · ${formatNumber(summary.providerCalls.review!)} review · ${formatNumber((summary.providerCalls.runtimeSetup ?? 0))} runtime setup`
+    : `${formatNumber(summary.providerCalls.total)} total · ${formatNumber(summary.providerCalls.failed)} failed`;
   const accuracy = summary.accuracyEstimate;
   return (
     <div className={hasIssues ? "onboarding-summary has-issues" : "onboarding-summary"}>
       <div className="onboarding-summary-heading">
         {hasIssues ? <AlertTriangle size={22} /> : <CheckCircle2 size={22} />}
         <div>
-          <strong>{hasIssues ? "Map created with an issue requiring attention" : "Map ready to explore"}</strong>
+          <strong>{hasIssues ? t("Map created with an issue requiring attention") : t("Map ready to explore")}</strong>
           <span>
             {hasIssues
               ? issueMessage
-              : `ArchiCode generated ${summary.graph.flows.toLocaleString()} architecture flows and completed the selected review. No action is required.`}
+              : t("ArchiCode generated {{value1}} architecture flows and completed the selected review. No action is required.", { value1: formatNumber(summary.graph.flows) })}
           </span>
         </div>
       </div>
@@ -111,64 +113,64 @@ function ImportCompletionSummary({ summary }: { summary: CodebaseMappingSummary 
       <div className="onboarding-summary-grid is-outcome">
         {accuracy ? (
           <div className="onboarding-summary-accuracy">
-            <span>Estimated accuracy</span>
-            <strong>{accuracy.score}% · {accuracy.label}</strong>
+            <span>{t("Estimated accuracy")}</span>
+            <strong>{t("{{score}}% · {{label}}", { score: accuracy.score, label: accuracy.label })}</strong>
             <small>{accuracy.recommendation}</small>
           </div>
         ) : null}
-        <div><span>Total time</span><strong>{formatElapsedTime(summary.durationMs)}</strong></div>
+        <div><span>{t("Total time")}</span><strong>{formatElapsedTime(summary.durationMs)}</strong></div>
         <div>
-          <span>Repository coverage</span>
-          <strong>{summary.files.scanned.toLocaleString()} files scanned</strong>
-          <small>{summary.files.parsed.toLocaleString()} source files parsed in depth</small>
+          <span>{t("Repository coverage")}</span>
+          <strong>{t("{{value1}} files scanned", { value1: formatNumber(summary.files.scanned) })}</strong>
+          <small>{t("{{value1}} source files parsed in depth", { value1: formatNumber(summary.files.parsed) })}</small>
         </div>
         <div>
-          <span>Generated map</span>
-          <strong>{summary.graph.flows.toLocaleString()} flows</strong>
-          <small>{summary.graph.nodes.toLocaleString()} nodes · {summary.graph.relationships.toLocaleString()} relationships</small>
+          <span>{t("Generated map")}</span>
+          <strong>{t("{{value1}} flows", { value1: formatNumber(summary.graph.flows) })}</strong>
+          <small>{t("{{value1}} nodes · {{value2}} relationships", { value1: formatNumber(summary.graph.nodes), value2: formatNumber(summary.graph.relationships) })}</small>
         </div>
         <div>
-          <span>Architecture review</span>
+          <span>{t("Architecture review")}</span>
           <strong>{reviewValue}</strong>
-          <small>{summary.review ? `${summary.review.appliedEdits.toLocaleString()} verified improvements applied` : "Generated without an LLM review"}</small>
+          <small>{summary.review ? t("{{value1}} verified improvements applied", { value1: formatNumber(summary.review.appliedEdits) }) : t("Generated without an LLM review")}</small>
         </div>
       </div>
 
       <details className="onboarding-summary-technical">
         <summary>
           <div>
-            <strong>Technical import report</strong>
-            <span>Provider activity, safeguards, coverage notes, and phase timing</span>
+            <strong>{t("Technical import report")}</strong>
+            <span>{t("Provider activity, safeguards, coverage notes, and phase timing")}</span>
           </div>
-          <span>View details</span>
+          <span>{t("View details")}</span>
         </summary>
         <div className="onboarding-summary-technical-body">
           <div className="onboarding-summary-meta">
-            <span>{summary.provider.label}{summary.provider.model ? ` · ${summary.provider.model}` : ""}</span>
-            <span>{Math.round(summary.files.resolutionRate * 100)}% imports resolved</span>
-            <span>{summary.files.importLinks.toLocaleString()} import links</span>
+            <span>{t("{{label}} {{value2}}", { label: summary.provider.label, value2: summary.provider.model ? ` · ${summary.provider.model}` : "" })}</span>
+            <span>{t("{{value1}}% imports resolved", { value1: Math.round(summary.files.resolutionRate * 100) })}</span>
+            <span>{t("{{value1}} import links", { value1: formatNumber(summary.files.importLinks) })}</span>
             <span>{providerCallValue}</span>
-            {hasDetailedProviderCalls ? <span>{(summary.providerCalls.retries ?? 0).toLocaleString()} retries recovered · {summary.providerCalls.failed.toLocaleString()} failed calls · {(summary.providerCalls.rejected ?? 0).toLocaleString()} invalid suggestions safely ignored</span> : null}
+            {hasDetailedProviderCalls ? <span>{t("{{value1}} retries recovered · {{value2}} failed calls · {{value3}} invalid suggestions safely ignored", { value1: formatNumber((summary.providerCalls.retries ?? 0)), value2: formatNumber(summary.providerCalls.failed), value3: formatNumber((summary.providerCalls.rejected ?? 0)) })}</span> : null}
             {summary.review?.reviewedSourceFiles !== undefined
-              ? <span>{summary.review.reviewedSourceFiles.toLocaleString()} source files deeply reviewed · {summary.settings.reviewEffort} budget</span>
+              ? <span>{t("{{value1}} source files deeply reviewed · {{reviewEffort}} budget", { value1: formatNumber(summary.review.reviewedSourceFiles), reviewEffort: summary.settings.reviewEffort })}</span>
               : null}
           </div>
 
           {summary.errors.length ? (
             <div className="onboarding-summary-issues is-error">
-              <strong>Provider or graph errors ({summary.errors.length})</strong>
+              <strong>{t("Provider or graph errors ( {{length}} )", { length: summary.errors.length })}</strong>
               <ul>{summary.errors.map((error, index) => <li key={`${index}-${error}`}>{error}</li>)}</ul>
             </div>
           ) : null}
-          <ImportSummaryDetails title="Automated protections applied" messages={report.correctionsAndSafeguards} />
-          {accuracy ? <ImportSummaryDetails title="Accuracy estimate factors" messages={[accuracy.explanation, ...accuracy.factors.map((factor) => `${factor.label}: ${factor.value}`)]} /> : null}
-          <ImportSummaryDetails title="Coverage and review notes" messages={report.limitations} />
-          <ImportSummaryDetails title="Unverified suggestions omitted" messages={report.rejectedReviewSuggestions} />
-          <ImportSummaryDetails title="Additional implementation details" messages={report.informationalNotes} />
+          <ImportSummaryDetails title={t("Automated protections applied")} messages={report.correctionsAndSafeguards} />
+          {accuracy ? <ImportSummaryDetails title={t("Accuracy estimate factors")} messages={[accuracy.explanation, ...accuracy.factors.map((factor) => `${factor.label}: ${factor.value}`)]} /> : null}
+          <ImportSummaryDetails title={t("Coverage and review notes")} messages={report.limitations} />
+          <ImportSummaryDetails title={t("Unverified suggestions omitted")} messages={report.rejectedReviewSuggestions} />
+          <ImportSummaryDetails title={t("Additional implementation details")} messages={report.informationalNotes} />
 
           {summary.phaseTimings.length ? (
             <details className="onboarding-summary-phases">
-              <summary>Phase timing breakdown</summary>
+              <summary>{t("Phase timing breakdown")}</summary>
               <div>
                 {summary.phaseTimings.map((phase, index) => (
                   <span key={`${phase.phase}-${index}`}><strong>{phase.label}</strong>{formatElapsedTime(phase.durationMs)}</span>
@@ -257,10 +259,10 @@ export function CodebaseOnboardingWizard() {
     }}>
       {codebaseOnboarding ? (
         <DialogContent
-          title={completedSummary ? "Codebase import summary" : "Map Existing Codebase"}
+          title={completedSummary ? t("Codebase import summary") : t("Map Existing Codebase")}
           description={completedSummary
-            ? "The import is finished. Review the result, then open the generated map."
-            : "This folder did not have ArchiCode graph metadata yet. ArchiCode created an empty workspace; you can let an LLM map the current codebase into flows and nodes."}
+            ? t("The import is finished. Review the result, then open the generated map.")
+            : t("This folder did not have ArchiCode graph metadata yet. ArchiCode created an empty workspace; you can let an LLM map the current codebase into flows and nodes.")}
           className="codebase-onboarding-dialog"
           hideCloseButton
           onEscapeKeyDown={(event) => event.preventDefault()}
@@ -268,29 +270,25 @@ export function CodebaseOnboardingWizard() {
         >
           {completedSummary ? <ImportCompletionSummary summary={completedSummary} /> : <>
           <div className="onboarding-detected">
-            <strong>Detected</strong>
-            <span>{codebaseOnboarding.codebaseHints.length ? codebaseOnboarding.codebaseHints.join(", ") : "No common stack markers found"}</span>
+            <strong>{t("Detected")}</strong>
+            <span>{codebaseOnboarding.codebaseHints.length ? codebaseOnboarding.codebaseHints.join(", ") : t("No common stack markers found")}</span>
           </div>
 
           {!mappingInProgress ? (
             <div className={providerReady ? "onboarding-provider is-ready" : "onboarding-provider needs-setup"}>
-              <strong>LLM provider required</strong>
+              <strong>{t("LLM provider required")}</strong>
               <span>{providerStatus}</span>
               <div className="action-row">
-                <Button type="button" size="sm" variant="secondary" onClick={() => openProjectSettings("providers")}>
-                  Set up provider
-                </Button>
+                <Button type="button" size="sm" variant="secondary" onClick={() => openProjectSettings("providers")}>{t("{{value1}} {{value2}}", { value1: t("Set up provider"), value2: " " })}</Button>
                 {enabledProvider && providerIsLlm ? (
-                  <Button type="button" size="sm" onClick={() => void checkProvider(enabledProvider.id)}>
-                    Check again
-                  </Button>
+                  <Button type="button" size="sm" onClick={() => void checkProvider(enabledProvider.id)}>{t("{{value1}} {{value2}}", { value1: t("Check again"), value2: " " })}</Button>
                 ) : null}
               </div>
             </div>
           ) : null}
 
           <div className="onboarding-controls">
-            <Field label="Diagram depth" hint={depthHint}>
+            <Field label={t("Diagram depth")} hint={depthHint}>
               <Select
                 value={levels}
                 onValueChange={(value) => setLevels(value as CodebaseOnboardingLevel)}
@@ -298,7 +296,7 @@ export function CodebaseOnboardingWizard() {
                 disabled={mappingInProgress}
               />
             </Field>
-            <Field label="Node detail" hint={detailHint}>
+            <Field label={t("Node detail")} hint={detailHint}>
               <Select
                 value={detail}
                 onValueChange={(value) => setDetail(value as CodebaseOnboardingDetail)}
@@ -306,7 +304,7 @@ export function CodebaseOnboardingWizard() {
                 disabled={mappingInProgress}
               />
             </Field>
-            <Field label="Review effort" hint={reviewEffortHint}>
+            <Field label={t("Review effort")} hint={reviewEffortHint}>
               <Select
                 value={reviewEffort}
                 onValueChange={(value) => setReviewEffort(value as CodebaseOnboardingReviewEffort)}
@@ -314,7 +312,7 @@ export function CodebaseOnboardingWizard() {
                 disabled={mappingInProgress}
               />
             </Field>
-            <Field label="Smallest unit" hint={granularityHint}>
+            <Field label={t("Smallest unit")} hint={granularityHint}>
               <Select
                 value={granularity}
                 onValueChange={(value) => setGranularity(value as CodebaseOnboardingGranularity)}
@@ -335,21 +333,18 @@ export function CodebaseOnboardingWizard() {
               )}
               {mapping.error ? (
                 <div className="onboarding-progress-copy">
-                  <strong>Import failed</strong>
+                  <strong>{t("Import failed")}</strong>
                   <span>{mapping.error}</span>
-                  {elapsedLabel ? <span className="onboarding-progress-elapsed">Elapsed {elapsedLabel}</span> : null}
+                  {elapsedLabel ? <span className="onboarding-progress-elapsed">{t("Elapsed {{elapsedLabel}}", { elapsedLabel: elapsedLabel })}</span> : null}
                 </div>
               ) : (
                 <div className="onboarding-progress-copy">
-                  <strong>
-                    {mapping.step && mapping.totalSteps ? `Step ${mapping.step}/${mapping.totalSteps}: ` : null}
-                    {mapping.status}
-                  </strong>
+                  <strong>{t("{{null}} {{status}}", { null: mapping.step && mapping.totalSteps ? `Step ${mapping.step}/${mapping.totalSteps}: ` : null, status: mapping.status })}</strong>
                   {mapping.detail ? <span>{mapping.detail}</span> : null}
                   {mapping.itemsDone !== undefined && mapping.itemsTotal !== undefined && !mapping.detail ? (
-                    <span>{mapping.itemsDone.toLocaleString()} / {mapping.itemsTotal.toLocaleString()} files</span>
+                    <span>{t("{{value1}} / {{value2}} files", { value1: formatNumber(mapping.itemsDone), value2: formatNumber(mapping.itemsTotal) })}</span>
                   ) : null}
-                  {elapsedLabel ? <span className="onboarding-progress-elapsed" aria-live="off">Elapsed {elapsedLabel}</span> : null}
+                  {elapsedLabel ? <span className="onboarding-progress-elapsed" aria-live="off">{t("Elapsed {{elapsedLabel}}", { elapsedLabel: elapsedLabel })}</span> : null}
                 </div>
               )}
             </div>
@@ -357,31 +352,23 @@ export function CodebaseOnboardingWizard() {
 
           <div className="onboarding-warning">
             <AlertTriangle size={17} />
-            <span>
-              This initial import is a one-time operation and can take time while ArchiCode analyzes and reviews the
-              codebase. Skipping is allowed, but the graph will remain empty until you generate a map or add nodes
-              manually.
-            </span>
+            <span>{t("{{value1}} {{value2}}", { value1: t("This initial import is a one-time operation and can take time while ArchiCode analyzes and reviews the codebase. Skipping is allowed, but the graph will remain empty until you generate a map or add nodes manually."), value2: " " })}</span>
           </div>
           </>}
 
           <div className="dialog-actions">
             {completedSummary ? (
-              <Button type="button" variant="primary" onClick={dismissCodebaseOnboarding}>
-                Explore graph
-              </Button>
+              <Button type="button" variant="primary" onClick={dismissCodebaseOnboarding}>{t("{{value1}} {{value2}}", { value1: t("Explore graph"), value2: " " })}</Button>
             ) : <>{mappingInProgress ? (
-              <Button type="button" variant="secondary" onClick={() => void cancelCodebaseOnboardingRun()}>
-                Cancel import
-              </Button>
+              <Button type="button" variant="secondary" onClick={() => void cancelCodebaseOnboardingRun()}>{t("{{value1}} {{value2}}", { value1: t("Cancel import"), value2: " " })}</Button>
             ) : (
               <Button type="button" variant="secondary" onClick={dismissCodebaseOnboarding}>
-                {mapping?.error ? "Close" : "Skip for now"}
+                {mapping?.error ? t("Close") : t("Skip for now")}
               </Button>
             )}
             <Button type="button" variant="primary" disabled={!providerReady || mappingInProgress} onClick={() => void startCodebaseOnboardingRun({ levels, detail, reviewEffort, granularity })}>
               <Sparkles size={15} />
-              <span>{mapping?.error ? "Try again" : mappingInProgress ? "Mapping codebase" : "Generate map with AI"}</span>
+              <span>{mapping?.error ? t("Try again") : mappingInProgress ? t("Mapping codebase") : t("Generate map with AI")}</span>
             </Button>
             </>}
           </div>

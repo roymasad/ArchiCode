@@ -1,3 +1,4 @@
+import { t } from "@renderer/i18n";
 import {
   AlertTriangle,
   BrainCircuit,
@@ -85,37 +86,37 @@ export const nodeSizeBounds = {
 };
 export const edgeWidthBounds = { min: 1, max: 8 };
 export const edgeLineStyleOptions: Array<{ value: NonNullable<FlowEdge["lineStyle"]>; label: string }> = [
-  { value: "solid", label: "Solid" },
-  { value: "dashed", label: "Dashed" },
-  { value: "dotted", label: "Dotted" }
+  { value: "solid", label: t("Solid") },
+  { value: "dashed", label: t("Dashed") },
+  { value: "dotted", label: t("Dotted") }
 ];
 export const nodeShapeOptions: Array<{ value: NonNullable<ArchicodeNode["visual"]["shape"]>; label: string }> = [
-  { value: "rounded", label: "Rounded" },
-  { value: "rectangle", label: "Rectangle" },
-  { value: "capsule", label: "Capsule" },
-  { value: "document", label: "Folded corner" },
-  { value: "database", label: "Stacked" },
-  { value: "note", label: "Cut corner" },
-  { value: "ellipse", label: "Ellipse" },
-  { value: "diamond", label: "Diamond" },
-  { value: "hexagon", label: "Hexagon" },
-  { value: "parallelogram", label: "Parallelogram" },
-  { value: "cloud", label: "Cloud" },
-  { value: "actor", label: "Actor" }
+  { value: "rounded", label: t("Rounded") },
+  { value: "rectangle", label: t("Rectangle") },
+  { value: "capsule", label: t("Capsule") },
+  { value: "document", label: t("Folded corner") },
+  { value: "database", label: t("Stacked") },
+  { value: "note", label: t("Cut corner") },
+  { value: "ellipse", label: t("Ellipse") },
+  { value: "diamond", label: t("Diamond") },
+  { value: "hexagon", label: t("Hexagon") },
+  { value: "parallelogram", label: t("Parallelogram") },
+  { value: "cloud", label: t("Cloud") },
+  { value: "actor", label: t("Actor") }
 ];
 
 export function GroupColorSwatches({ label, value, onChange }: { label: string; value: string; onChange: (color: string) => void }) {
   return (
     <div className="node-color-palette node-group-color-palette">
       <span>{label}</span>
-      <div className="node-color-swatches" aria-label={`${label} presets`}>
+      <div className="node-color-swatches" aria-label={t("{{label}} presets", { label: label })}>
         {nodeColorSwatches.map((color) => (
           <button
             key={color}
             type="button"
             className={value === color ? "is-active" : ""}
             style={{ backgroundColor: color }}
-            aria-label={`Use ${color} group accent`}
+            aria-label={t("Use {{color}} group accent", { color: color })}
             onClick={() => onChange(color)}
           />
         ))}
@@ -141,7 +142,7 @@ export function edgeColorOptions(theme: "light" | "dark") {
     ? ["#7bc6d5", "#8bd39e", "#f0c66b", "#f08a7a", "#b7a7ff", "#d7dee3", "#58a6ff", "#ffb067", "#f28fc2"]
     : ["#287282", "#2e7445", "#9a680d", "#b84032", "#7258d8", "#667784", "#1f69d2", "#bd6f14", "#b24486"];
   return [
-    { id: "default", label: "Default", value: null, className: "is-default" },
+    { id: "default", label: t("Default"), value: null, className: "is-default" },
     ...palette.map((color) => ({ id: color, label: color, value: color, className: undefined }))
   ] as Array<{ id: string; label: string; value: string | null; className?: string }>;
 }
@@ -149,14 +150,14 @@ export function edgeColorOptions(theme: "light" | "dark") {
 export type NoteFilter = "all" | "pinned" | "open" | "resolved" | "bugs" | "agent-questions" | "my-notes" | "system-notes";
 
 export const noteFilterOptions: Array<{ value: NoteFilter; label: string }> = [
-  { value: "all", label: "Relevant notes" },
-  { value: "pinned", label: "Pinned" },
-  { value: "open", label: "Open" },
-  { value: "resolved", label: "Resolved" },
-  { value: "bugs", label: "Bugs" },
-  { value: "agent-questions", label: "Agent questions" },
-  { value: "my-notes", label: "My notes" },
-  { value: "system-notes", label: "System notes" }
+  { value: "all", label: t("Relevant notes") },
+  { value: "pinned", label: t("Pinned") },
+  { value: "open", label: t("Open") },
+  { value: "resolved", label: t("Resolved") },
+  { value: "bugs", label: t("Bugs") },
+  { value: "agent-questions", label: t("Agent questions") },
+  { value: "my-notes", label: t("My notes") },
+  { value: "system-notes", label: t("System notes") }
 ];
 export const utilityTabValues = ["advanced"];
 export type CustomNodeType = ProjectSettings["customNodeTypes"][number];
@@ -164,13 +165,13 @@ export type CustomNodeProperty = ProjectSettings["customNodeProperties"][number]
 export type CustomNodePropertyType = CustomNodeProperty["type"];
 export type NodeRule = NonNullable<ProjectSettings["nodeRules"]>[number];
 export const customPropertyTypeOptions: Array<{ value: CustomNodePropertyType; label: string }> = [
-  { value: "text", label: "Text" },
-  { value: "long-text", label: "Long text" },
-  { value: "number", label: "Number" },
-  { value: "checkbox", label: "Checkbox" },
-  { value: "date", label: "Date" },
-  { value: "color", label: "Color" },
-  { value: "url", label: "URL" }
+  { value: "text", label: t("Text") },
+  { value: "long-text", label: t("Long text") },
+  { value: "number", label: t("Number") },
+  { value: "checkbox", label: t("Checkbox") },
+  { value: "date", label: t("Date") },
+  { value: "color", label: t("Color") },
+  { value: "url", label: t("URL") }
 ];
 export const customPropertyTypeLabels = Object.fromEntries(customPropertyTypeOptions.map((option) => [option.value, option.label])) as Record<CustomNodePropertyType, string>;
 export const fallbackCustomColor = "#7bc6d5";
@@ -185,13 +186,13 @@ export const customKeysFieldHint = "Custom keys let you add reusable project-spe
 export const groupFieldHint = "Groups are lightweight visual clusters inside the current flow. Use them to organize related nodes without changing ownership, stage, or graph behavior.";
 export const stageFieldHint = (
   <div style={{ display: "grid", gap: 6 }}>
-    <div>Stage tracks where this node sits in the workflow. Agents usually update it as work moves forward, unless you want to override the lifecycle manually.</div>
-    <div><strong>planned</strong>: work is identified but not yet in active implementation.</div>
-    <div><strong>plan-approved</strong>: the intended approach is approved and ready to be carried out.</div>
-    <div><strong>working</strong>: implementation or investigation is actively in progress.</div>
-    <div><strong>draft</strong>: a draft result exists and still needs review or iteration.</div>
-    <div><strong>draft-rejected</strong>: the last draft was rejected and needs revision.</div>
-    <div><strong>draft-approved-production</strong>: the draft is accepted as production truth and becomes locked until revised.</div>
+    <div>{t("Stage tracks where this node sits in the workflow. Agents usually update it as work moves forward, unless you want to override the lifecycle manually.")}</div>
+    <div><strong>{t("planned")}</strong>{t(": work is identified but not yet in active implementation.")}</div>
+    <div><strong>{t("plan-approved")}</strong>{t(": the intended approach is approved and ready to be carried out.")}</div>
+    <div><strong>{t("working")}</strong>{t(": implementation or investigation is actively in progress.")}</div>
+    <div><strong>{t("draft")}</strong>{t(": a draft result exists and still needs review or iteration.")}</div>
+    <div><strong>{t("draft-rejected")}</strong>{t(": the last draft was rejected and needs revision.")}</div>
+    <div><strong>{t("draft-approved-production")}</strong>{t(": the draft is accepted as production truth and becomes locked until revised.")}</div>
   </div>
 );
 
@@ -282,7 +283,7 @@ export function renderCustomPropertyWidget(
       <Switch
         checked={value === "true"}
         onCheckedChange={(checked) => onChange(checked ? "true" : "false")}
-        label={value === "true" ? "Yes" : "No"}
+        label={value === "true" ? t("Yes") : t("No")}
       />
     );
   }
@@ -293,12 +294,12 @@ export function renderCustomPropertyWidget(
         <input
           type="color"
           value={pickerValue}
-          aria-label={`${property.label} color`}
+          aria-label={t("{{label}} color", { label: property.label })}
           onChange={(event) => onChange(event.target.value)}
         />
         <TextInput
           value={value}
-          placeholder="#7bc6d5"
+          placeholder={t("#7bc6d5")}
           onChange={(event) => onChange(event.target.value)}
         />
       </div>

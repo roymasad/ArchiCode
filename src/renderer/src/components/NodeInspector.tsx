@@ -1,3 +1,5 @@
+import { formatDate, formatDateTime } from "@renderer/i18n";
+import { t } from "@renderer/i18n";
 import {
   AlertTriangle,
   BrainCircuit,
@@ -95,57 +97,57 @@ import { AutoSizeTextArea, type CustomNodePropertyType, GroupColorSwatches, type
 const ruleKindOptions: Array<{ value: NonNullable<NodeRule["kind"]>; label: string; hint: string; tooltip: string }> = [
   {
     value: "guidance",
-    label: "Guidance",
-    hint: "Agent instruction",
-    tooltip: "Reusable advice included in agent context. It guides implementation but is not checked against the code automatically."
+    label: t("Guidance"),
+    hint: t("Agent instruction"),
+    tooltip: t("Reusable advice included in agent context. It guides implementation but is not checked against the code automatically.")
   },
   {
     value: "decision",
-    label: "Decision",
-    hint: "Recorded choice",
-    tooltip: "A durable architecture or product choice included in agent context so later work preserves the reasoning. It is not an automatic code check."
+    label: t("Decision"),
+    hint: t("Recorded choice"),
+    tooltip: t("A durable architecture or product choice included in agent context so later work preserves the reasoning. It is not an automatic code check.")
   },
   {
     value: "policy",
-    label: "Live policy",
-    hint: "Deterministic check",
-    tooltip: "A machine-checkable rule evaluated locally from repository and graph facts. Choose the specific deterministic check below; no AI model is called during evaluation."
+    label: t("Live policy"),
+    hint: t("Deterministic check"),
+    tooltip: t("A machine-checkable rule evaluated locally from repository and graph facts. Choose the specific deterministic check below; no AI model is called during evaluation.")
   }
 ];
 
 const ruleSeverityOptions: Array<{ value: NonNullable<NodeRule["severity"]>; label: string; hint: string; tooltip: string }> = [
   {
     value: "info",
-    label: "Info",
-    hint: "Low urgency",
-    tooltip: "Records the violation as useful architecture information. It is visible but never blocks a run."
+    label: t("Info"),
+    hint: t("Low urgency"),
+    tooltip: t("Records the violation as useful architecture information. It is visible but never blocks a run.")
   },
   {
     value: "warning",
-    label: "Warning",
-    hint: "Needs review",
-    tooltip: "Highlights an architecture concern that should be reviewed. Warnings remain non-blocking, even when enforcement is set to Enforced."
+    label: t("Warning"),
+    hint: t("Needs review"),
+    tooltip: t("Highlights an architecture concern that should be reviewed. Warnings remain non-blocking, even when enforcement is set to Enforced.")
   },
   {
     value: "error",
-    label: "Error",
-    hint: "Can block",
-    tooltip: "Marks a serious architecture violation. When paired with Enforced, newly introduced violations fail source-changing runs."
+    label: t("Error"),
+    hint: t("Can block"),
+    tooltip: t("Marks a serious architecture violation. When paired with Enforced, newly introduced violations fail source-changing runs.")
   }
 ];
 
 const ruleEnforcementOptions: Array<{ value: NonNullable<NodeRule["enforcement"]>; label: string; hint: string; tooltip: string }> = [
   {
     value: "advisory",
-    label: "Advisory",
-    hint: "Report only",
-    tooltip: "Reports matching violations in the graph and issue panel, but never fails a run."
+    label: t("Advisory"),
+    hint: t("Report only"),
+    tooltip: t("Reports matching violations in the graph and issue panel, but never fails a run.")
   },
   {
     value: "enforced",
-    label: "Enforced",
-    hint: "Gate new errors",
-    tooltip: "With Error severity, fails a source-changing run only when it introduces a new violation. Existing baseline violations do not block the run."
+    label: t("Enforced"),
+    hint: t("Gate new errors"),
+    tooltip: t("With Error severity, fails a source-changing run only when it introduces a new violation. Existing baseline violations do not block the run.")
   }
 ];
 
@@ -155,7 +157,7 @@ function RuleControl({ label, help, children }: { label: string; help: string; c
       <span className="node-rule-control-label">
         <span>{label}</span>
         <Tooltip content={help}>
-          <span className="ui-field-hint-button" tabIndex={0} aria-label={`${label} help`}>
+          <span className="ui-field-hint-button" tabIndex={0} aria-label={t("{{label}} help", { label: label })}>
             <HelpCircle size={13} aria-hidden="true" />
           </span>
         </Tooltip>
@@ -196,33 +198,33 @@ const defaultPolicyConstraintDraft: PolicyConstraintDraft = {
 };
 
 const policyCheckOptions: Array<{ value: ArchitecturePolicyConstraintKind; label: string; hint: string; tooltip: string }> = [
-  { value: "forbidden-dependency", label: "Forbidden dependency", hint: "Block A → B", tooltip: "Reports any dependency from selected source files to forbidden target files." },
-  { value: "required-dependency", label: "Required dependency", hint: "Require A → B", tooltip: "Reports each selected source file that does not depend on at least one required target." },
-  { value: "allowed-dependency", label: "Allowed dependencies only", hint: "Module boundary", tooltip: "Reports dependencies from selected source files to anything outside the allowed target areas. This can enforce layer direction and public module boundaries." },
-  { value: "no-cycles", label: "No dependency cycles", hint: "Acyclic area", tooltip: "Finds circular file dependencies within the selected repository area." },
-  { value: "forbidden-import", label: "Forbidden package or API", hint: "Block imports", tooltip: "Reports imports of selected packages, modules, or named imported APIs." },
-  { value: "file-convention", label: "File placement and naming", hint: "Repository convention", tooltip: "Checks selected files for allowed locations, a naming style, or a required suffix." },
-  { value: "required-companion-file", label: "Required test or documentation", hint: "Companion file", tooltip: "Requires each selected source file to have a matching test, documentation, or other companion file." },
-  { value: "required-node-metadata", label: "Required node metadata", hint: "Graph completeness", tooltip: "Requires graph nodes to contain acceptance criteria, checks, documentation, implementation scope, or other structured metadata." },
-  { value: "node-relationship", label: "Graph relationship", hint: "Required or forbidden edge", tooltip: "Requires or forbids incoming or outgoing relationships between selected graph nodes and optional node types." },
-  { value: "no-orphan-nodes", label: "No orphan graph nodes", hint: "Connected graph", tooltip: "Reports selected graph nodes that have no incoming or outgoing relationship." }
+  { value: "forbidden-dependency", label: t("Forbidden dependency"), hint: t("Block A → B"), tooltip: t("Reports any dependency from selected source files to forbidden target files.") },
+  { value: "required-dependency", label: t("Required dependency"), hint: t("Require A → B"), tooltip: t("Reports each selected source file that does not depend on at least one required target.") },
+  { value: "allowed-dependency", label: t("Allowed dependencies only"), hint: t("Module boundary"), tooltip: t("Reports dependencies from selected source files to anything outside the allowed target areas. This can enforce layer direction and public module boundaries.") },
+  { value: "no-cycles", label: t("No dependency cycles"), hint: t("Acyclic area"), tooltip: t("Finds circular file dependencies within the selected repository area.") },
+  { value: "forbidden-import", label: t("Forbidden package or API"), hint: t("Block imports"), tooltip: t("Reports imports of selected packages, modules, or named imported APIs.") },
+  { value: "file-convention", label: t("File placement and naming"), hint: t("Repository convention"), tooltip: t("Checks selected files for allowed locations, a naming style, or a required suffix.") },
+  { value: "required-companion-file", label: t("Required test or documentation"), hint: t("Companion file"), tooltip: t("Requires each selected source file to have a matching test, documentation, or other companion file.") },
+  { value: "required-node-metadata", label: t("Required node metadata"), hint: t("Graph completeness"), tooltip: t("Requires graph nodes to contain acceptance criteria, checks, documentation, implementation scope, or other structured metadata.") },
+  { value: "node-relationship", label: t("Graph relationship"), hint: t("Required or forbidden edge"), tooltip: t("Requires or forbids incoming or outgoing relationships between selected graph nodes and optional node types.") },
+  { value: "no-orphan-nodes", label: t("No orphan graph nodes"), hint: t("Connected graph"), tooltip: t("Reports selected graph nodes that have no incoming or outgoing relationship.") }
 ];
 
 const nodeScopeOptions: Array<{ value: ArchitecturePolicyNodeScope; label: string; hint: string }> = [
-  { value: "attached", label: "Attached nodes", hint: "Only nodes carrying this rule" },
-  { value: "subflow", label: "Attached subflows", hint: "Every node beside attached nodes" },
-  { value: "flow", label: "Attached flows", hint: "Every node in those flows" },
-  { value: "project", label: "Whole project", hint: "Every graph node" }
+  { value: "attached", label: t("Attached nodes"), hint: t("Only nodes carrying this rule") },
+  { value: "subflow", label: t("Attached subflows"), hint: t("Every node beside attached nodes") },
+  { value: "flow", label: t("Attached flows"), hint: t("Every node in those flows") },
+  { value: "project", label: t("Whole project"), hint: t("Every graph node") }
 ];
 
 const metadataFieldOptions: Array<{ value: ArchitecturePolicyMetadataField; label: string; hint: string }> = [
-  { value: "description", label: "Description", hint: "Non-empty node description" },
-  { value: "tech-stack", label: "Technology tag", hint: "At least one technology" },
-  { value: "acceptance-criteria", label: "Acceptance criteria", hint: "At least one criterion" },
-  { value: "acceptance-check", label: "Acceptance test/check", hint: "At least one check" },
-  { value: "passing-acceptance-check", label: "Passing acceptance check", hint: "At least one verified check" },
-  { value: "implementation-scope", label: "Implementation scope", hint: "At least one linked code claim" },
-  { value: "documentation", label: "Documentation", hint: "Linked documentation artifact" }
+  { value: "description", label: t("Description"), hint: t("Non-empty node description") },
+  { value: "tech-stack", label: t("Technology tag"), hint: t("At least one technology") },
+  { value: "acceptance-criteria", label: t("Acceptance criteria"), hint: t("At least one criterion") },
+  { value: "acceptance-check", label: t("Acceptance test/check"), hint: t("At least one check") },
+  { value: "passing-acceptance-check", label: t("Passing acceptance check"), hint: t("At least one verified check") },
+  { value: "implementation-scope", label: t("Implementation scope"), hint: t("At least one linked code claim") },
+  { value: "documentation", label: t("Documentation"), hint: t("Linked documentation artifact") }
 ];
 
 function parsePolicyList(value: string): string[] {
@@ -293,75 +295,75 @@ function PolicyConstraintEditor({ draft, onChange }: { draft: PolicyConstraintDr
   const dependencyKind = draft.kind === "forbidden-dependency" || draft.kind === "required-dependency" || draft.kind === "allowed-dependency";
   return (
     <>
-      <RuleControl label="Deterministic check" help="The exact local rule that will be evaluated continuously. Hover each option for its behavior and required inputs.">
-        <Select ariaLabel="Deterministic policy check" value={draft.kind} onValueChange={(value) => set("kind", value as ArchitecturePolicyConstraintKind)} options={policyCheckOptions} />
+      <RuleControl label={t("Deterministic check")} help={t("The exact local rule that will be evaluated continuously. Hover each option for its behavior and required inputs.")}>
+        <Select ariaLabel={t("Deterministic policy check")} value={draft.kind} onValueChange={(value) => set("kind", value as ArchitecturePolicyConstraintKind)} options={policyCheckOptions} />
       </RuleControl>
       {dependencyKind ? <>
-        <RuleControl label="Source files or patterns" help={pathHelp}>
-          <TextArea aria-label="Source files or patterns" value={draft.sourcePaths} rows={2} placeholder="src/renderer/**" onChange={(event) => set("sourcePaths", event.target.value)} />
+        <RuleControl label={t("Source files or patterns")} help={pathHelp}>
+          <TextArea aria-label={t("Source files or patterns")} value={draft.sourcePaths} rows={2} placeholder={t("src/renderer/**")} onChange={(event) => set("sourcePaths", event.target.value)} />
         </RuleControl>
-        <RuleControl label={draft.kind === "allowed-dependency" ? "Allowed dependencies or patterns" : draft.kind === "required-dependency" ? "Required dependencies or patterns" : "Forbidden dependencies or patterns"} help={pathHelp}>
-          <TextArea aria-label="Target files or patterns" value={draft.targetPaths} rows={2} placeholder="src/shared/**" onChange={(event) => set("targetPaths", event.target.value)} />
+        <RuleControl label={draft.kind === "allowed-dependency" ? t("Allowed dependencies or patterns") : draft.kind === "required-dependency" ? t("Required dependencies or patterns") : t("Forbidden dependencies or patterns")} help={pathHelp}>
+          <TextArea aria-label={t("Target files or patterns")} value={draft.targetPaths} rows={2} placeholder={t("src/shared/**")} onChange={(event) => set("targetPaths", event.target.value)} />
         </RuleControl>
       </> : null}
-      {draft.kind === "no-cycles" ? <RuleControl label="Files included in the cycle check" help={pathHelp}>
-        <TextArea aria-label="Files included in the cycle check" value={draft.sourcePaths} rows={2} placeholder="src/**" onChange={(event) => set("sourcePaths", event.target.value)} />
+      {draft.kind === "no-cycles" ? <RuleControl label={t("Files included in the cycle check")} help={pathHelp}>
+        <TextArea aria-label={t("Files included in the cycle check")} value={draft.sourcePaths} rows={2} placeholder={t("src/**")} onChange={(event) => set("sourcePaths", event.target.value)} />
       </RuleControl> : null}
       {draft.kind === "forbidden-import" ? <>
-        <RuleControl label="Source files or patterns" help={pathHelp}>
-          <TextArea aria-label="Source files or patterns" value={draft.sourcePaths} rows={2} placeholder="src/**" onChange={(event) => set("sourcePaths", event.target.value)} />
+        <RuleControl label={t("Source files or patterns")} help={pathHelp}>
+          <TextArea aria-label={t("Source files or patterns")} value={draft.sourcePaths} rows={2} placeholder={t("src/**")} onChange={(event) => set("sourcePaths", event.target.value)} />
         </RuleControl>
-        <RuleControl label="Forbidden packages or modules" help="Enter import names or patterns such as electron, node:fs, lodash/**, or @company/private-package.">
-          <TextArea aria-label="Forbidden packages or modules" value={draft.targetPaths} rows={2} placeholder="node:fs" onChange={(event) => set("targetPaths", event.target.value)} />
+        <RuleControl label={t("Forbidden packages or modules")} help={t("Enter import names or patterns such as electron, node:fs, lodash/**, or @company/private-package.")}>
+          <TextArea aria-label={t("Forbidden packages or modules")} value={draft.targetPaths} rows={2} placeholder={t("node:fs")} onChange={(event) => set("targetPaths", event.target.value)} />
         </RuleControl>
-        <RuleControl label="Forbidden imported APIs (optional)" help="Limit the rule to named imports such as readFile or exec. Leave empty to forbid the whole package or module.">
-          <TextArea aria-label="Forbidden imported APIs" value={draft.importedNames} rows={2} placeholder="readFile" onChange={(event) => set("importedNames", event.target.value)} />
+        <RuleControl label={t("Forbidden imported APIs (optional)")} help={t("Limit the rule to named imports such as readFile or exec. Leave empty to forbid the whole package or module.")}>
+          <TextArea aria-label={t("Forbidden imported APIs")} value={draft.importedNames} rows={2} placeholder={t("readFile")} onChange={(event) => set("importedNames", event.target.value)} />
         </RuleControl>
       </> : null}
       {draft.kind === "file-convention" ? <>
-        <RuleControl label="Files to check" help={pathHelp}>
-          <TextArea aria-label="Files to check" value={draft.sourcePaths} rows={2} placeholder="src/components/**/*.tsx" onChange={(event) => set("sourcePaths", event.target.value)} />
+        <RuleControl label={t("Files to check")} help={pathHelp}>
+          <TextArea aria-label={t("Files to check")} value={draft.sourcePaths} rows={2} placeholder={t("src/components/**/*.tsx")} onChange={(event) => set("sourcePaths", event.target.value)} />
         </RuleControl>
-        <RuleControl label="Allowed locations (optional)" help={`${pathHelp} Leave empty when only checking names or suffixes.`}>
-          <TextArea aria-label="Allowed file locations" value={draft.targetPaths} rows={2} placeholder="src/components/**" onChange={(event) => set("targetPaths", event.target.value)} />
+        <RuleControl label={t("Allowed locations (optional)")} help={t("{{pathHelp}} Leave empty when only checking names or suffixes.", { pathHelp: pathHelp })}>
+          <TextArea aria-label={t("Allowed file locations")} value={draft.targetPaths} rows={2} placeholder={t("src/components/**")} onChange={(event) => set("targetPaths", event.target.value)} />
         </RuleControl>
         <div className="node-rule-policy-options">
-          <RuleControl label="File naming" help="Optionally require the file name, before its extension, to follow a common naming style.">
-            <Select ariaLabel="File naming style" value={draft.fileNameStyle} onValueChange={(value) => set("fileNameStyle", value as PolicyConstraintDraft["fileNameStyle"])} options={[{ value: "none", label: "No naming check" }, { value: "kebab-case", label: "kebab-case" }, { value: "camelCase", label: "camelCase" }, { value: "PascalCase", label: "PascalCase" }, { value: "snake_case", label: "snake_case" }]} />
+          <RuleControl label={t("File naming")} help={t("Optionally require the file name, before its extension, to follow a common naming style.")}>
+            <Select ariaLabel={t("File naming style")} value={draft.fileNameStyle} onValueChange={(value) => set("fileNameStyle", value as PolicyConstraintDraft["fileNameStyle"])} options={[{ value: "none", label: t("No naming check") }, { value: "kebab-case", label: t("kebab-case") }, { value: "camelCase", label: t("camelCase") }, { value: "PascalCase", label: t("PascalCase") }, { value: "snake_case", label: t("snake_case") }]} />
           </RuleControl>
-          <RuleControl label="Required suffix (optional)" help="Text that must appear at the end of the file name before its extension, such as .service or Controller.">
-            <TextInput aria-label="Required file suffix" value={draft.requiredSuffix} placeholder=".service" onChange={(event) => set("requiredSuffix", event.target.value)} />
+          <RuleControl label={t("Required suffix (optional)")} help={t("Text that must appear at the end of the file name before its extension, such as.service or Controller.")}>
+            <TextInput aria-label={t("Required file suffix")} value={draft.requiredSuffix} placeholder={t(".service")} onChange={(event) => set("requiredSuffix", event.target.value)} />
           </RuleControl>
         </div>
       </> : null}
       {draft.kind === "required-companion-file" ? <>
-        <RuleControl label="Source files or patterns" help={pathHelp}>
-          <TextArea aria-label="Source files requiring companions" value={draft.sourcePaths} rows={2} placeholder="src/**/*.ts" onChange={(event) => set("sourcePaths", event.target.value)} />
+        <RuleControl label={t("Source files or patterns")} help={pathHelp}>
+          <TextArea aria-label={t("Source files requiring companions")} value={draft.sourcePaths} rows={2} placeholder={t("src/**/*.ts")} onChange={(event) => set("sourcePaths", event.target.value)} />
         </RuleControl>
-        <RuleControl label="Required test, documentation, or companion patterns" help={`${pathHelp} For tests, examples include **/*.test.ts and **/*.spec.ts.`}>
-          <TextArea aria-label="Required companion file patterns" value={draft.targetPaths} rows={2} placeholder="tests/**/*.test.ts" onChange={(event) => set("targetPaths", event.target.value)} />
+        <RuleControl label={t("Required test, documentation, or companion patterns")} help={t("{{pathHelp}} For tests, examples include **/*.test.ts and **/*.spec.ts.", { pathHelp: pathHelp })}>
+          <TextArea aria-label={t("Required companion file patterns")} value={draft.targetPaths} rows={2} placeholder={t("tests/**/*.test.ts")} onChange={(event) => set("targetPaths", event.target.value)} />
         </RuleControl>
-        <RuleControl label="Matching" help="Same file name requires each source and companion to share a base name. Any matching file only checks that at least one companion exists.">
-          <Select ariaLabel="Companion file matching" value={draft.companionMatch} onValueChange={(value) => set("companionMatch", value as PolicyConstraintDraft["companionMatch"])} options={[{ value: "same-stem", label: "Same file name", hint: "Recommended for tests" }, { value: "any", label: "Any matching file", hint: "Useful for shared docs" }]} />
+        <RuleControl label={t("Matching")} help={t("Same file name requires each source and companion to share a base name. Any matching file only checks that at least one companion exists.")}>
+          <Select ariaLabel={t("Companion file matching")} value={draft.companionMatch} onValueChange={(value) => set("companionMatch", value as PolicyConstraintDraft["companionMatch"])} options={[{ value: "same-stem", label: t("Same file name"), hint: t("Recommended for tests") }, { value: "any", label: t("Any matching file"), hint: t("Useful for shared docs") }]} />
         </RuleControl>
       </> : null}
-      {draft.kind === "required-node-metadata" || draft.kind === "node-relationship" || draft.kind === "no-orphan-nodes" ? <RuleControl label="Graph scope" help="Choose which graph nodes this rule evaluates, starting from the nodes where the rule is attached.">
-        <Select ariaLabel="Graph rule scope" value={draft.nodeScope} onValueChange={(value) => set("nodeScope", value as ArchitecturePolicyNodeScope)} options={nodeScopeOptions} />
+      {draft.kind === "required-node-metadata" || draft.kind === "node-relationship" || draft.kind === "no-orphan-nodes" ? <RuleControl label={t("Graph scope")} help={t("Choose which graph nodes this rule evaluates, starting from the nodes where the rule is attached.")}>
+        <Select ariaLabel={t("Graph rule scope")} value={draft.nodeScope} onValueChange={(value) => set("nodeScope", value as ArchitecturePolicyNodeScope)} options={nodeScopeOptions} />
       </RuleControl> : null}
-      {draft.kind === "required-node-metadata" ? <RuleControl label="Required metadata" help="The structured node information that must be present for every node in scope.">
-        <Select ariaLabel="Required node metadata" value={draft.metadataField} onValueChange={(value) => set("metadataField", value as ArchitecturePolicyMetadataField)} options={metadataFieldOptions} />
+      {draft.kind === "required-node-metadata" ? <RuleControl label={t("Required metadata")} help={t("The structured node information that must be present for every node in scope.")}>
+        <Select ariaLabel={t("Required node metadata")} value={draft.metadataField} onValueChange={(value) => set("metadataField", value as ArchitecturePolicyMetadataField)} options={metadataFieldOptions} />
       </RuleControl> : null}
       {draft.kind === "node-relationship" ? <>
         <div className="node-rule-policy-options">
-          <RuleControl label="Behavior" help="Require a matching relationship or report every matching relationship as forbidden.">
-            <Select ariaLabel="Graph relationship behavior" value={draft.relationshipMode} onValueChange={(value) => set("relationshipMode", value as PolicyConstraintDraft["relationshipMode"])} options={[{ value: "required", label: "Required" }, { value: "forbidden", label: "Forbidden" }]} />
+          <RuleControl label={t("Behavior")} help={t("Require a matching relationship or report every matching relationship as forbidden.")}>
+            <Select ariaLabel={t("Graph relationship behavior")} value={draft.relationshipMode} onValueChange={(value) => set("relationshipMode", value as PolicyConstraintDraft["relationshipMode"])} options={[{ value: "required", label: t("Required") }, { value: "forbidden", label: t("Forbidden") }]} />
           </RuleControl>
-          <RuleControl label="Direction" help="Check incoming relationships, outgoing relationships, or either direction.">
-            <Select ariaLabel="Graph relationship direction" value={draft.relationshipDirection} onValueChange={(value) => set("relationshipDirection", value as PolicyConstraintDraft["relationshipDirection"])} options={[{ value: "either", label: "Either" }, { value: "outgoing", label: "Outgoing" }, { value: "incoming", label: "Incoming" }]} />
+          <RuleControl label={t("Direction")} help={t("Check incoming relationships, outgoing relationships, or either direction.")}>
+            <Select ariaLabel={t("Graph relationship direction")} value={draft.relationshipDirection} onValueChange={(value) => set("relationshipDirection", value as PolicyConstraintDraft["relationshipDirection"])} options={[{ value: "either", label: t("Either") }, { value: "outgoing", label: t("Outgoing") }, { value: "incoming", label: t("Incoming") }]} />
           </RuleControl>
         </div>
-        <RuleControl label="Other node types (optional)" help="Limit matching relationships to node types such as service, database, feature, or task. Leave empty to match any node type.">
-          <TextArea aria-label="Graph relationship node types" value={draft.targetNodeTypes} rows={2} placeholder="service" onChange={(event) => set("targetNodeTypes", event.target.value)} />
+        <RuleControl label={t("Other node types (optional)")} help={t("Limit matching relationships to node types such as service, database, feature, or task. Leave empty to match any node type.")}>
+          <TextArea aria-label={t("Graph relationship node types")} value={draft.targetNodeTypes} rows={2} placeholder={t("service")} onChange={(event) => set("targetNodeTypes", event.target.value)} />
         </RuleControl>
       </> : null}
     </>
@@ -577,7 +579,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
       return;
     }
     if (gitStatus && !gitStatus.isRepo) {
-      setNodeHistory({ available: false, flowId: flow.id, nodeId: node.id, changes: [], message: "Git attribution is unavailable until this graph is committed." });
+      setNodeHistory({ available: false, flowId: flow.id, nodeId: node.id, changes: [], message: t("Git attribution is unavailable until this graph is committed.") });
       setNodeHistoryBusy(false);
       return;
     }
@@ -976,7 +978,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
     if (!flow) return [];
     return flow.subflows.map((subflow) => ({
       subflow,
-      label: `${"  ".repeat(subflowDepth(flow, subflow.id))}${subflow.name}`
+      label: t("{{value1}}{{name}}", { value1: "  ".repeat(subflowDepth(flow, subflow.id)), name: subflow.name })
     }));
   }, [flow]);
   const normalizedDetailFlowQuery = detailFlowPickerQuery.trim().toLocaleLowerCase();
@@ -986,7 +988,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
   }), [detailFlowOptions, normalizedDetailFlowQuery]);
   const flowGroups = flow?.groups ?? [];
   const groupOptions = useMemo(() => [
-    { value: noGroupValue, label: "No group" },
+    { value: noGroupValue, label: t("No group") },
     ...flowGroups.map((group) => ({ value: group.id, label: group.name }))
   ], [flowGroups]);
   const customNodeTypes = bundle?.project.settings.customNodeTypes ?? [];
@@ -1315,15 +1317,13 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
 
   if (!bundle) {
     return (
-      <aside className="inspector" aria-label="Project inspector">
+      <aside className="inspector" aria-label={t("Project inspector")}>
         <PanelHeader
           eyebrow="project"
-          title="Inspector"
+          title={t("Inspector")}
           action={panelAction}
         />
-        <EmptyState icon={<HelpCircle size={24} />} title="No project open">
-          Open a folder or create a project to inspect nodes, runs, notes, and artifacts.
-        </EmptyState>
+        <EmptyState icon={<HelpCircle size={24} />} title={t("No project open")}>{t("{{value1}} {{value2}}", { value1: t("Open a folder or create a project to inspect nodes, runs, notes, and artifacts."), value2: " " })}</EmptyState>
       </aside>
     );
   }
@@ -1338,10 +1338,10 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
     const currentEdgeAnimated = edge.animated ?? legacyAnimated;
     const edgeStrokeOptions = edgeColorOptions(theme);
     return (
-      <aside className="inspector" aria-label="Edge inspector">
+      <aside className="inspector" aria-label={t("Edge inspector")}>
         <PanelHeader
           eyebrow="edge"
-          title={`${source?.title ?? edge.source} -> ${target?.title ?? edge.target}`}
+          title={t("{{source}}->{{target}}", { source: source?.title ?? edge.source, target: target?.title ?? edge.target })}
           action={
             <div className="panel-header-actions">
               <GitBranch size={20} />
@@ -1371,10 +1371,10 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
             )}
           >
             <CircleHelp size={15} />
-            <span>Explain this</span>
+            <span>{t("Explain this")}</span>
           </Button>
         </div>
-        <Field label="Label">
+        <Field label={t("Label")}>
           <TextInput
             value={edge.label ?? ""}
             onFocus={(event) => {
@@ -1406,10 +1406,10 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
               onClick={() => setEdgeLabelHistoryExpanded((current) => !current)}
             >
               <ChevronRight size={15} />
-              <span>Recent labels</span>
+              <span>{t("Recent labels")}</span>
             </button>
             {edgeLabelHistoryExpanded ? (
-              <div className="collapsible-field-body edge-label-history" aria-label="Edge label history">
+              <div className="collapsible-field-body edge-label-history" aria-label={t("Edge label history")}>
                 {edgeLabelHistory.map((label) => {
                   const isActive = label === (edge.label ?? "").trim();
                   return (
@@ -1432,16 +1432,16 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
           </section>
         ) : null}
         <div className="meta-grid">
-          <small>Source: {source?.title ?? edge.source}</small>
-          <small>Target: {target?.title ?? edge.target}</small>
+          <small>{t("Source: {{source}}", { source: source?.title ?? edge.source })}</small>
+          <small>{t("Target: {{target}}", { target: target?.title ?? edge.target })}</small>
         </div>
         {edge.evidence ? (
-          <section className="edge-evidence" aria-label="Relationship evidence">
+          <section className="edge-evidence" aria-label={t("Relationship evidence")}>
             <div className="edge-evidence-heading">
-              <span>Relationship evidence</span>
+              <span>{t("Relationship evidence")}</span>
               <div>
                 <Badge>{edge.evidence.origin}</Badge>
-                <Badge>{Math.round(edge.evidence.confidence * 100)}%</Badge>
+                <Badge>{t("{{value1}}%", { value1: Math.round(edge.evidence.confidence * 100) })}</Badge>
                 <Badge>{edge.evidence.verification}</Badge>
                 <Badge>{edge.evidence.freshness}</Badge>
               </div>
@@ -1459,18 +1459,18 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                     onClick={() => void selectProjectFile(location.path, location.line ? { lineNumber: location.line } : undefined)}
                   >
                     <FileCode2 size={14} />
-                    <span>{location.path}{location.line ? `:${location.line}` : ""}</span>
+                    <span>{t("{{path}} {{value2}}", { path: location.path, value2: location.line ? `:${location.line}` : "" })}</span>
                   </button>
                 ))}
               </div>
-            ) : <small>No source location was retained for this aggregated relationship.</small>}
-            {edge.evidence.checkedAt ? <small>Checked {new Date(edge.evidence.checkedAt).toLocaleString()}</small> : null}
+            ) : <small>{t("No source location was retained for this aggregated relationship.")}</small>}
+            {edge.evidence.checkedAt ? <small>{t("Checked {{value1}}", { value1: formatDateTime(new Date(edge.evidence.checkedAt)) })}</small> : null}
           </section>
         ) : null}
-        <section className="edge-visual-editor" aria-label="Edge visual settings">
+        <section className="edge-visual-editor" aria-label={t("Edge visual settings")}>
           <div className="edge-visual-group">
-            <span>Color</span>
-            <div className="node-color-swatches edge-color-swatches" aria-label="Edge color presets">
+            <span>{t("Color")}</span>
+            <div className="node-color-swatches edge-color-swatches" aria-label={t("Edge color presets")}>
               {edgeStrokeOptions.map((option) => {
                 const isActive = option.value === null ? currentEdgeColor === null : currentEdgeColor === option.value;
                 return (
@@ -1479,8 +1479,8 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                     type="button"
                     className={[option.className, isActive ? "is-active" : ""].filter(Boolean).join(" ")}
                     style={option.value ? { backgroundColor: option.value } : undefined}
-                    aria-label={option.value ? `Use ${option.label} edge color` : "Use default edge color"}
-                    title={option.value ?? "Default"}
+                    aria-label={option.value ? `Use ${option.label} edge color` : t("Use default edge color")}
+                    title={option.value ?? t("Default")}
                     onClick={() => void updateSelectedEdgePatch({ color: option.value ?? undefined })}
                   />
                 );
@@ -1488,8 +1488,8 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
             </div>
           </div>
           <div className="edge-visual-group">
-            <span>Width</span>
-            <div className="edge-width-presets" aria-label="Edge width presets">
+            <span>{t("Width")}</span>
+            <div className="edge-width-presets" aria-label={t("Edge width presets")}>
               {[defaultEdgeWidth, 3, 4, 6].map((width, index) => {
                 const isDefault = index === 0;
                 const isActive = isDefault ? edge.width === undefined : edge.width === width;
@@ -1500,16 +1500,16 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                     className={isActive ? "is-active" : ""}
                     onClick={() => void updateSelectedEdgePatch({ width: isDefault ? undefined : width })}
                   >
-                    {isDefault ? "Default" : width}
+                    {isDefault ? t("Default") : width}
                   </button>
                 );
               })}
             </div>
-            <small>Current: {currentEdgeWidth}px</small>
+            <small>{t("Current: {{currentEdgeWidth}} px", { currentEdgeWidth: currentEdgeWidth })}</small>
           </div>
           <div className="edge-visual-group">
-            <span>Style</span>
-            <div className="edge-style-grid" aria-label="Edge line style">
+            <span>{t("Style")}</span>
+            <div className="edge-style-grid" aria-label={t("Edge line style")}>
               {edgeLineStyleOptions.map((option) => (
                 <button
                   key={option.value}
@@ -1525,18 +1525,18 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
             <Switch
               checked={currentEdgeAnimated}
               onCheckedChange={(checked) => void updateSelectedEdgePatch({ animated: checked })}
-              label="Animate"
+              label={t("Animate")}
             />
             <Switch
               checked={edge.bidirectional ?? false}
               onCheckedChange={(checked) => void updateSelectedEdgePatch({ bidirectional: checked ? true : undefined })}
-              label="Bidirectional (arrowheads on both ends)"
+              label={t("Bidirectional (arrowheads on both ends)")}
             />
           </div>
         </section>
         <Button type="button" variant="danger" onClick={deleteSelectedEdge}>
           <Trash2 size={16} />
-          <span>Delete edge</span>
+          <span>{t("Delete edge")}</span>
         </Button>
       </aside>
     );
@@ -1605,10 +1605,10 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
       : null;
 
     return (
-      <aside className="inspector" aria-label="Selected nodes inspector">
+      <aside className="inspector" aria-label={t("Selected nodes inspector")}>
         <PanelHeader
           eyebrow="nodes"
-          title={`${selectedNodes.length} nodes selected`}
+          title={t("{{length}} nodes selected", { length: selectedNodes.length })}
           action={panelAction}
         />
 
@@ -1619,13 +1619,11 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
           </div>
         ) : null}
 
-        <div className="multi-selection-note">
-          Multiple nodes are selected. Only visual settings are available, and changes apply to all selected nodes.
-        </div>
+        <div className="multi-selection-note">{t("{{value1}} {{value2}}", { value1: t("Multiple nodes are selected. Only visual settings are available, and changes apply to all selected nodes."), value2: " " })}</div>
 
         <ScrollArea className="inspector-scroll">
           <div className="node-group-editor">
-            <Field label="Group">
+            <Field label={t("Group")}>
               <Select
                 value={selectedGroupId}
                 onValueChange={(value) => {
@@ -1633,7 +1631,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                   assignNodesToGroup(selectedNodes, value === noGroupValue ? null : value);
                 }}
                 options={[
-                  ...(selectedGroupId === mixedGroupValue ? [{ value: mixedGroupValue, label: "Mixed", disabled: true }] : []),
+                  ...(selectedGroupId === mixedGroupValue ? [{ value: mixedGroupValue, label: t("Mixed"), disabled: true }] : []),
                   ...groupOptions
                 ]}
               />
@@ -1641,40 +1639,35 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
             <div className="node-group-create-row">
               <TextInput
                 value={groupNameDraft}
-                placeholder={`Group ${(flow.groups ?? []).length + 1}`}
+                placeholder={t("Group {{value1}}", { value1: (flow.groups ?? []).length + 1 })}
                 onChange={(event) => setGroupNameDraft(event.target.value)}
               />
-              <Button type="button" size="sm" onClick={() => createGroupForNodes(selectedNodes)}>
-                Create group
-              </Button>
+              <Button type="button" size="sm" onClick={() => createGroupForNodes(selectedNodes)}>{t("{{value1}} {{value2}}", { value1: t("Create group"), value2: " " })}</Button>
             </div>
-            <GroupColorSwatches label="New group accent" value={groupColorDraft} onChange={setGroupColorDraft} />
+            <GroupColorSwatches label={t("New group accent")} value={groupColorDraft} onChange={setGroupColorDraft} />
             {selectedGroup ? (
               <>
                 <GroupColorSwatches
-                  label="Selected group accent"
+                  label={t("Selected group accent")}
                   value={selectedGroup.color ?? defaultAccentColor}
                   onChange={(color) => updateGroupColor(selectedGroup.id, color)}
                 />
                 <div className="node-group-actions">
-                  <Button type="button" size="sm" onClick={() => assignNodesToGroup(selectedNodes, null)}>
-                    Remove from group
-                  </Button>
+                  <Button type="button" size="sm" onClick={() => assignNodesToGroup(selectedNodes, null)}>{t("{{value1}} {{value2}}", { value1: t("Remove from group"), value2: " " })}</Button>
                   <Button type="button" size="sm" variant="danger" onClick={() => ungroup(selectedGroup.id)}>
-                    Ungroup
-                  </Button>
+                    {t("Ungroup")}{" "}</Button>
                 </div>
               </>
             ) : null}
           </div>
           <div className="node-color-editor multi-node-visual-editor">
-            <div className="node-shape-grid" aria-label="Node shape">
+            <div className="node-shape-grid" aria-label={t("Node shape")}>
               {nodeShapeOptions.map((shape) => (
                 <button
                   key={shape.value}
                   type="button"
                   className={selectedShape === shape.value ? "is-active" : ""}
-                  aria-label={`Use ${shape.label} shape`}
+                  aria-label={t("Use {{label}} shape", { label: shape.label })}
                   title={shape.label}
                   onClick={() => updateSelectedNodeVisual({ shape: shape.value })}
                 >
@@ -1685,38 +1678,38 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
             </div>
             <div className="node-size-editor">
               <label>
-                <span>Width</span>
+                <span>{t("Width")}</span>
                 <TextInput
                   type="number"
                   min={nodeSizeBounds.width.min}
                   max={nodeSizeBounds.width.max}
                   step={8}
                   value={selectedWidth}
-                  placeholder="Mixed"
+                  placeholder={t("Mixed")}
                   onChange={(event) => updateSelectedNodeSize("width", event.target.valueAsNumber)}
                 />
               </label>
               <label>
-                <span>Height</span>
+                <span>{t("Height")}</span>
                 <TextInput
                   type="number"
                   min={nodeSizeBounds.height.min}
                   max={nodeSizeBounds.height.max}
                   step={8}
                   value={selectedHeight}
-                  placeholder="Mixed"
+                  placeholder={t("Mixed")}
                   onChange={(event) => updateSelectedNodeSize("height", event.target.valueAsNumber)}
                 />
               </label>
             </div>
             <div className="node-color-palette">
-              <span>Background</span>
-              <div className="node-color-swatches" aria-label="Background color presets">
+              <span>{t("Background")}</span>
+              <div className="node-color-swatches" aria-label={t("Background color presets")}>
                 <button
                   type="button"
                   className={selectedBackgroundColor === null ? "is-active is-default" : "is-default"}
-                  aria-label="Use default background"
-                  title="Default background"
+                  aria-label={t("Use default background")}
+                  title={t("Default background")}
                   onClick={clearSelectedNodeBackground}
                 />
                 {nodeColorSwatches.map((color) => (
@@ -1725,19 +1718,15 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                     type="button"
                     className={selectedBackgroundColor === color ? "is-active" : ""}
                     style={{ backgroundColor: color }}
-                    aria-label={`Use ${color} background`}
+                    aria-label={t("Use {{color}} background", { color: color })}
                     onClick={() => updateSelectedNodeVisual({ backgroundColor: color })}
                   />
                 ))}
               </div>
             </div>
             <div className="node-visual-actions">
-              <Button type="button" size="sm" onClick={resetSelectedNodeSize}>
-                Reset size
-              </Button>
-              <Button type="button" size="sm" onClick={clearSelectedNodeVisual}>
-                Reset visual
-              </Button>
+              <Button type="button" size="sm" onClick={resetSelectedNodeSize}>{t("{{value1}} {{value2}}", { value1: t("Reset size"), value2: " " })}</Button>
+              <Button type="button" size="sm" onClick={clearSelectedNodeVisual}>{t("{{value1}} {{value2}}", { value1: t("Reset visual"), value2: " " })}</Button>
             </div>
           </div>
         </ScrollArea>
@@ -1747,15 +1736,13 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
 
   if (!node || !flow) {
     return (
-      <aside className="inspector" aria-label="Node inspector">
+      <aside className="inspector" aria-label={t("Node inspector")}>
         <PanelHeader
           eyebrow="node"
-          title="Inspector"
+          title={t("Inspector")}
           action={panelAction}
         />
-        <EmptyState icon={<HelpCircle size={24} />} title="Select a node">
-          Inspect architecture, notes, flags, approvals, runs, and artifacts from the graph or node list.
-        </EmptyState>
+        <EmptyState icon={<HelpCircle size={24} />} title={t("Select a node")}>{t("{{value1}} {{value2}}", { value1: t("Inspect architecture, notes, flags, approvals, runs, and artifacts from the graph or node list."), value2: " " })}</EmptyState>
       </aside>
     );
   }
@@ -1763,7 +1750,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
   const readinessItems: ReadinessItem[] = [];
   if (nodePolicyViolationCount) {
     readinessItems.push({
-      label: `${nodePolicyViolationCount} policy violation${nodePolicyViolationCount === 1 ? "" : "s"}`,
+      label: t("{{nodePolicyViolationCount}} policy violation {{value2}}", { nodePolicyViolationCount: nodePolicyViolationCount, value2: nodePolicyViolationCount === 1 ? "" : "s" }),
       tone: "danger",
       tooltip: nodePolicyViolationTooltip(nodePolicyViolationCount)
     });
@@ -1780,17 +1767,17 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
     });
   }
   if (node.stage === "draft-rejected") {
-    readinessItems.push({ label: "rejected", tone: "danger", tooltip: "This node's draft was rejected and needs revision before it can move forward." });
+    readinessItems.push({ label: t("rejected"), tone: "danger", tooltip: t("This node's draft was rejected and needs revision before it can move forward.") });
   }
   if (node.flags.includes("modified-not-built")) {
-    readinessItems.push({ label: "not built", tone: "warning", tooltip: flagTooltips["modified-not-built"] });
+    readinessItems.push({ label: t("not built"), tone: "warning", tooltip: flagTooltips["modified-not-built"] });
   }
   if (lastRun?.status === "needs-permission") {
-    readinessItems.push({ label: "permission needed", tone: "warning", tooltip: "The last run is paused waiting for you to approve a command or permission request." });
+    readinessItems.push({ label: t("permission needed"), tone: "warning", tooltip: t("The last run is paused waiting for you to approve a command or permission request.") });
   } else if (lastRun?.status === "awaiting-plan-review") {
-    readinessItems.push({ label: "review plan", tone: "warning", tooltip: "The agent produced a plan for this node and is waiting for you to review it." });
+    readinessItems.push({ label: t("review plan"), tone: "warning", tooltip: t("The agent produced a plan for this node and is waiting for you to review it.") });
   } else if (lastRun?.status === "awaiting-code-review") {
-    readinessItems.push({ label: "review code", tone: "warning", tooltip: "The agent produced code changes for this node and is waiting for you to review them." });
+    readinessItems.push({ label: t("review code"), tone: "warning", tooltip: t("The agent produced code changes for this node and is waiting for you to review them.") });
   } else if ((lastRun?.status === "failed" || lastRun?.status === "cancelled") && !lastRun.errorDismissedAt) {
     const details = lastRun ? runFailureDetails(lastRun, bundle?.runs ?? []) : null;
     readinessItems.push({
@@ -1811,7 +1798,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
           ...failingChecks.map((check) => `\n- ${check.criterion}${check.evidence ? `: ${check.evidence}` : ""}`)
         ].join("")
       : flagTooltips["needs-attention"];
-    readinessItems.push({ label: "needs attention", tone: "warning", tooltip });
+    readinessItems.push({ label: t("needs attention"), tone: "warning", tooltip });
   }
 
   const headerStatus = node.locked ? <Lock size={20} /> : null;
@@ -1965,7 +1952,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
   const implementationScopeTone = { own: "accent", share: "warning", cover: "neutral" } as const;
 
   return (
-    <aside className="inspector" aria-label="Node inspector">
+    <aside className="inspector" aria-label={t("Node inspector")}>
       <PanelHeader
         eyebrow={node.type}
         action={
@@ -1980,13 +1967,13 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
         <div className="inspector-preview-banner" role="status">
           <Eye size={15} aria-hidden="true" />
           <div>
-            <strong>Read-only preview</strong>
+            <strong>{t("Read-only preview")}</strong>
             <span>
               {previewNodeState === "removed"
-                ? "Proposed for removal by a pending graph edit — not yet applied."
+                ? t("Proposed for removal by a pending graph edit — not yet applied.")
                 : previewPhantomNode
-                  ? "Proposed new node from a pending graph edit — not yet created."
-                  : "Proposed changes from a pending graph edit — not yet applied."}
+                  ? t("Proposed new node from a pending graph edit — not yet created.")
+                  : t("Proposed changes from a pending graph edit — not yet applied.")}
             </span>
           </div>
         </div>
@@ -1999,9 +1986,9 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
         </div>
       ) : null}
 
-      {historicalInspection ? <section className="node-git-attribution" aria-label="Git graph attribution">
+      {historicalInspection ? <section className="node-git-attribution" aria-label={t("Git graph attribution")}>
         <div className="node-git-attribution-heading">
-          <span><GitCommitHorizontal size={14} /> Committed graph history</span>
+          <span><GitCommitHorizontal size={14} /> {" "}{t("Committed graph history")}</span>
           {nodeHistoryBusy ? <Loader2 size={14} className="is-spinning" /> : null}
         </div>
         {!nodeHistoryBusy && nodeHistory?.available ? (
@@ -2009,16 +1996,16 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
             <div className="node-git-attribution-summary">
               {nodeHistory.introduced ? (
                 <div title={nodeHistory.introduced.author.email}>
-                  <small>Introduced in graph by</small>
+                  <small>{t("Introduced in graph by")}</small>
                   <strong>{nodeHistory.introduced.author.name}</strong>
-                  <span>{nodeHistory.introduced.shortCommit} · {new Date(nodeHistory.introduced.committedAt).toLocaleDateString()}</span>
+                  <span>{t("{{shortCommit}} · {{value2}}", { shortCommit: nodeHistory.introduced.shortCommit, value2: formatDate(new Date(nodeHistory.introduced.committedAt)) })}</span>
                 </div>
               ) : null}
               {nodeHistory.lastSemanticChange ? (
                 <div title={nodeHistory.lastSemanticChange.author.email}>
-                  <small>Last graph change by</small>
+                  <small>{t("Last graph change by")}</small>
                   <strong>{nodeHistory.lastSemanticChange.author.name}</strong>
-                  <span>{nodeHistory.lastSemanticChange.shortCommit} · {new Date(nodeHistory.lastSemanticChange.committedAt).toLocaleDateString()}</span>
+                  <span>{t("{{shortCommit}} · {{value2}}", { shortCommit: nodeHistory.lastSemanticChange.shortCommit, value2: formatDate(new Date(nodeHistory.lastSemanticChange.committedAt)) })}</span>
                 </div>
               ) : null}
             </div>
@@ -2029,7 +2016,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
               aria-expanded={nodeHistoryExpanded}
             >
               <ChevronRight size={13} className={nodeHistoryExpanded ? "is-expanded" : ""} />
-              {nodeHistory.changes.length} committed graph change{nodeHistory.changes.length === 1 ? "" : "s"}
+              {nodeHistory.changes.length} {" "}{t("committed graph change")}{nodeHistory.changes.length === 1 ? "" : t("s")}
             </button>
             {nodeHistoryExpanded ? (
               <div className="node-git-history-list">
@@ -2039,19 +2026,19 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                     <div>
                       <strong title={change.author.email}>{change.author.name}</strong>
                       <span>{change.subject}</span>
-                      <small>{change.shortCommit} · {new Date(change.committedAt).toLocaleString()}</small>
-                      {change.changedFields.length ? <small>Changed: {change.changedFields.join(", ")}</small> : null}
+                      <small>{t("{{shortCommit}} · {{value2}}", { shortCommit: change.shortCommit, value2: formatDateTime(new Date(change.committedAt)) })}</small>
+                      {change.changedFields.length ? <small>{t("Changed: {{value1}}", { value1: change.changedFields.join(", ") })}</small> : null}
                     </div>
                   </div>
                 ))}
               </div>
             ) : null}
           </>
-        ) : !nodeHistoryBusy ? <small className="node-git-attribution-empty">{nodeHistory?.message ?? "No committed graph attribution is available."}</small> : null}
+        ) : !nodeHistoryBusy ? <small className="node-git-attribution-empty">{nodeHistory?.message ?? t("No committed graph attribution is available.")}</small> : null}
       </section> : null}
 
       {readinessItems.length ? (
-        <div className="readiness-strip" aria-label="Node needs attention">
+        <div className="readiness-strip" aria-label={t("Node needs attention")}>
           {readinessItems.map((item) => {
             const pill = <StatusPill tone={item.tone}>{item.label}</StatusPill>;
             return (
@@ -2079,16 +2066,16 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
 
       <TabsRoot value={inspectorTab} onValueChange={setInspectorTab} className="inspector-tabs">
         <TabsList className="ui-tabs-list compact">
-          <TabsTrigger value="details">Details</TabsTrigger>
-          <TabsTrigger value="notes">Notes</TabsTrigger>
-          <TabsTrigger value="rules">Rules</TabsTrigger>
+          <TabsTrigger value="details">{t("Details")}</TabsTrigger>
+          <TabsTrigger value="notes">{t("Notes")}</TabsTrigger>
+          <TabsTrigger value="rules">{t("Rules")}</TabsTrigger>
           {utilityTabsExpanded ? (
-            <TabsTrigger value="advanced">Advanced</TabsTrigger>
+            <TabsTrigger value="advanced">{t("Advanced")}</TabsTrigger>
           ) : null}
           <button
             type="button"
             className="activity-more-tabs-trigger inspector-more-tabs-trigger"
-            aria-label={utilityTabsExpanded ? "Hide run, artifact, and advanced tabs" : "Show run, artifact, and advanced tabs"}
+            aria-label={utilityTabsExpanded ? t("Hide run, artifact, and advanced tabs") : t("Show run, artifact, and advanced tabs")}
             aria-expanded={utilityTabsExpanded}
             onPointerDown={(event) => {
               event.preventDefault();
@@ -2102,7 +2089,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
             }}
           >
             <MoreHorizontal size={15} />
-            <span>More</span>
+            <span>{t("More")}</span>
           </button>
         </TabsList>
 
@@ -2116,34 +2103,34 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
             }}
           >
             <div className="action-grid">
-              <Tooltip content="Mark this node as production approved and lock it from agent edits.">
+              <Tooltip content={t("Mark this node as production approved and lock it from agent edits.")}>
                 <Button type="button" variant="success" onClick={() => updateNodeKeepingDetailsScroll({ id: node.id, stage: "draft-approved-production" })}>
                   <CheckCircle2 size={16} />
-                  <span>Approve</span>
+                  <span>{t("Approve")}</span>
                 </Button>
               </Tooltip>
-              <Tooltip content="Reject this node's current draft state and keep it editable.">
+              <Tooltip content={t("Reject this node's current draft state and keep it editable.")}>
                 <Button type="button" variant="danger" onClick={() => updateNodeKeepingDetailsScroll({ id: node.id, stage: "draft-rejected", locked: false })}>
                   <XCircle size={16} />
-                  <span>Reject</span>
+                  <span>{t("Reject")}</span>
                 </Button>
               </Tooltip>
-              <Tooltip content="Reopen this node for changes and remove its approval lock.">
+              <Tooltip content={t("Reopen this node for changes and remove its approval lock.")}>
                 <Button
                   type="button"
                   onClick={() => updateNodeKeepingDetailsScroll({ id: node.id, stage: "draft", locked: false, flags: node.flags.filter((flag) => flag !== "user-approved"), forceUnlockRevision: true })}
                 >
                   <RotateCcw size={16} />
-                  <span>Revise</span>
+                  <span>{t("Revise")}</span>
                 </Button>
               </Tooltip>
             </div>
 
-            <Field label="Title" hint={titleFieldHint}>
+            <Field label={t("Title")} hint={titleFieldHint}>
               <TextInput value={node.title} onChange={(event) => updateNodeKeepingDetailsScroll({ id: node.id, title: event.target.value })} />
             </Field>
 
-            <Field label="Type" hint={typeFieldHint}>
+            <Field label={t("Type")} hint={typeFieldHint}>
               <div className="type-editor">
                 <TextInput
                   value={typeDraft}
@@ -2167,7 +2154,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                   <PopoverTrigger asChild>
                     <Button type="button" className="type-picker-trigger">
                       <Search size={14} />
-                      <span>Browse</span>
+                      <span>{t("Browse")}</span>
                       <ChevronDown size={14} />
                     </Button>
                   </PopoverTrigger>
@@ -2183,20 +2170,20 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                         autoFocus
                         value={typePickerQuery}
                         onChange={(event) => setTypePickerQuery(event.target.value)}
-                        placeholder="Search or create a type"
-                        aria-label="Search or create a node type"
+                        placeholder={t("Search or create a type")}
+                        aria-label={t("Search or create a node type")}
                       />
                     </div>
                     {canCreateTypeFromQuery ? (
                       <button type="button" className="type-picker-create" onClick={() => applyNodeTypeSelection(typePickerQuery.trim())}>
                         <Plus size={14} />
-                        <span>Use custom type "{typePickerQuery.trim()}"</span>
+                        <span>{t("Use custom type \" {{value1}} \"", { value1: typePickerQuery.trim() })}</span>
                       </button>
                     ) : null}
                     <ScrollArea className="type-picker-scroll">
                       {filteredBuiltInNodeTypes.length ? (
                         <div className="type-picker-section">
-                          <span>Presets</span>
+                          <span>{t("Presets")}</span>
                           {filteredBuiltInNodeTypes.map((type) => (
                             <button
                               key={type}
@@ -2205,14 +2192,14 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                               onClick={() => applyNodeTypeSelection(type)}
                             >
                               <span>{type}</span>
-                              <small>Preset</small>
+                              <small>{t("Preset")}</small>
                             </button>
                           ))}
                         </div>
                       ) : null}
                       {filteredCustomNodeTypes.length ? (
                         <div className="type-picker-section">
-                          <span>Project custom</span>
+                          <span>{t("Project custom")}</span>
                           {filteredCustomNodeTypes.map((type) => (
                             <div key={type} className="type-picker-custom-row">
                               <button
@@ -2221,13 +2208,13 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                                 onClick={() => applyNodeTypeSelection(type)}
                               >
                                 <span>{type}</span>
-                                <small>Custom</small>
+                                <small>{t("Custom")}</small>
                               </button>
                               <button
                                 type="button"
                                 className="type-picker-remove"
-                                aria-label={`Remove ${type} from custom type history`}
-                                title={`Remove ${type} from custom type history`}
+                                aria-label={t("Remove {{type}} from custom type history", { type: type })}
+                                title={t("Remove {{type}} from custom type history", { type: type })}
                                 onClick={(event) => {
                                   event.stopPropagation();
                                   forgetCustomNodeType(type);
@@ -2240,7 +2227,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                         </div>
                       ) : null}
                       {!filteredBuiltInNodeTypes.length && !filteredCustomNodeTypes.length && !canCreateTypeFromQuery ? (
-                        <div className="type-picker-empty">No matching types yet.</div>
+                        <div className="type-picker-empty">{t("No matching types yet.")}</div>
                       ) : null}
                     </ScrollArea>
                   </PopoverContent>
@@ -2249,20 +2236,20 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
             </Field>
 
             <Field
-              label="Description"
+              label={t("Description")}
               hint={descriptionFieldHint}
               action={
                 <span className="inspector-field-actions">
                   <IconButton
                     className="inspector-field-action-button"
-                    title="Open description in large editor"
+                    title={t("Open description in large editor")}
                     onClick={() => openLargeTextEditor("description")}
                   >
                     <Maximize2 size={13} />
                   </IconButton>
                   <IconButton
                     className="inspector-field-action-button"
-                    title="Enhance with AI"
+                    title={t("Enhance with AI")}
                     disabled={enhancingField === "description"}
                     onClick={() => void requestFieldEnhancement("description")}
                   >
@@ -2280,7 +2267,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
               />
             </Field>
 
-            <Field label="Stage" hint={stageFieldHint}>
+            <Field label={t("Stage")} hint={stageFieldHint}>
               <Select
                 value={node.stage}
                 onValueChange={(value) => updateNodeKeepingDetailsScroll({ id: node.id, stage: value as NodeStage })}
@@ -2288,15 +2275,15 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
               />
             </Field>
 
-            <Field label="Agent working set" hint="Ignored nodes stay visible in the graph, but chat and build agents treat them as outside the current working set.">
+            <Field label={t("Agent working set")} hint={t("Ignored nodes stay visible in the graph, but chat and build agents treat them as outside the current working set.")}>
               <Switch
                 checked={!node.ignored}
                 onCheckedChange={(checked) => updateNodeKeepingDetailsScroll({ id: node.id, ignored: !checked })}
-                label="Include"
+                label={t("Include")}
               />
             </Field>
 
-            <Field label="Opens detail flow" hint="Choose a subflow this node opens/links for more detail.">
+            <Field label={t("Opens detail flow")} hint={t("Choose a subflow this node opens/links for more detail.")}>
               <div className="detail-flow-picker">
                 <PopoverRoot
                   open={detailFlowPickerOpen}
@@ -2306,7 +2293,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                   }}
                 >
                   <PopoverTrigger asChild>
-                    <button type="button" className="ui-select-trigger detail-flow-trigger" aria-label="Choose linked detail flow">
+                    <button type="button" className="ui-select-trigger detail-flow-trigger" aria-label={t("Choose linked detail flow")}>
                       <span>{linkedDetailFlowLabel}</span>
                       <ChevronDown size={14} />
                     </button>
@@ -2323,8 +2310,8 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                         autoFocus
                         value={detailFlowPickerQuery}
                         onChange={(event) => setDetailFlowPickerQuery(event.target.value)}
-                        placeholder="Search flows"
-                        aria-label="Search flows"
+                        placeholder={t("Search flows")}
+                        aria-label={t("Search flows")}
                       />
                     </div>
                     <ScrollArea className="detail-flow-scroll">
@@ -2337,7 +2324,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                             setDetailFlowPickerOpen(false);
                           }}
                         >
-                          <span>No linked flow</span>
+                          <span>{t("No linked flow")}</span>
                         </button>
                         {filteredDetailFlowOptions.map(({ subflow, label }) => (
                           <button
@@ -2353,7 +2340,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                           </button>
                         ))}
                         {!filteredDetailFlowOptions.length ? (
-                          <div className="detail-flow-empty">No matching flows.</div>
+                          <div className="detail-flow-empty">{t("No matching flows.")}</div>
                         ) : null}
                       </div>
                     </ScrollArea>
@@ -2361,26 +2348,26 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                 </PopoverRoot>
                 <Button type="button" size="sm" disabled={!linkedSubflowId} onClick={() => setActiveSubflow(linkedSubflowId || null)}>
                   <MoveUpRight size={15} />
-                  <span>Open</span>
+                  <span>{t("Open")}</span>
                 </Button>
               </div>
             </Field>
 
             <Field
-              label="Acceptance criteria"
+              label={t("Acceptance criteria")}
               hint={acceptanceCriteriaFieldHint}
               action={
                 <span className="inspector-field-actions">
                   <IconButton
                     className="inspector-field-action-button"
-                    title="Open acceptance criteria in large editor"
+                    title={t("Open acceptance criteria in large editor")}
                     onClick={() => openLargeTextEditor("acceptanceCriteria")}
                   >
                     <Maximize2 size={13} />
                   </IconButton>
                   <IconButton
                     className="inspector-field-action-button"
-                    title="Enhance with AI"
+                    title={t("Enhance with AI")}
                     disabled={enhancingField === "acceptanceCriteria"}
                     onClick={() => void requestFieldEnhancement("acceptanceCriteria")}
                   >
@@ -2408,19 +2395,19 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
             <DialogRoot open={Boolean(largeTextEditor)} onOpenChange={(open) => { if (!open) setLargeTextEditor(null); }}>
               <DialogContent
                 className="node-large-text-editor-dialog"
-                title={largeTextEditor?.field === "acceptanceCriteria" ? "Edit acceptance criteria" : "Edit description"}
+                title={largeTextEditor?.field === "acceptanceCriteria" ? t("Edit acceptance criteria") : t("Edit description")}
                 description={largeTextEditor?.field === "acceptanceCriteria"
-                  ? "Keep one concrete, verifiable outcome per line."
-                  : "Use the larger workspace for a clear, detailed description."}
+                  ? t("Keep one concrete, verifiable outcome per line.")
+                  : t("Use the larger workspace for a clear, detailed description.")}
                 resizable
               >
                 <div className="node-large-text-editor-body">
                   <TextArea
                     autoFocus
                     className="node-large-text-editor-input"
-                    aria-label={largeTextEditor?.field === "acceptanceCriteria" ? "Acceptance criteria large editor" : "Description large editor"}
+                    aria-label={largeTextEditor?.field === "acceptanceCriteria" ? t("Acceptance criteria large editor") : t("Description large editor")}
                     value={largeTextEditor?.draft ?? ""}
-                    placeholder={largeTextEditor?.field === "acceptanceCriteria" ? "One acceptance criterion per line" : "Describe this node"}
+                    placeholder={largeTextEditor?.field === "acceptanceCriteria" ? t("One acceptance criterion per line") : t("Describe this node")}
                     onChange={(event) => setLargeTextEditor((current) => current ? { ...current, draft: event.target.value } : current)}
                     onKeyDown={(event) => {
                       if ((event.metaKey || event.ctrlKey) && event.key === "Enter") {
@@ -2432,15 +2419,14 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                   <div className="node-large-text-editor-footer">
                     <small>
                       {largeTextEditor?.field === "acceptanceCriteria"
-                        ? `${largeTextEditor.draft.split("\n").filter((item) => item.trim()).length} criteria`
-                        : `${largeTextEditor?.draft.length ?? 0} characters`}
-                      <span aria-hidden="true"> · </span>Ctrl/Cmd+Enter to save
-                    </small>
+                        ? t("{{length}} criteria", { length: largeTextEditor.draft.split("\n").filter((item) => item.trim()).length })
+                        : t("{{value1}} characters", { value1: largeTextEditor?.draft.length ?? 0 })}
+                      <span aria-hidden="true"> · </span>{t("Ctrl/Cmd+Enter to save")}{" "}</small>
                     <div className="dialog-actions">
                       <DialogClose asChild>
-                        <Button type="button" size="sm">Cancel</Button>
+                        <Button type="button" size="sm">{t("Cancel")}</Button>
                       </DialogClose>
-                      <Button type="button" size="sm" variant="primary" onClick={saveLargeTextEditor}>Save</Button>
+                      <Button type="button" size="sm" variant="primary" onClick={saveLargeTextEditor}>{t("Save")}</Button>
                     </div>
                   </div>
                 </div>
@@ -2449,18 +2435,18 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
 
             <DialogRoot open={Boolean(enhancePreview)} onOpenChange={(open) => { if (!open) setEnhancePreview(null); }}>
               <DialogContent
-                title={enhancePreview?.field === "description" ? "Review enhanced description" : "Review enhanced acceptance criteria"}
-                description="AI suggested a revision. Edit it as needed, then apply it to this node."
+                title={enhancePreview?.field === "description" ? t("Review enhanced description") : t("Review enhanced acceptance criteria")}
+                description={t("AI suggested a revision. Edit it as needed, then apply it to this node.")}
               >
                 <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                   <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <small>Current</small>
+                    <small>{t("Current")}</small>
                     <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5, whiteSpace: "pre-wrap", opacity: 0.7 }}>
-                      {enhancePreview?.original.trim() || "(empty)"}
+                      {enhancePreview?.original.trim() || t("(empty)")}
                     </p>
                   </div>
                   <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                    <small>Suggested (editable)</small>
+                    <small>{t("Suggested (editable)")}</small>
                     <AutoSizeTextArea
                       className="inspector-long-text"
                       minRows={3}
@@ -2471,18 +2457,18 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                   </div>
                   <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
                     <DialogClose asChild>
-                      <Button type="button" size="sm">Cancel</Button>
+                      <Button type="button" size="sm">{t("Cancel")}</Button>
                     </DialogClose>
                     <Button type="button" size="sm" variant="primary" disabled={!enhancePreview?.draft.trim()} onClick={applyFieldEnhancement}>
                       <Sparkles size={15} />
-                      <span>Apply</span>
+                      <span>{t("Apply")}</span>
                     </Button>
                   </div>
                 </div>
               </DialogContent>
             </DialogRoot>
 
-            <Field label="Build module" hint="This tells ArchiCode which runnable part of the project this node belongs to when it needs to build, run, or test work for this feature. In a single-target project, Auto usually just works. In a multi-target project, Auto leaves it open until Gaia's AI Implement run can confidently map the node once. Choose None to opt out, or pick a specific module to lock the node to that target manually.">
+            <Field label={t("Build module")} hint={t("This tells ArchiCode which runnable part of the project this node belongs to when it needs to build, run, or test work for this feature. In a single-target project, Auto usually just works. In a multi-target project, Auto leaves it open until Gaia's AI Implement run can confidently map the node once. Choose None to opt out, or pick a specific module to lock the node to that target manually.")}>
               <Select
                 value={moduleProfileSelectValue}
                 onValueChange={(value) => {
@@ -2497,17 +2483,17 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                   updateNodeKeepingDetailsScroll({ id: node.id, moduleProfileMode: "manual", moduleProfileId: value || undefined });
                 }}
                 options={[
-                  { value: moduleProfileAutoValue, label: "Auto" },
-                  { value: moduleProfileNoneValue, label: "None" },
+                  { value: moduleProfileAutoValue, label: t("Auto") },
+                  { value: moduleProfileNoneValue, label: t("None") },
                   ...bundle.project.settings.runTargetProfiles.map((profile) => ({ value: profile.id, label: profile.label }))
                 ]}
               />
             </Field>
 
-            <Field label="Acceptance checks" hint="Tests derived from the acceptance criteria above. Green = passing, red = failing, grey = not run yet. Generate tests syncs this list to the criteria and writes the test files; Run all tests executes them and updates status. Hover a row to see which criterion it verifies.">
+            <Field label={t("Acceptance checks")} hint={t("Tests derived from the acceptance criteria above. Green = passing, red = failing, grey = not run yet. Generate tests syncs this list to the criteria and writes the test files; Run all tests executes them and updates status. Hover a row to see which criterion it verifies.")}>
               <div className="acceptance-checks">
                 {node.acceptanceChecks.length === 0 ? (
-                  <small className="acceptance-checks-empty">No tests yet. Write acceptance criteria above, then Generate tests.</small>
+                  <small className="acceptance-checks-empty">{t("No tests yet. Write acceptance criteria above, then Generate tests.")}</small>
                 ) : (
                   <div className="acceptance-check-list" style={{ display: "flex", flexDirection: "column", gap: 4, marginBottom: 10 }}>
                     {node.acceptanceChecks.map((check) => {
@@ -2555,20 +2541,20 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                     size="sm"
                     disabled={node.acceptanceCriteria.length === 0 || isGeneratingChecks || isRunningChecks || isClearingChecks}
                     title={node.acceptanceCriteria.length === 0
-                      ? "Add acceptance criteria first"
-                      : "Run an AI agent that writes real (failing) test files for these criteria and syncs this list to the criteria"}
+                      ? t("Add acceptance criteria first")
+                      : t("Run an AI agent that writes real (failing) test files for these criteria and syncs this list to the criteria")}
                     onClick={() => setConfirmGenerateOpen(true)}
                   >
                     {isGeneratingChecks ? <Loader2 size={15} className="is-spinning" /> : <Sparkles size={15} />}
-                    <span>{isGeneratingChecks ? "Authoring tests…" : "Generate tests"}</span>
+                    <span>{isGeneratingChecks ? t("Authoring tests…") : t("Generate tests")}</span>
                   </Button>
                   <Button
                     type="button"
                     size="sm"
                     disabled={node.acceptanceChecks.every((check) => !check.testCommand) || isGeneratingChecks || isRunningChecks || isClearingChecks}
                     title={node.acceptanceChecks.every((check) => !check.testCommand)
-                      ? "Generate tests first"
-                      : "Run every test and update its status (green/red) on this node"}
+                      ? t("Generate tests first")
+                      : t("Run every test and update its status (green/red) on this node")}
                     onClick={async () => {
                       setIsRunningChecks(true);
                       try {
@@ -2579,7 +2565,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                     }}
                   >
                     {isRunningChecks ? <Loader2 size={15} className="is-spinning" /> : <PlayCircle size={15} />}
-                    <span>{isRunningChecks ? "Running…" : "Run all tests"}</span>
+                    <span>{isRunningChecks ? t("Running…") : t("Run all tests")}</span>
                   </Button>
                   {node.acceptanceChecks.length ? (
                     <Button
@@ -2587,25 +2573,23 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                       size="sm"
                       variant="danger"
                       disabled={isGeneratingChecks || isRunningChecks || isClearingChecks}
-                      title="Delete the generated acceptance tests for this node and clear the checklist"
+                      title={t("Delete the generated acceptance tests for this node and clear the checklist")}
                       onClick={() => setConfirmClearOpen(true)}
                     >
                       {isClearingChecks ? <Loader2 size={15} className="is-spinning" /> : <Trash2 size={15} />}
-                      <span>{isClearingChecks ? "Clearing…" : "Clear tests"}</span>
+                      <span>{isClearingChecks ? t("Clearing…") : t("Clear tests")}</span>
                     </Button>
                   ) : null}
                 </div>
 
                 <DialogRoot open={confirmGenerateOpen} onOpenChange={setConfirmGenerateOpen}>
-                  <DialogContent title="Generate tests" description="Author automated tests from this node's acceptance criteria.">
+                  <DialogContent title={t("Generate tests")} description={t("Author automated tests from this node's acceptance criteria.")}>
                     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                       <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5 }}>
-                        This runs an AI agent that writes real test files for the {node.acceptanceCriteria.length} acceptance {node.acceptanceCriteria.length === 1 ? "criterion" : "criteria"} into
-                        {" "}<code>.archicode/tests/</code> and syncs this checklist to the criteria. The tests are expected to fail until the feature is implemented.
-                      </p>
+                        {t("This runs an AI agent that writes real test files for the")}{" "}{node.acceptanceCriteria.length} {" "}{t("acceptance")}{" "}{node.acceptanceCriteria.length === 1 ? t("criterion") : t("criteria")} {" "}{t("into")}{" "}{" "}<code>{t(".archicode/tests/")}</code> {" "}{t("and syncs this checklist to the criteria. The tests are expected to fail until the feature is implemented.")}{" "}</p>
                       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
                         <DialogClose asChild>
-                          <Button type="button" size="sm">Cancel</Button>
+                          <Button type="button" size="sm">{t("Cancel")}</Button>
                         </DialogClose>
                         <Button
                           type="button"
@@ -2622,7 +2606,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                           }}
                         >
                           <Sparkles size={15} />
-                          <span>Generate tests</span>
+                          <span>{t("Generate tests")}</span>
                         </Button>
                       </div>
                     </div>
@@ -2630,14 +2614,13 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                 </DialogRoot>
 
                 <DialogRoot open={confirmClearOpen} onOpenChange={setConfirmClearOpen}>
-                  <DialogContent title="Clear generated tests" description="Remove the generated acceptance tests for this node.">
+                  <DialogContent title={t("Clear generated tests")} description={t("Remove the generated acceptance tests for this node.")}>
                     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
                       <p style={{ margin: 0, fontSize: 13, lineHeight: 1.5 }}>
-                        This clears the acceptance-check list for this node and deletes generated files from <code>.archicode/tests/</code> for this feature. Acceptance criteria will be kept.
-                      </p>
+                        {t("This clears the acceptance-check list for this node and deletes generated files from")}{" "}<code>{t(".archicode/tests/")}</code> {" "}{t("for this feature. Acceptance criteria will be kept.")}{" "}</p>
                       <div style={{ display: "flex", justifyContent: "flex-end", gap: 8 }}>
                         <DialogClose asChild>
-                          <Button type="button" size="sm">Cancel</Button>
+                          <Button type="button" size="sm">{t("Cancel")}</Button>
                         </DialogClose>
                         <Button
                           type="button"
@@ -2654,7 +2637,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                           }}
                         >
                           <Trash2 size={15} />
-                          <span>Clear tests</span>
+                          <span>{t("Clear tests")}</span>
                         </Button>
                       </div>
                     </div>
@@ -2663,7 +2646,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
               </div>
             </Field>
 
-            <Field label="Tech stack" hint={techStackFieldHint}>
+            <Field label={t("Tech stack")} hint={techStackFieldHint}>
               <TextInput
                 value={techStackDraft}
                 onChange={(event) => setTechStackDraft(event.target.value)}
@@ -2679,11 +2662,11 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
 
             <div className="custom-node-properties">
               <div className="custom-node-properties-create">
-                <Field label="Custom Keys" hint={customKeysFieldHint}>
+                <Field label={t("Custom Keys")} hint={customKeysFieldHint}>
                   <div className="custom-node-properties-create-row">
                     <TextInput
                       value={customPropertyNameDraft}
-                      placeholder="Key name"
+                      placeholder={t("Key name")}
                       onChange={(event) => setCustomPropertyNameDraft(event.target.value)}
                       onKeyDown={(event) => {
                         if (event.key !== "Enter") return;
@@ -2696,8 +2679,8 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                       onValueChange={(value) => setCustomPropertyTypeDraft(value as CustomNodePropertyType)}
                       options={customPropertyTypeOptions}
                     />
-                    <Tooltip content="Add custom key">
-                      <Button type="button" size="sm" disabled={!customPropertyNameDraft.trim()} onClick={createCustomNodeProperty} aria-label="Add custom key">
+                    <Tooltip content={t("Add custom key")}>
+                      <Button type="button" size="sm" disabled={!customPropertyNameDraft.trim()} onClick={createCustomNodeProperty} aria-label={t("Add custom key")}>
                         <Plus size={15} />
                       </Button>
                     </Tooltip>
@@ -2715,12 +2698,12 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                             customProperties: withCustomPropertyValue(node, property.id, value)
                           }))}
                         </div>
-                        <Tooltip content={`Delete ${property.label}`}>
+                        <Tooltip content={t("Delete {{label}}", { label: property.label })}>
                           <Button
                             type="button"
                             size="sm"
                             className="custom-node-property-delete"
-                            aria-label={`Delete ${property.label}`}
+                            aria-label={t("Delete {{label}}", { label: property.label })}
                             onClick={() => deleteCustomNodeProperty(property.id)}
                           >
                             <Trash2 size={15} />
@@ -2734,7 +2717,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
             </div>
 
             <div className="node-group-editor">
-              <Field label="Group" hint={groupFieldHint}>
+              <Field label={t("Group")} hint={groupFieldHint}>
                 <Select
                   value={node.groupId ?? noGroupValue}
                   onValueChange={(value) => assignNodesToGroup([node], value === noGroupValue ? null : value)}
@@ -2744,7 +2727,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
               {nodeGroup ? (
                 <>
                   <GroupColorSwatches
-                    label="Group accent"
+                    label={t("Group accent")}
                     value={nodeGroup.color ?? defaultAccentColor}
                     onChange={(color) => updateGroupColor(nodeGroup.id, color)}
                   />
@@ -2756,15 +2739,11 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                         const name = window.prompt("Rename group", nodeGroup.name);
                         if (name !== null) renameGroup(nodeGroup.id, name);
                       }}
-                    >
-                      Rename group
-                    </Button>
+                    >{t("{{value1}} {{value2}}", { value1: t("Rename group"), value2: " " })}</Button>
                     <Button type="button" size="sm" onClick={() => assignNodesToGroup([node], null)}>
-                      Remove
-                    </Button>
+                      {t("Remove")}{" "}</Button>
                     <Button type="button" size="sm" variant="danger" onClick={() => ungroup(nodeGroup.id)}>
-                      Ungroup
-                    </Button>
+                      {t("Ungroup")}{" "}</Button>
                   </div>
                 </>
               ) : null}
@@ -2778,17 +2757,17 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                 onClick={toggleNodeAppearance}
               >
                 <ChevronRight size={15} />
-                <span>Visual</span>
+                <span>{t("Visual")}</span>
               </button>
               {nodeAppearanceExpanded ? (
                 <div className="collapsible-field-body node-color-editor">
-                  <div className="node-shape-grid" aria-label="Node shape">
+                  <div className="node-shape-grid" aria-label={t("Node shape")}>
                     {nodeShapeOptions.map((shape) => (
                       <button
                         key={shape.value}
                         type="button"
                         className={node.visual?.shape === shape.value || (!node.visual?.shape && shape.value === "rounded") ? "is-active" : ""}
-                        aria-label={`Use ${shape.label} shape`}
+                        aria-label={t("Use {{label}} shape", { label: shape.label })}
                         title={shape.label}
                         onClick={() => updateNodeVisual({ shape: shape.value })}
                       >
@@ -2799,7 +2778,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                   </div>
                   <div className="node-size-editor">
                     <label>
-                      <span>Width</span>
+                      <span>{t("Width")}</span>
                       <TextInput
                         type="number"
                         min={nodeSizeBounds.width.min}
@@ -2810,7 +2789,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                       />
                     </label>
                     <label>
-                      <span>Height</span>
+                      <span>{t("Height")}</span>
                       <TextInput
                         type="number"
                         min={nodeSizeBounds.height.min}
@@ -2822,13 +2801,13 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                     </label>
                   </div>
                   <div className="node-color-palette">
-                    <span>Background</span>
-                    <div className="node-color-swatches" aria-label="Background color presets">
+                    <span>{t("Background")}</span>
+                    <div className="node-color-swatches" aria-label={t("Background color presets")}>
                       <button
                         type="button"
                         className={!node.visual?.backgroundColor ? "is-active is-default" : "is-default"}
-                        aria-label="Use default background"
-                        title="Default background"
+                        aria-label={t("Use default background")}
+                        title={t("Default background")}
                         onClick={clearNodeBackground}
                       />
                       {nodeColorSwatches.map((color) => (
@@ -2837,19 +2816,15 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                           type="button"
                           className={node.visual?.backgroundColor === color ? "is-active" : ""}
                           style={{ backgroundColor: color }}
-                          aria-label={`Use ${color} background`}
+                          aria-label={t("Use {{color}} background", { color: color })}
                           onClick={() => updateNodeVisual({ backgroundColor: color })}
                         />
                       ))}
                     </div>
                   </div>
                   <div className="node-visual-actions">
-                    <Button type="button" size="sm" onClick={resetNodeSize}>
-                      Reset size
-                    </Button>
-                    <Button type="button" size="sm" onClick={clearNodeVisual}>
-                      Reset visual
-                    </Button>
+                    <Button type="button" size="sm" onClick={resetNodeSize}>{t("{{value1}} {{value2}}", { value1: t("Reset size"), value2: " " })}</Button>
+                    <Button type="button" size="sm" onClick={clearNodeVisual}>{t("{{value1}} {{value2}}", { value1: t("Reset visual"), value2: " " })}</Button>
                   </div>
                 </div>
               ) : null}
@@ -2863,11 +2838,11 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
             <ScrollArea className="notes-main-scroll">
               <div className="notes-panel-main">
                 <div className="note-guidance">
-                  <strong>Node notes</strong>
-                  <span>Use short questions, answers, decisions, and references. This is shared context with the AI Agent, not a chat transcript.</span>
+                  <strong>{t("Node notes")}</strong>
+                  <span>{t("Use short questions, answers, decisions, and references. This is shared context with the AI Agent, not a chat transcript.")}</span>
                 </div>
                 <label className="note-filter-row">
-                  <span>Show</span>
+                  <span>{t("Show")}</span>
                   <select className="ui-input" value={noteFilter} onChange={(event) => setNoteFilter(event.target.value as NoteFilter)}>
                     {noteFilterOptions.map((option) => (
                       <option key={option.value} value={option.value}>{option.label}</option>
@@ -2877,8 +2852,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                 <label className="note-search-row">
                   <span>
                     <Search size={14} />
-                    Search
-                  </span>
+                    {t("Search")}{" "}</span>
                   <input
                     className="ui-input"
                     type="search"
@@ -2891,15 +2865,15 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                     <MenuTrigger asChild>
                       <Button type="button" size="sm" variant="ghost">
                         <Trash2 size={14} />
-                        <span>Purge</span>
+                        <span>{t("Purge")}</span>
                         <ChevronDown size={13} />
                       </Button>
                     </MenuTrigger>
                     <MenuContent align="end">
-                      <MenuLabel>Notes</MenuLabel>
+                      <MenuLabel>{t("Notes")}</MenuLabel>
                       <MenuItem
                         disabled={purgeableSystemNoteCount === 0}
-                        tooltip="Deletes unpinned system-generated notes from this node. Agent handoff and bookkeeping notes are removed."
+                        tooltip={t("Deletes unpinned system-generated notes from this node. Agent handoff and bookkeeping notes are removed.")}
                         onSelect={() => {
                           if (!flow || !node || purgeableSystemNoteCount === 0) return;
                           const suffix = purgeableSystemNoteCount === 1 ? "" : "s";
@@ -2909,12 +2883,12 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                         }}
                       >
                         <Trash2 size={14} />
-                        <span>Purge system</span>
+                        <span>{t("Purge system")}</span>
                       </MenuItem>
                       <MenuSeparator />
                       <MenuItem
                         disabled={purgeableResolvedNoteCount === 0}
-                        tooltip="Deletes resolved notes from this node. Pinned notes stay until manually deleted."
+                        tooltip={t("Deletes resolved notes from this node. Pinned notes stay until manually deleted.")}
                         onSelect={() => {
                           if (!flow || !node || purgeableResolvedNoteCount === 0) return;
                           const suffix = purgeableResolvedNoteCount === 1 ? "" : "s";
@@ -2924,14 +2898,14 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                         }}
                       >
                         <Trash2 size={14} />
-                        <span>Purge resolved</span>
+                        <span>{t("Purge resolved")}</span>
                       </MenuItem>
                     </MenuContent>
                   </MenuRoot>
                 </div>
                 <div className="note-list">
-                  {notes.length === 0 ? <EmptyState title="No notes yet">Capture decisions, answer agent questions, or attach reference material for this node.</EmptyState> : null}
-                  {notes.length > 0 && visibleNotes.length === 0 ? <EmptyState title="No matching notes">Change the filter or search to view more node context.</EmptyState> : null}
+                  {notes.length === 0 ? <EmptyState title={t("No notes yet")}>{t("Capture decisions, answer agent questions, or attach reference material for this node.")}</EmptyState> : null}
+                  {notes.length > 0 && visibleNotes.length === 0 ? <EmptyState title={t("No matching notes")}>{t("Change the filter or search to view more node context.")}</EmptyState> : null}
                   {visibleNotes.map((note) => {
                     const nestedAnswers = note.kind === "llm-question"
                       ? questionAnswerThreads.answersByQuestionId.get(note.id) ?? []
@@ -2948,11 +2922,11 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                           <strong>{displayNoteLabel(note)}</strong>
                           <span className="note-status-row">
                             {note.pinned ? (
-                              <StatusPill tone="accent">pinned</StatusPill>
+                              <StatusPill tone="accent">{t("pinned")}</StatusPill>
                             ) : null}
                             {isResolvableNote(note) ? (
                               <StatusPill tone={note.resolved ? "success" : "warning"}>
-                                {note.resolved ? "resolved" : "open"}
+                                {note.resolved ? t("resolved") : t("open")}
                               </StatusPill>
                             ) : null}
                           </span>
@@ -2977,7 +2951,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                           <TextArea
                             rows={2}
                             value={noteAnswers[note.id] ?? ""}
-                            placeholder="Answer this question"
+                            placeholder={t("Answer this question")}
                             onChange={(event) => setNoteAnswers((current) => ({
                               ...current,
                               [note.id]: event.target.value
@@ -2985,15 +2959,15 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                           />
                           <Button type="button" size="sm" variant="primary" disabled={!noteAnswers[note.id]?.trim()} onClick={() => void answerQuestionNote(note)}>
                             <CheckCircle2 size={14} />
-                            <span>Answer</span>
+                            <span>{t("Answer")}</span>
                           </Button>
                           <Button type="button" size="sm" onClick={() => void letAiDecideQuestionNote(note)}>
-                            <span>Let AI decide</span>
+                            <span>{t("Let AI decide")}</span>
                           </Button>
                         </div>
                       ) : null}
                       {nestedAnswers.length ? (
-                        <div className="note-thread-answers" aria-label="Answers">
+                        <div className="note-thread-answers" aria-label={t("Answers")}>
                           {nestedAnswers.map((answer) => (
                             <div key={answer.id} data-note-id={answer.id} className="note-thread-answer">
                               <div className="note-head">
@@ -3015,7 +2989,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                               ) : null}
                               <p>{answer.body}</p>
                               <div className="note-meta-row">
-                                <small>{new Date(answer.createdAt).toLocaleString()}</small>
+                                <small>{formatDateTime(new Date(answer.createdAt))}</small>
                               </div>
                             </div>
                           ))}
@@ -3024,7 +2998,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                       {noteAttachments.length ? (
                         <>
                           {noteImageAttachments.length ? (
-                            <div className="note-image-previews" aria-label="Image attachments">
+                            <div className="note-image-previews" aria-label={t("Image attachments")}>
                               {noteImageAttachments.map((artifact) => {
                                 const previewUrl = artifactImagePreviews[artifact.id];
                                 if (!previewUrl) return null;
@@ -3073,9 +3047,9 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                         </>
                       ) : null}
                       <div className="note-meta-row">
-                        <small>{new Date(note.createdAt).toLocaleString()}</small>
+                        <small>{formatDateTime(new Date(note.createdAt))}</small>
                         <div className="note-actions">
-                          <Tooltip content={note.pinned ? "Unpin this note so it no longer stays at the top of relevant notes." : "Pin this note as durable context for this node."}>
+                          <Tooltip content={note.pinned ? t("Unpin this note so it no longer stays at the top of relevant notes.") : t("Pin this note as durable context for this node.")}>
                             <Button
                               type="button"
                               size="sm"
@@ -3084,18 +3058,18 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                               onClick={() => updateNotePinned(note.id, !note.pinned)}
                             >
                               <Pin size={14} />
-                              <span>{note.pinned ? "Pinned" : "Pin"}</span>
+                              <span>{note.pinned ? t("Pinned") : t("Pin")}</span>
                             </Button>
                           </Tooltip>
                           {isResolvableNote(note) ? (
-                            <Tooltip content={note.resolved ? "Reopen this note so it becomes active context again." : "Mark this note handled. Resolved notes can be hidden or purged later."}>
+                            <Tooltip content={note.resolved ? t("Reopen this note so it becomes active context again.") : t("Mark this note handled. Resolved notes can be hidden or purged later.")}>
                               <Button type="button" size="sm" onClick={() => updateNoteResolved(note.id, !note.resolved)}>
                                 <CheckCircle2 size={14} />
-                                <span>{note.resolved ? "Reopen" : note.kind === "llm-question" ? "Dismiss" : "Resolve"}</span>
+                                <span>{note.resolved ? t("Reopen") : note.kind === "llm-question" ? t("Dismiss") : t("Resolve")}</span>
                               </Button>
                             </Tooltip>
                           ) : null}
-                          <Tooltip content="Delete this note and remove it from the node context.">
+                          <Tooltip content={t("Delete this note and remove it from the node context.")}>
                             <Button
                               type="button"
                               size="sm"
@@ -3105,7 +3079,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                               }}
                             >
                               <Trash2 size={14} />
-                              <span>Delete</span>
+                              <span>{t("Delete")}</span>
                             </Button>
                           </Tooltip>
                         </div>
@@ -3115,8 +3089,8 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                   })}
                 </div>
                 {standaloneReferenceArtifacts.length ? (
-                  <section className="reference-strip" aria-label="Node references">
-                    <strong>References</strong>
+                  <section className="reference-strip" aria-label={t("Node references")}>
+                    <strong>{t("References")}</strong>
                     {standaloneReferenceArtifacts.map((artifact) => (
                       <Badge key={artifact.id} tone="accent">
                         <Paperclip size={12} />
@@ -3129,72 +3103,71 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
             </ScrollArea>
             <div className={`notes-compose-panel ${noteComposerCollapsed ? "is-collapsed" : ""}`}>
               {noteComposerCollapsed ? (
-                <Tooltip content="Open the note composer. Nothing is saved until you add the note.">
+                <Tooltip content={t("Open the note composer. Nothing is saved until you add the note.")}>
                   <button type="button" className="compose-collapse-strip" onClick={() => setNoteComposerCollapsed(false)}>
                     <MessageSquare size={15} />
-                    <span>New note</span>
+                    <span>{t("New note")}</span>
                     <ChevronRight size={15} />
                   </button>
                 </Tooltip>
               ) : (
                 <>
-                <Field label="New note" hint={openQuestionCount ? "This node has an open agent question. Write the answer naturally; the agent will read it with the rest of the node context." : "Keep it concise: requirement, decision, or correction. The agent will read this as node context."}>
+                <Field label={t("New note")} hint={openQuestionCount ? t("This node has an open agent question. Write the answer naturally; the agent will read it with the rest of the node context.") : t("Keep it concise: requirement, decision, or correction. The agent will read this as node context.")}>
                   <div className="note-compose-row">
                     <Select
                       value={noteCategory}
                       onValueChange={(value) => setNoteCategory(value as Note["category"])}
                       options={[
-                        { value: "note", label: "Note" },
-                        { value: "bug", label: "Bug" },
-                        { value: "task", label: "Task" },
-                        { value: "decision", label: "Decision" }
+                        { value: "note", label: t("Note") },
+                        { value: "bug", label: t("Bug") },
+                        { value: "task", label: t("Task") },
+                        { value: "decision", label: t("Decision") }
                       ]}
                     />
                     <Select
                       value={notePriority}
                       onValueChange={(value) => setNotePriority(value as Note["priority"])}
                       options={[
-                        { value: "low", label: "Low" },
-                        { value: "normal", label: "Normal" },
-                        { value: "high", label: "High" },
-                        { value: "urgent", label: "Urgent" }
+                        { value: "low", label: t("Low") },
+                        { value: "normal", label: t("Normal") },
+                        { value: "high", label: t("High") },
+                        { value: "urgent", label: t("Urgent") }
                       ]}
                     />
                   </div>
                   <TextArea value={noteBody} rows={3} onChange={(event) => setNoteBody(event.target.value)} />
                   {pendingReferencePaths.length ? (
-                    <div className="pending-reference-list" aria-label="Pending reference attachments">
+                    <div className="pending-reference-list" aria-label={t("Pending reference attachments")}>
                       {pendingReferencePaths.map((filePath) => (
                         <Badge key={filePath} tone="accent">
                           <Paperclip size={12} />
                           {fileNameFromPath(filePath)}
                         </Badge>
                       ))}
-                      <Tooltip content="Remove staged attachments from this draft note. No files are deleted.">
+                      <Tooltip content={t("Remove staged attachments from this draft note. No files are deleted.")}>
                         <Button type="button" size="sm" variant="ghost" onClick={() => setPendingReferencePaths([])}>
-                          Clear
-                        </Button>
+                          {t("Clear")}{" "}</Button>
                       </Tooltip>
                     </div>
                   ) : null}
                 </Field>
                 <div className="action-row">
-                  <Tooltip content="Save this draft as a node note. Staged references are attached only after this click.">
+                  <Tooltip content={t("Save this draft as a node note. Staged references are attached only after this click.")}>
                     <Button type="button" variant="primary" onClick={submitNote}>
                       <MessageSquare size={16} />
-                      <span>Add note</span>
+                      <span>{t("Add note")}</span>
                     </Button>
                   </Tooltip>
-                  <Tooltip content="Choose reference files for this draft note. They stay staged until you click Add note.">
+                  <Tooltip content={t("Choose reference files for this draft note. They stay staged until you click Add note.")}>
                     <Button type="button" onClick={() => void stageReferenceForDraft()}>
                       <Paperclip size={16} />
-                      <span>Attach reference</span>
+                      <span>{t("Attach reference")}</span>
                     </Button>
                   </Tooltip>
-                  <Tooltip content="Hide the composer. Draft text and staged references stay here until changed.">
+                  <Tooltip content={t("Hide the composer. Draft text and staged references stay here until changed.")}>
                     <Button type="button" size="sm" variant="ghost" className="compose-panel-collapse" onClick={() => setNoteComposerCollapsed(true)}>
                       <ChevronDown size={15} />
-                      <span>Collapse</span>
+                      <span>{t("Collapse")}</span>
                     </Button>
                   </Tooltip>
                 </div>
@@ -3209,8 +3182,8 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
             <ScrollArea className="inspector-scroll node-rules-main-scroll">
               <section className="node-rules-panel">
                 <div className="note-guidance node-rules-guidance">
-                  <strong>Rules & decisions</strong>
-                  <span>Durable guidance, decisions, and deterministic architecture policies included in agent context.</span>
+                  <strong>{t("Rules & decisions")}</strong>
+                  <span>{t("Durable guidance, decisions, and deterministic architecture policies included in agent context.")}</span>
                 </div>
 
                 <div className="node-rules-list">
@@ -3225,10 +3198,10 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                       <div className="node-rule-card-header">
                         <strong>{rule.title}</strong>
                         <div className="node-rule-card-actions">
-                          <IconButton title="Copy rule text" onClick={() => void copyRuleSource(rule)}>
+                          <IconButton title={t("Copy rule text")} onClick={() => void copyRuleSource(rule)}>
                             <Copy size={15} />
                           </IconButton>
-                          <IconButton title="Edit source rule" onClick={() => beginRuleSourceEdit(rule)}>
+                          <IconButton title={t("Edit source rule")} onClick={() => beginRuleSourceEdit(rule)}>
                             <Pencil size={15} />
                           </IconButton>
                         </div>
@@ -3237,8 +3210,8 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                         <Badge tone={(rule.kind ?? (rule.constraint ? "policy" : "guidance")) === "policy" ? "danger" : (rule.kind ?? "guidance") === "decision" ? "accent" : "neutral"}>
                           {rule.kind ?? (rule.constraint ? "policy" : "guidance")}
                         </Badge>
-                        {rule.constraint ? <Badge tone={rule.severity === "error" ? "danger" : "warning"}>{rule.severity ?? "warning"}</Badge> : null}
-                        {rule.constraint ? <Badge>{rule.enforcement ?? "advisory"}</Badge> : null}
+                        {rule.constraint ? <Badge tone={rule.severity === "error" ? "danger" : "warning"}>{rule.severity ?? t("warning")}</Badge> : null}
+                        {rule.constraint ? <Badge>{rule.enforcement ?? t("advisory")}</Badge> : null}
                       </div>
                       <p className="node-rule-body">{rule.body}</p>
                       {rule.constraint ? (
@@ -3248,39 +3221,37 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                       ) : null}
                       <div className="action-row end node-rule-detach-row">
                         <Button type="button" size="sm" onClick={() => detachRuleFromNode(rule.id)}>
-                          Detach
-                        </Button>
+                          {t("Detach")}{" "}</Button>
                       </div>
                     </article>
                     );
                   }) : (
-                    <EmptyState title="No rules attached">Attach reusable guidance for agents working from this node.</EmptyState>
+                    <EmptyState title={t("No rules attached")}>{t("Attach reusable guidance for agents working from this node.")}</EmptyState>
                   )}
                 </div>
 
-                <Field label="Attach rule">
+                <Field label={t("Attach rule")}>
                   <div className="node-rule-attach-row">
                     <Select
                       value={ruleAttachDraft}
                       onValueChange={setRuleAttachDraft}
                       options={attachableRules.length
                         ? attachableRules.map((rule) => ({ value: rule.id, label: rule.title }))
-                        : [{ value: "__none__", label: "No available rules", disabled: true }]}
-                      placeholder="Select rule"
+                        : [{ value: "__none__", label: t("No available rules"), disabled: true }]}
+                      placeholder={t("Select rule")}
                       disabled={!attachableRules.length}
                     />
                     <Button type="button" size="sm" disabled={!ruleAttachDraft || ruleAttachDraft === "__none__"} onClick={() => void attachRuleToNode()}>
-                      Attach
-                    </Button>
+                      {t("Attach")}{" "}</Button>
                     <IconButton
-                      title="Edit source rule"
+                      title={t("Edit source rule")}
                       disabled={!selectedAttachRule}
                       onClick={() => selectedAttachRule && beginRuleSourceEdit(selectedAttachRule)}
                     >
                       <Pencil size={15} />
                     </IconButton>
                     <IconButton
-                      title="Copy rule text"
+                      title={t("Copy rule text")}
                       disabled={!selectedAttachRule}
                       onClick={() => selectedAttachRule && void copyRuleSource(selectedAttachRule)}
                     >
@@ -3290,28 +3261,28 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                 </Field>
 
                 {editingRule ? (
-                  <Field label="Edit source rule">
+                  <Field label={t("Edit source rule")}>
                     <div className="node-rule-source-editor">
-                      <RuleControl label="Title" help="A short name shown on the node, in issue results, and in agent context.">
+                      <RuleControl label={t("Title")} help={t("A short name shown on the node, in issue results, and in agent context.")}>
                         <TextInput
-                          aria-label="Rule title"
+                          aria-label={t("Rule title")}
                           value={ruleEditTitleDraft}
-                          placeholder="Rule title"
+                          placeholder={t("Rule title")}
                           onChange={(event) => setRuleEditTitleDraft(event.target.value)}
                         />
                       </RuleControl>
-                      <RuleControl label="Description" help="Explain the intent and what developers or agents should do instead. This text accompanies violations and agent context.">
+                      <RuleControl label={t("Description")} help={t("Explain the intent and what developers or agents should do instead. This text accompanies violations and agent context.")}>
                         <TextArea
-                          aria-label="Rule description"
+                          aria-label={t("Rule description")}
                           value={ruleEditBodyDraft}
                           rows={5}
-                          placeholder="Explain the guidance, decision, or policy..."
+                          placeholder={t("Explain the guidance, decision, or policy...")}
                           onChange={(event) => setRuleEditBodyDraft(event.target.value)}
                         />
                       </RuleControl>
-                      <RuleControl label="Type" help="Choose whether this is prose guidance, a recorded decision, or a deterministic code policy. Hover each option for its behavior.">
+                      <RuleControl label={t("Type")} help={t("Choose whether this is prose guidance, a recorded decision, or a deterministic code policy. Hover each option for its behavior.")}>
                         <Select
-                          ariaLabel="Rule type"
+                          ariaLabel={t("Rule type")}
                           value={ruleEditKindDraft}
                           onValueChange={(value) => setRuleEditKindDraft(value as NonNullable<NodeRule["kind"]>)}
                           options={ruleKindOptions}
@@ -3321,17 +3292,17 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                         <div className="node-rule-policy-editor">
                           <PolicyConstraintEditor draft={ruleEditPolicyDraft} onChange={setRuleEditPolicyDraft} />
                           <div className="node-rule-policy-options">
-                            <RuleControl label="Severity" help="Controls how serious the violation appears. Only Error severity can block a run. Hover each option for details.">
+                            <RuleControl label={t("Severity")} help={t("Controls how serious the violation appears. Only Error severity can block a run. Hover each option for details.")}>
                               <Select
-                                ariaLabel="Policy severity"
+                                ariaLabel={t("Policy severity")}
                                 value={ruleEditSeverityDraft}
                                 onValueChange={(value) => setRuleEditSeverityDraft(value as NonNullable<NodeRule["severity"]>)}
                                 options={ruleSeverityOptions}
                               />
                             </RuleControl>
-                            <RuleControl label="Enforcement" help="Controls whether the check only reports findings or can gate newly introduced errors. Hover each option for details.">
+                            <RuleControl label={t("Enforcement")} help={t("Controls whether the check only reports findings or can gate newly introduced errors. Hover each option for details.")}>
                               <Select
-                                ariaLabel="Policy enforcement"
+                                ariaLabel={t("Policy enforcement")}
                                 value={ruleEditEnforcementDraft}
                                 onValueChange={(value) => setRuleEditEnforcementDraft(value as NonNullable<NodeRule["enforcement"]>)}
                                 options={ruleEnforcementOptions}
@@ -3343,14 +3314,11 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                       <div className="action-row end">
                         <Button type="button" size="sm" variant="danger" onClick={() => void deleteRuleSource(editingRule)}>
                           <Trash2 size={14} />
-                          <span>Delete</span>
+                          <span>{t("Delete")}</span>
                         </Button>
                         <Button type="button" size="sm" onClick={cancelRuleSourceEdit}>
-                          Cancel
-                        </Button>
-                        <Button type="button" size="sm" variant="primary" disabled={!ruleEditTitleDraft.trim() || !ruleEditBodyDraft.trim() || (ruleEditKindDraft === "policy" && !buildPolicyConstraint(ruleEditPolicyDraft))} onClick={saveRuleSourceEdit}>
-                          Save source
-                        </Button>
+                          {t("Cancel")}{" "}</Button>
+                        <Button type="button" size="sm" variant="primary" disabled={!ruleEditTitleDraft.trim() || !ruleEditBodyDraft.trim() || (ruleEditKindDraft === "policy" && !buildPolicyConstraint(ruleEditPolicyDraft))} onClick={saveRuleSourceEdit}>{t("{{value1}} {{value2}}", { value1: t("Save source"), value2: " " })}</Button>
                       </div>
                     </div>
                   </Field>
@@ -3362,36 +3330,36 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
               {ruleComposerCollapsed ? (
                 <button type="button" className="compose-collapse-strip" onClick={() => setRuleComposerCollapsed(false)}>
                   <Plus size={15} />
-                  <span>New rule</span>
+                  <span>{t("New rule")}</span>
                   <ChevronRight size={15} />
                 </button>
               ) : (
                 <div className="node-rules-compose-expanded">
                   <ScrollArea className="node-rules-compose-scroll">
-                    <Field label="New rule">
+                    <Field label={t("New rule")}>
                       <div className="node-rule-create">
-                  <RuleControl label="Type" help="Choose whether this is prose guidance, a recorded decision, or a deterministic code policy. Hover each option for its behavior.">
+                  <RuleControl label={t("Type")} help={t("Choose whether this is prose guidance, a recorded decision, or a deterministic code policy. Hover each option for its behavior.")}>
                     <Select
-                      ariaLabel="Rule type"
+                      ariaLabel={t("Rule type")}
                       value={ruleKindDraft}
                       onValueChange={(value) => setRuleKindDraft(value as NonNullable<NodeRule["kind"]>)}
                       options={ruleKindOptions}
                     />
                   </RuleControl>
-                  <RuleControl label="Title" help="A short name shown on the node, in issue results, and in agent context.">
+                  <RuleControl label={t("Title")} help={t("A short name shown on the node, in issue results, and in agent context.")}>
                     <TextInput
-                      aria-label="Rule title"
+                      aria-label={t("Rule title")}
                       value={ruleTitleDraft}
-                      placeholder="Rule title"
+                      placeholder={t("Rule title")}
                       onChange={(event) => setRuleTitleDraft(event.target.value)}
                     />
                   </RuleControl>
-                  <RuleControl label="Description" help="Explain the intent and what developers or agents should do instead. This text accompanies violations and agent context.">
+                  <RuleControl label={t("Description")} help={t("Explain the intent and what developers or agents should do instead. This text accompanies violations and agent context.")}>
                     <TextArea
-                      aria-label="Rule description"
+                      aria-label={t("Rule description")}
                       value={ruleBodyDraft}
                       rows={5}
-                      placeholder="Explain the guidance, decision, or policy..."
+                      placeholder={t("Explain the guidance, decision, or policy...")}
                       onChange={(event) => setRuleBodyDraft(event.target.value)}
                     />
                   </RuleControl>
@@ -3399,24 +3367,24 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                     <div className="node-rule-policy-editor">
                       <PolicyConstraintEditor draft={rulePolicyDraft} onChange={setRulePolicyDraft} />
                       <div className="node-rule-policy-options">
-                        <RuleControl label="Severity" help="Controls how serious the violation appears. Only Error severity can block a run. Hover each option for details.">
+                        <RuleControl label={t("Severity")} help={t("Controls how serious the violation appears. Only Error severity can block a run. Hover each option for details.")}>
                           <Select
-                            ariaLabel="Policy severity"
+                            ariaLabel={t("Policy severity")}
                             value={ruleSeverityDraft}
                             onValueChange={(value) => setRuleSeverityDraft(value as NonNullable<NodeRule["severity"]>)}
                             options={ruleSeverityOptions}
                           />
                         </RuleControl>
-                        <RuleControl label="Enforcement" help="Controls whether the check only reports findings or can gate newly introduced errors. Hover each option for details.">
+                        <RuleControl label={t("Enforcement")} help={t("Controls whether the check only reports findings or can gate newly introduced errors. Hover each option for details.")}>
                           <Select
-                            ariaLabel="Policy enforcement"
+                            ariaLabel={t("Policy enforcement")}
                             value={ruleEnforcementDraft}
                             onValueChange={(value) => setRuleEnforcementDraft(value as NonNullable<NodeRule["enforcement"]>)}
                             options={ruleEnforcementOptions}
                           />
                         </RuleControl>
                       </div>
-                      <small>This check runs locally from repository and graph facts. It adds no AI-model latency or token cost.</small>
+                      <small>{t("This check runs locally from repository and graph facts. It adds no AI-model latency or token cost.")}</small>
                     </div>
                   ) : null}
                       </div>
@@ -3430,11 +3398,11 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                       onClick={() => void createAndAttachRule()}
                     >
                       <Plus size={16} />
-                      <span>Create and attach</span>
+                      <span>{t("Create and attach")}</span>
                     </Button>
                     <Button type="button" size="sm" variant="ghost" className="compose-panel-collapse" onClick={() => setRuleComposerCollapsed(true)}>
                       <ChevronDown size={15} />
-                      <span>Collapse</span>
+                      <span>{t("Collapse")}</span>
                     </Button>
                   </div>
                 </div>
@@ -3447,9 +3415,9 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
           <ScrollArea className="inspector-scroll">
             <div className="scoped-action-block">
               <div className="scoped-action-label">
-                <span>Node-scoped AI</span>
-                <Tooltip content={`${gaiaAgent.title}. Runs AI implementation with this node as the anchor. Gaia still reads related graph context, but prioritizes this node's stage, notes, acceptance criteria, artifacts, and connected edges.`}>
-                  <HelpCircle size={14} className="hint-icon" aria-label="Node-scoped AI help" />
+                <span>{t("Node-scoped AI")}</span>
+                <Tooltip content={t("{{title}}. Runs AI implementation with this node as the anchor. Gaia still reads related graph context, but prioritizes this node's stage, notes, acceptance criteria, artifacts, and connected edges.", { title: gaiaAgent.title })}>
+                  <HelpCircle size={14} className="hint-icon" aria-label={t("Node-scoped AI help")} />
                 </Tooltip>
               </div>
               <div className="action-grid">
@@ -3457,10 +3425,10 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                   type="button"
                   variant="primary"
                   title={runChangeBlocked
-                    ? "A run is already active or waiting for review."
+                    ? t("A run is already active or waiting for review.")
                     : buildCommand
                       ? `Ask the LLM to plan, code, test, and verify from this node with: ${buildCommand}`
-                      : "Ask the LLM to plan, code, and identify the right tests/verification from this node. No project verification command is configured yet."}
+                      : t("Ask the LLM to plan, code, and identify the right tests/verification from this node. No project verification command is configured yet.")}
                   disabled={runChangeBlocked}
                   onClick={() => runAgent({
                     nodeId: node.id,
@@ -3470,17 +3438,17 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                   })}
                 >
                   <Sparkles size={16} />
-                  <span>AI Implement</span>
+                  <span>{t("AI Implement")}</span>
                 </Button>
               </div>
             </div>
             <div className="record-list">
-              {nodeRuns.length === 0 ? <EmptyState title="No node runs">Use AI Implement to ask Gaia for a node-scoped run.</EmptyState> : null}
+              {nodeRuns.length === 0 ? <EmptyState title={t("No node runs")}>{t("Use AI Implement to ask Gaia for a node-scoped run.")}</EmptyState> : null}
               {nodeRuns.map((run) => (
                 <article key={run.id} className="record-card">
                   <StatusPill tone={statusTone(run.status)}>{run.status}</StatusPill>
                   <strong>{run.promptSummary}</strong>
-                  <small>{new Date(run.createdAt).toLocaleString()}</small>
+                  <small>{formatDateTime(new Date(run.createdAt))}</small>
                   {run.runInstructions ? <p>{run.runInstructions}</p> : null}
                 </article>
               ))}
@@ -3492,9 +3460,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
           <ScrollArea className="inspector-scroll">
             <div className="record-list">
               {nodeArtifacts.length === 0 ? (
-                <EmptyState icon={<FileArchive size={20} />} title="No node artifacts">
-                  Logs, diffs, summaries, screenshots, and attachments linked to this node will appear here.
-                </EmptyState>
+                <EmptyState icon={<FileArchive size={20} />} title={t("No node artifacts")}>{t("{{value1}} {{value2}}", { value1: t("Logs, diffs, summaries, screenshots, and attachments linked to this node will appear here."), value2: " " })}</EmptyState>
               ) : null}
               {nodeArtifacts.map((artifact) => (
                 <article key={artifact.id} className="record-card">
@@ -3520,19 +3486,19 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                 >
                   <ChevronRight size={15} />
                   <BrainCircuit size={16} />
-                  <span>Semantic context</span>
+                  <span>{t("Semantic context")}</span>
                   {semanticContext ? (
                     <Badge tone={semanticContextHasData ? "success" : semanticContext.state === "stale" ? "warning" : semanticContext.state === "error" || semanticContext.state === "unavailable" ? "danger" : "neutral"}>
-                      {semanticContextHasData ? "available" : semanticContext.state.replace("-", " ")}
+                      {semanticContextHasData ? t("available") : semanticContext.state.replace("-", " ")}
                     </Badge>
                   ) : null}
                 </button>
-                <Tooltip content="Local cached meaning matches. Similarity suggests useful context, not a proven code dependency, implementation claim, or graph edge.">
-                  <HelpCircle size={14} className="hint-icon" aria-label="Semantic context help" />
+                <Tooltip content={t("Local cached meaning matches. Similarity suggests useful context, not a proven code dependency, implementation claim, or graph edge.")}>
+                  <HelpCircle size={14} className="hint-icon" aria-label={t("Semantic context help")} />
                 </Tooltip>
                 {semanticContextExpanded ? (
                   <IconButton
-                    title="Refresh semantic matches"
+                    title={t("Refresh semantic matches")}
                     size="sm"
                     disabled={semanticContextBusy || !bundle.project.settings.semanticIndex.enabled}
                     onClick={() => void loadSemanticContext(true)}
@@ -3541,40 +3507,40 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                   </IconButton>
                 ) : null}
               </div>
-              {semanticContextExpanded ? <p className="debug-guidance">Local-only advisory matches from the semantic cache. They are never saved into the graph or committed to Git.</p> : null}
+              {semanticContextExpanded ? <p className="debug-guidance">{t("Local-only advisory matches from the semantic cache. They are never saved into the graph or committed to Git.")}</p> : null}
               {semanticContextExpanded && !bundle.project.settings.semanticIndex.enabled ? (
-                <div className="meta-grid"><small>Enable local semantic indexing in Settings → Advanced to see meaning-based context.</small></div>
+                <div className="meta-grid"><small>{t("Enable local semantic indexing in Settings → Advanced to see meaning-based context.")}</small></div>
               ) : semanticContextExpanded && semanticContextError ? (
                 <div className="meta-grid"><small>{semanticContextError}</small></div>
               ) : semanticContextExpanded && semanticContextBusy && !semanticContext ? (
-                <div className="semantic-context-loading"><Loader2 size={14} className="spin" /><small>Reading local semantic context…</small></div>
+                <div className="semantic-context-loading"><Loader2 size={14} className="spin" /><small>{t("Reading local semantic context…")}</small></div>
               ) : semanticContextExpanded && semanticContext ? (
                 <div className="semantic-context-body">
                   <div className="meta-grid semantic-context-meta">
                     {!semanticContextHasData ? <small>{semanticContext.message}</small> : null}
-                    <small>Model: {semanticContext.modelId}</small>
-                    <small>Cached: {semanticContext.updatedAt ? new Date(semanticContext.updatedAt).toLocaleString() : "not yet"}</small>
+                    <small>{t("Model: {{modelId}}", { modelId: semanticContext.modelId })}</small>
+                    <small>{t("Cached: {{value1}}", { value1: semanticContext.updatedAt ? formatDateTime(new Date(semanticContext.updatedAt)) : "not yet" })}</small>
                   </div>
                   <div className="semantic-context-group">
-                    <div className="semantic-context-group-head"><strong>Related graph nodes</strong><small>{semanticContext.relatedNodes.length}</small></div>
+                    <div className="semantic-context-group-head"><strong>{t("Related graph nodes")}</strong><small>{semanticContext.relatedNodes.length}</small></div>
                     {semanticContext.relatedNodes.length ? semanticContext.relatedNodes.map((match) => (
                       <button
                         key={`${match.flowId}:${match.nodeId}`}
                         type="button"
                         className="semantic-context-match semantic-context-node-match"
-                        title={`Open ${match.title}`}
+                        title={t("Open {{title}}", { title: match.title })}
                         onClick={() => {
                           if (match.flowId !== flow.id) setActiveFlow(match.flowId);
                           selectNodes([match.nodeId], match.nodeId);
                         }}
                       >
-                        <div><strong>{match.title}</strong><small>{match.flowId === flow.id ? "This flow" : `Flow: ${match.flowId}`}</small></div>
-                        <Badge>{Math.round(match.score * 100)}% match</Badge>
+                        <div><strong>{match.title}</strong><small>{match.flowId === flow.id ? t("This flow") : t("Flow: {{flowId}}", { flowId: match.flowId })}</small></div>
+                        <Badge>{t("{{value1}}% match", { value1: Math.round(match.score * 100) })}</Badge>
                       </button>
-                    )) : <small>No strong graph-node matches are cached.</small>}
+                    )) : <small>{t("No strong graph-node matches are cached.")}</small>}
                   </div>
                   <div className="semantic-context-group">
-                    <div className="semantic-context-group-head"><strong>Possible semantic matches</strong><small>{semanticContext.relatedCode.length}</small></div>
+                    <div className="semantic-context-group-head"><strong>{t("Possible semantic matches")}</strong><small>{semanticContext.relatedCode.length}</small></div>
                     {semanticContext.relatedCode.length ? semanticContext.relatedCode.map((match) => (
                       <button
                         key={match.path}
@@ -3590,12 +3556,12 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                           <code>{match.path}</code>
                           {match.symbol || match.startLine ? <small>{[match.symbol, match.startLine ? `lines ${match.startLine}${match.endLine && match.endLine !== match.startLine ? `–${match.endLine}` : ""}` : ""].filter(Boolean).join(" · ")}</small> : null}
                         </span>
-                        <Badge>{Math.round(match.score * 100)}% match</Badge>
+                        <Badge>{t("{{value1}}% match", { value1: Math.round(match.score * 100) })}</Badge>
                       </button>
                     )) : <small>{semanticContext.codeItems > 0
-                      ? "No indexed source-code matches cleared the similarity threshold for this node."
-                      : "No source code is indexed yet. Rebuild the Semantic Code Index in Settings → Advanced."}</small>}
-                    <small>Generated from indexed source code only; graph matches and the Architecture Lens Map do not populate this list.</small>
+                      ? t("No indexed source-code matches cleared the similarity threshold for this node.")
+                      : t("No source code is indexed yet. Rebuild the Semantic Code Index in Settings → Advanced.")}</small>}
+                    <small>{t("Generated from indexed source code only; graph matches and the Architecture Lens Map do not populate this list.")}</small>
                   </div>
                 </div>
               ) : null}
@@ -3610,11 +3576,11 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                   >
                     <ChevronRight size={15} />
                     <GitBranch size={16} />
-                    <span>Same subject across flows</span>
+                    <span>{t("Same subject across flows")}</span>
                     <Badge tone={otherSubjectAppearances.length ? "accent" : "neutral"}>{otherSubjectAppearances.length}</Badge>
                   </button>
-                  <Tooltip content="Shows the same stable subject identity when it appears in another flow. This is not semantic matching, code ownership, or a Leiden community.">
-                    <HelpCircle size={14} className="hint-icon" aria-label="Shared subject help" />
+                  <Tooltip content={t("Shows the same stable subject identity when it appears in another flow. This is not semantic matching, code ownership, or a Leiden community.")}>
+                    <HelpCircle size={14} className="hint-icon" aria-label={t("Shared subject help")} />
                   </Tooltip>
               </div>
               {subjectPerspectivesExpanded ? <div className="subject-perspective-list">
@@ -3623,19 +3589,19 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                         key={`${appearance.flow.id}:${appearance.node.id}`}
                         type="button"
                         className="subject-perspective-row"
-                        title={`Open ${appearance.flow.name}`}
+                        title={t("Open {{name}}", { name: appearance.flow.name })}
                         onClick={() => {
                           setActiveFlow(appearance.flow.id);
                           setActiveSubflow(appearance.node.subflowId ?? null);
                           selectNodes([appearance.node.id], appearance.node.id);
                         }}
                       >
-                        <span><strong>{appearance.flow.name}</strong><small>{appearance.flow.perspective?.question ?? "Evidence structure"}</small></span>
+                        <span><strong>{appearance.flow.name}</strong><small>{appearance.flow.perspective?.question ?? t("Evidence structure")}</small></span>
                         <Badge tone={appearance.flow.perspective?.confidence === "high" ? "success" : appearance.flow.perspective?.confidence === "exploratory" ? "warning" : "accent"}>
-                          {appearance.flow.perspective?.confidence ?? "evidence"}
+                          {appearance.flow.perspective?.confidence ?? t("evidence")}
                         </Badge>
                       </button>
-                )) : <small>No matching subject identity appears in another flow.</small>}
+                )) : <small>{t("No matching subject identity appears in another flow.")}</small>}
               </div> : null}
             </section>
             <section className="subpanel implementation-scope-panel">
@@ -3648,25 +3614,23 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                 >
                   <ChevronRight size={15} />
                   <FileText size={16} />
-                  <span>Implementation scope</span>
-                  <small>{implementationScope.claims.length} hint{implementationScope.claims.length === 1 ? "" : "s"}</small>
+                  <span>{t("Implementation scope")}</span>
+                  <small>{t("{{length}} hint {{value2}}", { length: implementationScope.claims.length, value2: implementationScope.claims.length === 1 ? "" : "s" })}</small>
                 </button>
-                <Tooltip content="Compact, deterministic best-effort hints inferred from code analysis. They may be incomplete, inaccurate, or stale and are not edit permissions or authoritative ownership.">
-                  <HelpCircle size={14} className="hint-icon" aria-label="Implementation scope help" />
+                <Tooltip content={t("Compact, deterministic best-effort hints inferred from code analysis. They may be incomplete, inaccurate, or stale and are not edit permissions or authoritative ownership.")}>
+                  <HelpCircle size={14} className="hint-icon" aria-label={t("Implementation scope help")} />
                 </Tooltip>
               </div>
               {implementationScopeExpanded ? (
                 <div className="implementation-scope-body">
-                  <p className="debug-guidance">
-                    Navigation hints only. Agents verify these against the current codebase before acting; missing hints mean unknown, not necessarily no implementation.
-                  </p>
+                  <p className="debug-guidance">{t("{{value1}} {{value2}}", { value1: t("Navigation hints only. Agents verify these against the current codebase before acting; missing hints mean unknown, not necessarily no implementation."), value2: " " })}</p>
                   {implementationScopeGroups.length ? (
-                    <div className="implementation-scope-groups" aria-label="Best-effort implementation scope hints">
+                    <div className="implementation-scope-groups" aria-label={t("Best-effort implementation scope hints")}>
                       {implementationScopeGroups.map((group) => (
                         <div key={group.relation} className="implementation-scope-group">
                           <div className="implementation-scope-group-head">
                             <Badge tone={implementationScopeTone[group.relation]}>{group.relation}</Badge>
-                            <small>{group.claims.length} hint{group.claims.length === 1 ? "" : "s"}</small>
+                            <small>{t("{{length}} hint {{value2}}", { length: group.claims.length, value2: group.claims.length === 1 ? "" : "s" })}</small>
                           </div>
                           <div className="implementation-scope-list">
                             {group.claims.map((claim, index) => {
@@ -3674,7 +3638,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                               const content = (
                                 <>
                                   <span className="implementation-scope-kind">{claim.kind}</span>
-                                  <code>{claim.path}{claim.symbol ? ` · ${claim.symbol}` : ""}</code>
+                                  <code>{t("{{path}} {{value2}}", { path: claim.path, value2: claim.symbol ? ` · ${claim.symbol}` : "" })}</code>
                                 </>
                               );
                               return claim.kind === "directory" ? (
@@ -3684,7 +3648,7 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                                   key={key}
                                   type="button"
                                   className="implementation-scope-row is-clickable"
-                                  title={`Open ${claim.path}`}
+                                  title={t("Open {{path}}", { path: claim.path })}
                                   onClick={() => {
                                     setWorkbenchView("files");
                                     void selectProjectFile(claim.path);
@@ -3700,34 +3664,28 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
                       ))}
                     </div>
                   ) : (
-                    <div className="meta-grid"><small>No implementation hints are available for this node.</small></div>
+                    <div className="meta-grid"><small>{t("No implementation hints are available for this node.")}</small></div>
                   )}
                   {implementationScope.source ? (
-                    <small className="implementation-scope-source">
-                      Source: {implementationScope.source.replaceAll("-", " ")}
-                      {implementationScope.analyzerVersion ? ` · analyzer v${implementationScope.analyzerVersion}` : ""}
-                      {implementationScope.updatedByRunId ? ` · run ${implementationScope.updatedByRunId}` : ""}
-                    </small>
+                    <small className="implementation-scope-source">{t("Source: {{value1}} {{value2}} {{value3}}", { value1: implementationScope.source.replaceAll("-", " "), value2: implementationScope.analyzerVersion ? ` · analyzer v${implementationScope.analyzerVersion}` : "", value3: implementationScope.updatedByRunId ? ` · run ${implementationScope.updatedByRunId}` : "" })}</small>
                   ) : null}
-                  <small className="implementation-scope-checked-at">
-                    Checked as of: {implementationScope.checkedAt ? new Date(implementationScope.checkedAt).toLocaleString() : "unknown (legacy metadata)"}
-                  </small>
+                  <small className="implementation-scope-checked-at">{t("Checked as of: {{value1}}", { value1: implementationScope.checkedAt ? formatDateTime(new Date(implementationScope.checkedAt)) : "unknown (legacy metadata)" })}</small>
                 </div>
               ) : null}
             </section>
             <section className="subpanel">
               <div className="subpanel-title">
                 <HelpCircle size={16} />
-                <span>Flags</span>
+                <span>{t("Flags")}</span>
               </div>
-              <p className="debug-guidance">Listed for debugging. Leave these flags as they are unless you are sure the harness inferred them incorrectly.</p>
-              <div className="flag-grid" aria-label="Node flags">
+              <p className="debug-guidance">{t("Listed for debugging. Leave these flags as they are unless you are sure the harness inferred them incorrectly.")}</p>
+              <div className="flag-grid" aria-label={t("Node flags")}>
                 {flags.map((flag) => (
                   <label key={flag} className="check-row">
                     <input type="checkbox" checked={node.flags.includes(flag)} onChange={() => toggleFlag(flag)} />
                     <span>{flag}</span>
                     <Tooltip content={flagTooltips[flag]}>
-                      <HelpCircle size={14} className="hint-icon" aria-label={`${flag} help`} />
+                      <HelpCircle size={14} className="hint-icon" aria-label={t("{{flag}} help", { flag: flag })} />
                     </Tooltip>
                   </label>
                 ))}
@@ -3736,13 +3694,13 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
             <section className="subpanel">
               <div className="subpanel-title">
                 <HelpCircle size={16} />
-                <span>Internal todos</span>
-                <Tooltip content="Node-scoped work items used by the harness and LLM runs.">
-                  <HelpCircle size={14} className="hint-icon" aria-label="Internal todos help" />
+                <span>{t("Internal todos")}</span>
+                <Tooltip content={t("Node-scoped work items used by the harness and LLM runs.")}>
+                  <HelpCircle size={14} className="hint-icon" aria-label={t("Internal todos help")} />
                 </Tooltip>
               </div>
               <div className="todo-list">
-                {node.todos.length === 0 ? <small>No node todos yet.</small> : null}
+                {node.todos.length === 0 ? <small>{t("No node todos yet.")}</small> : null}
                 {node.todos.map((todo) => (
                   <label key={todo.id} className="check-row">
                     <input
@@ -3761,17 +3719,17 @@ export function NodeInspector({ panelAction }: { panelAction?: ReactNode }) {
             <section className="subpanel">
               <div className="subpanel-title">
                 <HelpCircle size={16} />
-                <span>Graph state</span>
-                <Tooltip content="Readable node metadata. The full JSON still lives in the project files for LLM clarity.">
-                  <HelpCircle size={14} className="hint-icon" aria-label="Graph state help" />
+                <span>{t("Graph state")}</span>
+                <Tooltip content={t("Readable node metadata. The full JSON still lives in the project files for LLM clarity.")}>
+                  <HelpCircle size={14} className="hint-icon" aria-label={t("Graph state help")} />
                 </Tooltip>
               </div>
               <div className="meta-grid">
-                <small>ID: {node.id}</small>
-                <small>Type: {node.type}</small>
-                <small>Locked: {node.locked ? "yes" : "no"}</small>
-                <small>Position: {Math.round(node.position.x)}, {Math.round(node.position.y)}</small>
-                <small>Attachments: {node.attachments.length ? node.attachments.length : "none"}</small>
+                <small>{t("ID: {{id}}", { id: node.id })}</small>
+                <small>{t("Type: {{type}}", { type: node.type })}</small>
+                <small>{t("Locked: {{value1}}", { value1: node.locked ? "yes" : "no" })}</small>
+                <small>{t("Position: {{value1}}, {{value2}}", { value1: Math.round(node.position.x), value2: Math.round(node.position.y) })}</small>
+                <small>{t("Attachments: {{value1}}", { value1: node.attachments.length ? node.attachments.length : "none" })}</small>
               </div>
             </section>
           </ScrollArea>

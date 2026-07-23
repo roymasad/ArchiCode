@@ -54,8 +54,8 @@ describe("renderer UI system", () => {
     const toolbar = readProjectToolbarSource();
     const identities = readFileSync(resolve(repoRoot, "src/shared/agentIdentities.ts"), "utf8");
 
-    expect(toolbar).toContain("<span>AI Implement</span>");
-    expect(toolbar).toContain("<span>AI Debug</span>");
+    expect(toolbar).toContain('<span>{t("AI Implement")}</span>');
+    expect(toolbar).toContain('<span>{t("AI Debug")}</span>');
     expect(toolbar).toContain("gaiaAgent.title");
     expect(toolbar).toContain("pandoraAgent.title");
     expect(identities).toContain('title: "Gaia — Build & Implementation"');
@@ -65,8 +65,8 @@ describe("renderer UI system", () => {
   it("disables AI Debug while an implementation or other blocking AI run is active", () => {
     const toolbar = readProjectToolbarSource();
     const debugTrigger = toolbar.slice(
-      toolbar.indexOf('aria-label="AI Debug"') - 160,
-      toolbar.indexOf('aria-label="AI Debug"') + 240
+      toolbar.indexOf('aria-label={t("AI Debug")}') - 160,
+      toolbar.indexOf('aria-label={t("AI Debug")}') + 240
     );
 
     expect(toolbar).toContain("bundle?.runs.some(isRunBlockingNewChange)");
@@ -128,7 +128,7 @@ describe("renderer UI system", () => {
     const prompt = readFileSync(resolve(repoRoot, "src/renderer/src/utils/logicReview.ts"), "utf8");
 
     expect(toolbar).toContain("Review flow logic…");
-    expect(toolbar).toContain('title="Review flow logic"');
+    expect(toolbar).toContain('title={t("Review flow logic")}');
     expect(toolbar).toContain("Current flow");
     expect(toolbar).toContain("All project flows");
     expect(toolbar).toContain("startScopedResearchChat(scope, buildLogicReviewPrompt(target))");
@@ -145,7 +145,7 @@ describe("renderer UI system", () => {
     const runConsole = readFileSync(resolve(repoRoot, "src/renderer/src/components/RunConsole.tsx"), "utf8");
     const artifactBrowser = readFileSync(resolve(repoRoot, "src/renderer/src/components/ArtifactBrowser.tsx"), "utf8");
 
-    expect(toolbar).toContain("<SearchCheck size={15} /> Review flow logic…");
+    expect(toolbar).toContain('t("Review flow logic…")');
     expect(canvas).toContain("Explain Selected Nodes");
     expect(canvas).toContain("explainNodesPrompt(nodes, flow!.name)");
     expect(canvas).toContain("explainPolicyViolationsPrompt(violations, preferredNode?.title)");
@@ -388,11 +388,11 @@ describe("renderer UI system", () => {
     expect(canvas).toContain("event.stopPropagation();");
     expect(app).toContain("window.archicode?.onDirectUndoRequested");
     expect(app).toContain("function ExpandableBanner");
-    expect(app).toContain("detailsTitle={`${appNotice.title} details`}");
+    expect(app).toContain('detailsTitle={t("{{title}} details", { title: appNotice.title })}');
     expect(app).toContain("dismissAppNotice");
     expect(preload).toContain("onDirectUndoRequested");
     expect(preload).toContain("archicode:direct-undo-requested");
-    expect(main).toContain('label: "Undo"');
+    expect(main).toContain('label: tMain("menu.undo")');
     expect(main).toContain('accelerator: "CmdOrCtrl+Z"');
     expect(main).toContain('webContents.send("archicode:direct-undo-requested")');
     expect(main).toContain('webContents.send("archicode:direct-redo-requested")');
@@ -505,7 +505,7 @@ describe("renderer UI system", () => {
     expect(panel).toContain("researchPendingAttachmentPaths[message.id]");
     expect(panel).toContain("pendingTextAttachmentNames");
     expect(panel).toContain("attachmentFileName");
-    expect(panel).toContain('aria-label="Text document attachments"');
+    expect(panel).toContain('aria-label={t("Text document attachments")}');
     expect(css).toContain(".research-message-thinking-draft");
     expect(css).toContain(".research-message-thinking-draft .research-markdown");
     expect(css).toContain(".research-message-image-thumb");
@@ -519,8 +519,8 @@ describe("renderer UI system", () => {
     expect(panel).toContain('RESEARCH_RULES_TOOL_NAME = "archicode_project_manage_rules"');
     expect(panel).toContain("Review exact proposed change");
     expect(panel).toContain("This approval applies only to this exact change");
-    expect(panel).toContain('ruleApproval ? "Approve change" : "Approve"');
-    expect(panel).toContain('ruleApproval ? "Rule change requires approval"');
+    expect(panel).toContain('ruleApproval ? t("Approve change") : t("Approve")');
+    expect(panel).toContain('ruleApproval ? t("Rule change requires approval")');
     expect(panel).toContain("ruleApproval ? (");
     expect(panel).toContain('className="research-mcp-remember"');
     expect(css).toContain(".research-mcp-request.is-rule-change");
@@ -580,9 +580,9 @@ describe("renderer UI system", () => {
     const css = readFileSync(resolve(repoRoot, "src/renderer/src/styles/app.css"), "utf8");
 
     expect(panel).toContain('useState<"all" | "scope">("all")');
-    expect(panel).toContain('aria-label="Chat history filter"');
-    expect(panel).toContain("<span>All</span>");
-    expect(panel).toContain('<span>{focusMode ? "Scope" : "This scope"}</span>');
+    expect(panel).toContain('aria-label={t("Chat history filter")}');
+    expect(panel).toContain('<span>{t("All")}</span>');
+    expect(panel).toContain('<span>{focusMode ? t("Scope") : t("This scope")}</span>');
     expect(panel).toContain("visibleHistoryChats");
     expect(panel).not.toContain("Parent scopes");
     expect(panel).not.toContain("Other recent");
@@ -600,9 +600,9 @@ describe("renderer UI system", () => {
     );
 
     expect(panel).toContain("function ResearchScopeIcon");
-    expect(panel).toContain("<Tooltip content={`Scope : ${currentScopeLabel}`}>");
+    expect(panel).toContain('content={t("Scope: {{currentScopeLabel}}", { currentScopeLabel: currentScopeLabel })}');
     expect(panel).toContain("<ResearchScopeIcon scope={scope} />");
-    expect(panel).toContain("aria-label={`Current chat scope: ${currentScopeLabel}`}");
+    expect(panel).toContain('aria-label={t("Current chat scope: {{currentScopeLabel}}", { currentScopeLabel: currentScopeLabel })}');
     expect(panel).not.toContain("compactScopeLabel");
     expect(css).toContain(".research-scope-badge {");
     expect(css).toContain("flex: 0 0 28px;");
@@ -628,11 +628,11 @@ describe("renderer UI system", () => {
     expect(panel).toContain("onArchive={requestResearchChatArchive}");
     expect(panel).toContain("setArchiveConfirmationSessionId(sessionId)");
     expect(panel).toContain("DialogRoot open={Boolean(archiveConfirmationSession)}");
-    expect(panel).toContain('title="Archive this chat?"');
+    expect(panel).toContain('title={t("Archive this chat?")}');
     expect(panel).toContain("The chat will no longer appear in All or Scope history.");
     expect(panel).toContain("await archiveResearchChat(archiveConfirmationSessionId)");
-    expect(panel).toContain("<span>Archive chat</span>");
-    expect(panel).toContain(">Cancel</Button>");
+    expect(panel).toContain('<span>{t("Archive chat")}</span>');
+    expect(panel).toContain('{t("Cancel")}</Button>');
   });
 
   it("keeps top-level app errors visible with details and dismiss controls", () => {
@@ -645,8 +645,8 @@ describe("renderer UI system", () => {
     expect(app).toContain("messageOverflowing");
     expect(app).toContain("validation-bar-message");
     expect(app).toContain("ResizeObserver");
-    expect(app).toContain("<span>Details</span>");
-    expect(app).toContain("<span>Dismiss</span>");
+    expect(app).toContain('<span>{t("Details")}</span>');
+    expect(app).toContain('<span>{t("Dismiss")}</span>');
     expect(css).toContain(".validation-bar-actions");
     expect(css).toContain(".validation-bar-message");
     expect(css).toContain("-webkit-line-clamp: 2");
@@ -667,7 +667,8 @@ describe("renderer UI system", () => {
     expect(toolbar).not.toContain('TabsTrigger value="app"');
     expect(toolbar).toContain("pickCodeIdeApplication");
     expect(toolbar).toContain("installedCodeIdeApplications");
-    expect(toolbar).toContain("Open in {selectedCodeIdeLabel}");
+    expect(toolbar).toContain('t("Open in")');
+    expect(toolbar).toContain("{selectedCodeIdeLabel}");
     expect(toolbar).toContain("openProjectInCodeIde");
     expect(store).toContain("openProjectInCodeIde");
     expect(preload).toContain("archicode:open-project-in-code-ide");
@@ -801,14 +802,14 @@ describe("renderer UI system", () => {
     expect(toolbar).toContain('solomon: "Solomon — Merge resolution"');
     expect(toolbar).toContain("enabledProvider.subagentModelPolicies?.[profile]");
     expect(toolbar).toContain("phaseProfileDescriptions[phase]");
-    expect(toolbar).toContain('title: "Archi — Research Chat"');
+    expect(toolbar).toContain('title: t("Archi — Research Chat")');
     expect(toolbar).toContain("title: gaiaAgent.title");
     expect(toolbar).toContain("title: pandoraAgent.title");
-    expect(toolbar).toContain('title: "System tasks"');
-    expect(toolbar).toContain('{ phase: "coding", label: "Implementation / Coding" }');
-    expect(toolbar).toContain('{ phase: "review", label: "Build/runtime review" }');
-    expect(toolbar).toContain('{ phase: "verifying", label: "Verification" }');
-    expect(toolbar).toContain('{ phase: "summarizing", label: "Context summary" }');
+    expect(toolbar).toContain('title: t("System tasks")');
+    expect(toolbar).toContain('{ phase: "coding", label: t("Implementation / Coding") }');
+    expect(toolbar).toContain('{ phase: "review", label: t("Build/runtime review") }');
+    expect(toolbar).toContain('{ phase: "verifying", label: t("Verification") }');
+    expect(toolbar).toContain('{ phase: "summarizing", label: t("Context summary") }');
     expect(toolbar).toContain("llm-profile-group-grid");
     expect(toolbar).toContain("llm-profile-card-help");
     expect(toolbar).toContain("<HelpCircle size={14}");
@@ -831,8 +832,8 @@ describe("renderer UI system", () => {
     expect(globalSetup).toContain("<ModelCombobox");
     expect(toolbar).toContain("catalogMode={provider.detectedAvailableModels.length > 0}");
     expect(globalSetup).toContain("catalogMode={provider.detectedAvailableModels.length > 0}");
-    expect(picker).toContain('placeholder={catalogMode && open ? "Search models…" : placeholder}');
-    expect(picker).toContain("Showing {visibleOptions.length} of {filteredOptions.length} matches");
+    expect(picker).toContain('placeholder={catalogMode && open ? t("Search models…") : placeholder}');
+    expect(picker).toContain('t("Showing {{length}} of {{length2}} matches. Keep typing to narrow the list."');
     expect(picker).toContain('event.key === "ArrowUp"');
     expect(picker).toContain('event.key === "Enter"');
     expect(picker).toContain("event.preventDefault();");
@@ -875,7 +876,8 @@ describe("renderer UI system", () => {
     expect(toolbar).toContain("toolbarActionsRef");
     expect(toolbar).toContain("scrollToolbarHorizontally");
     expect(toolbar).toContain("target.scrollLeft + event.deltaY");
-    expect(toolbar).toContain("onWheel={scrollToolbarHorizontally}");
+    expect(toolbar).toContain('target.addEventListener("wheel", scrollToolbarHorizontally, { passive: false })');
+    expect(toolbar).not.toContain("onWheel={scrollToolbarHorizontally}");
     expect(ui).toContain("forwardRef<HTMLDivElement");
     expect(ui).toContain('type = "button"');
     expect(css).toContain("flex-wrap: nowrap");
@@ -908,7 +910,7 @@ describe("renderer UI system", () => {
     const storage = readFileSync(resolve(repoRoot, "src/main/storage/runEngine.ts"), "utf8");
     const css = readFileSync(resolve(repoRoot, "src/renderer/src/styles/app.css"), "utf8");
 
-    expect(trace).toContain('placeholder="Search trace"');
+    expect(trace).toContain('placeholder={t("Search trace")}');
     expect(trace).toContain("run-trace-search");
     expect(trace).toContain('"Show all"');
     expect(trace).toContain('"Clear"');
@@ -922,13 +924,13 @@ describe("renderer UI system", () => {
     expect(consolePanel).toContain("Open Plan");
     expect(consolePanel).toContain("Open Prompt");
     expect(consolePanel).toContain("selected.planArtifactIds.length");
-    expect(consolePanel).toContain('selectedHasGeneratedPlan ? "Open Plan" : "Open Prompt"');
+    expect(consolePanel).toContain('selectedHasGeneratedPlan ? t("Open Plan") : t("Open Prompt")');
     expect(consolePanel).toContain('selected.status === "awaiting-plan-review" && !selectedOpenQuestionCount');
     expect(consolePanel).toContain("run-review-document");
     expect(consolePanel).toContain("Plan awaiting approval");
     expect(consolePanel).toContain("runPlanText");
     expect(consolePanel).toContain("const selectedPromptText = selected ? runSummary(selected, runs) : null;");
-    expect(consolePanel).toContain('<b className="run-label-success">Status</b>');
+    expect(consolePanel).toContain('<b className="run-label-success">{t("Status")}</b>');
     expect(consolePanel).toContain("Open Source Changes");
     expect(consolePanel).not.toContain("Review Source Proposal");
     expect(css).toContain(".run-trace-column-guides");
@@ -941,12 +943,14 @@ describe("renderer UI system", () => {
     expect(runStages).toContain("verificationRunning");
     expect(consolePanel).toContain("Implementation history");
     expect(consolePanel).toContain("historical batch/task snapshot");
-    expect(consolePanel).toContain('batch${visibleBatch === 1 ? "" : "es"} used');
+    expect(consolePanel).toContain('"run.implementation.batchUsed"');
+    expect(consolePanel).toContain('"run.implementation.batchesUsed"');
+    expect(consolePanel).toContain('"run.implementation.tasksDone"');
     expect(consolePanel).toContain("function implementationFallbackReason");
     expect(consolePanel).toContain("function implementationFallbackSummary");
     expect(consolePanel).toContain("run.implementation?.fallbackReason");
     expect(consolePanel).toContain("Completed with planning fallback");
-    expect(consolePanel).toContain('planningFallback ? "fallback"');
+    expect(consolePanel).toContain('planningFallback ? t("fallback")');
     expect(consolePanel).toContain("Planning produced no explicit task split after refinement");
     expect(storage).toContain("Planning produced no explicit task split after refinement");
     expect(runStages).toContain('run.status === "running"');
@@ -960,8 +964,8 @@ describe("renderer UI system", () => {
     expect(consolePanel).toContain("Run Debug");
     expect(css).toContain(".run-guidance-heading-actions");
     expect(css).toContain(".run-stage");
-    expect(runStages).toContain('label: "Plan review"');
-    expect(runStages).toContain('label: "Code review"');
+    expect(runStages).toContain('label: t("Plan review")');
+    expect(runStages).toContain('label: t("Code review")');
     expect(css).toContain("grid-template-rows: auto auto");
     expect(css).toContain("white-space: nowrap");
     expect(consolePanel).not.toContain("Retry Now");
@@ -990,7 +994,7 @@ describe("renderer UI system", () => {
     const consolePanel = readFileSync(resolve(repoRoot, "src/renderer/src/components/RunConsole.tsx"), "utf8");
     const researchPanel = readFileSync(resolve(repoRoot, "src/renderer/src/components/ResearchPanel.tsx"), "utf8");
 
-    expect(consolePanel).toContain('if (run.runProfileId) return "Run App"');
+    expect(consolePanel).toContain('if (run.runProfileId) return t("Run App")');
     expect(consolePanel).toContain("selected.runProfileId");
     expect(consolePanel).toContain("runAppStage(selected)");
     expect(researchPanel).toContain("const runAppRuns = recentRuns.filter((run) => Boolean(run.runProfileId))");
@@ -1056,7 +1060,7 @@ describe("renderer UI system", () => {
     expect(consolePanel).toContain("function hasBenignNoSourceChanges");
     expect(consolePanel).toContain("function hasProblemNoSourceChanges");
     expect(runStages).toContain('codingNoopBenign ? "success"');
-    expect(consolePanel).toContain("hasProblemNoSourceChanges(run)) return \"No code changes\"");
+    expect(consolePanel).toContain('hasProblemNoSourceChanges(run)) return t("No code changes")');
     expect(consolePanel).toContain("hasProblemNoSourceChanges(run)) return \"danger\"");
     expect(runStages).not.toContain('hasNoSourceChanges(run)) return "danger"');
   });
@@ -1076,7 +1080,7 @@ describe("renderer UI system", () => {
     expect(activity).toContain("replyToNoteId: question.id");
     expect(activity).toContain("archicode:focus-note");
     expect(activity).toContain("<Badge tone=\"warning\">{openQuestions.length}</Badge>");
-    expect(activity).toContain('placeholder="Answer this question"');
+    expect(activity).toContain('placeholder={t("Answer this question")}');
     expect(consolePanel).toContain("openQuestionsForRun");
     expect(consolePanel).toContain("Open Questions");
     expect(consolePanel).toContain("approvalLabel(selected)");
@@ -1095,7 +1099,7 @@ describe("renderer UI system", () => {
     expect(inspector).not.toContain("updateNoteResolved(answer.id");
     expect(inspector).toContain("Dismiss");
     expect(inspector).toContain("data-note-id");
-    expect(inspector).toContain('placeholder="Answer this question"');
+    expect(inspector).toContain('placeholder={t("Answer this question")}');
     expect(css).toContain(".question-record-list");
     expect(css).toContain(".note-thread-answers");
     expect(css).toContain(".note-thread-answer");
@@ -1210,7 +1214,7 @@ describe("renderer UI system", () => {
     expect(panel).toContain("researchRevealSubmittedMessageRef");
     expect(panel).toContain("researchRevealSubmittedMessageRef.current = !researchBusy");
     expect(panel).toContain("viewport && researchRevealSubmittedMessageRef.current");
-    expect(panel).toContain("<span>More</span>");
+    expect(panel).toContain('<span>{t("More")}</span>');
     expect(panel).toContain("researchManualScrollHoldRef");
     expect(panel).toContain('viewport.addEventListener("wheel", holdAutoFollowOnWheel');
     expect(panel).toContain('viewport.addEventListener("touchmove", holdAutoFollow');
@@ -1220,7 +1224,7 @@ describe("renderer UI system", () => {
     expect(panel).not.toContain("researchScrollFollowRef.current = atBottom");
     expect(panel).toContain("successfulSubagentBatchCount");
     expect(panel).toContain("research-subagent-batch-count");
-    expect(panel).toContain("B{successfulBatchCount}");
+    expect(panel).toContain('t("B {{successfulBatchCount}}"');
     expect(panel).toContain("copiedSubagentRunId");
     expect(panel).toContain("Copy full subagent log");
     expect(panel).toContain('progressLines.join("\\n")');
@@ -1234,17 +1238,17 @@ describe("renderer UI system", () => {
     expect(panel).toContain("inspection pending");
     expect(panel).toContain("safety-classified medium-risk Chat commands");
     expect(panel).toContain("imageArtifacts.slice(-4)");
-    expect(panel).toContain('expanded ? "Show less" : `Show all ${imageArtifacts.length}`');
+    expect(panel).toContain('expanded ? t("Show less") : t("Show all {{length}}"');
     expect(panel).toContain("IntersectionObserver");
     expect(panel).toContain('loading="lazy"');
     expect(panel).toContain('imageInputSupport === "supported" && runStatus === "running"');
     expect(panel).toContain("imageInputSupport={run.imageInputSupport}");
     expect(panel).toContain("visuallyAnalyzedArtifactIds");
-    expect(panel).toContain('Create node "${operation.node.title}" in subflow');
-    expect(panel).toContain('Create node "${operation.node.title}" on root flow');
+    expect(panel).toContain('t("Create node \\"{{name}}\\" in subflow \\"{{subflow}}\\""');
+    expect(panel).toContain('t("Create node \\"{{name}}\\" on root flow"');
     expect(panel).toContain("flowTitleMap");
     expect(panel).toContain('operation.kind === "update-flow" && operation.patch.name?.trim()');
-    expect(panel).toContain('Update flow "${flowTitleLabel(operation.flowId, flowTitles)}"');
+    expect(panel).toContain('t("Update flow \\"{{name}}\\""');
     expect(panel).toContain("subflowTitleMap");
     expect(picasso).toContain("every child create-node operation must keep flowId set to the containing top-level flow id");
     expect(picasso).toContain("Never put a subflow id in operation.flowId");
@@ -1288,7 +1292,8 @@ describe("renderer UI system", () => {
   it("translates mouse-wheel input into horizontal activity-tab scrolling", () => {
     const settingsAndRuns = readFileSync(resolve(repoRoot, "src/renderer/src/components/SettingsAndRuns.tsx"), "utf8");
 
-    expect(settingsAndRuns).toContain("onWheel={scrollActivityTabs}");
+    expect(settingsAndRuns).toContain('tabList.addEventListener("wheel", scrollActivityTabs, { passive: false })');
+    expect(settingsAndRuns).not.toContain("onWheel={scrollActivityTabs}");
     expect(settingsAndRuns).toContain("tabList.scrollLeft + delta");
     expect(settingsAndRuns).toContain("event.preventDefault()");
   });
@@ -1383,7 +1388,7 @@ describe("renderer UI system", () => {
 
     expect(app).toContain('className={["app-shell", chatFocusActive ? "chat-focus-mode" : ""');
     expect(app).toContain("chatFocusMode={chatFocusActive}");
-    expect(panel).toContain('title={focusMode ? "Exit chat focus mode" : "Enter chat focus mode"}');
+    expect(panel).toContain('title={focusMode ? t("Exit chat focus mode") : t("Enter chat focus mode")}');
     expect(panel).toContain("focusMode ? <Minimize2 size={15} /> : <Maximize2 size={15} />");
     expect(panel).toContain('className="research-focus-history"');
     expect(panel).toContain("focusMode ? (focusHistoryOpen ? <PanelLeftClose");
@@ -1434,7 +1439,7 @@ describe("renderer UI system", () => {
 
     expect(canvas).toContain("onToggleFocusMode={toggleFocusMode}");
     expect(canvas3d).toContain('className="flow-3d-corner-controls"');
-    expect(canvas3d).toContain('aria-label="Toggle full screen mode"');
+    expect(canvas3d).toContain('aria-label={t("Toggle full screen mode")}');
   });
 
   it("prompts users to zoom in while nodes are rendered as overview capsules", () => {
@@ -1455,7 +1460,7 @@ describe("renderer UI system", () => {
     const toolbar = readFileSync(resolve(repoRoot, "src/renderer/src/components/ProjectToolbar.tsx"), "utf8");
 
     expect(toolbar).toContain("onSelect={() => setCleanLayoutConfirmOpen(true)}");
-    expect(toolbar).toContain('title="Clean this layout?"');
+    expect(toolbar).toContain('title={t("Clean this layout?")}');
     expect(toolbar).toContain("Existing node positions will be overwritten. You can undo this layout change with Cmd/Ctrl+Z.");
     expect(toolbar).toContain("setCleanLayoutConfirmOpen(false);\n                void autoLayout();");
   });
@@ -1620,7 +1625,7 @@ describe("renderer UI system", () => {
     expect(canvas).toContain("const toggleCanvas3d = useCallback");
     expect(canvas).toContain("if (canvas3dVisible) return;");
     expect(canvas).toContain('className={`canvas-3d-toggle${canvas3dVisible ? " is-active" : ""}`}');
-    expect(canvas).toContain('title={canvas3dVisible ? "Show editable 2D canvas" : "Show read-only 3D flow"}');
+    expect(canvas).toContain('title={canvas3dVisible ? t("Show editable 2D canvas") : t("Show read-only 3D flow")}');
     expect(canvas).toContain("const canvas3dFocusedNodeId = selectedNodeIds.length > 1 ? null : selectedNodeIds[0] ?? selectedNodeId ?? null");
     expect(canvas).toContain("const selectNodeIn3d = useCallback");
     expect(canvas).toContain("setActiveSubflow(targetSubflowId)");
@@ -1635,6 +1640,8 @@ describe("renderer UI system", () => {
     expect(threeDView).toContain("node.visual.backgroundColor ? colorFromHex(node.visual.backgroundColor, 0.96) : null");
     expect(threeDView).toContain("const floorPadding = 120");
     expect(threeDView).toContain("const layerFloorBounds = Array.from");
+    expect(threeDView).toContain('canvas.addEventListener("wheel", moveCameraOnWheel, { passive: false })');
+    expect(threeDView).not.toContain("onWheel={(event)");
     expect(threeDView).toContain("const layerNodes = nodes.filter((node) => node.layer === layer)");
     expect(threeDView).toContain("node.x - node.width / 2");
     expect(threeDView).toContain("const layerFill: [number, number, number, number] = [0, 0.38, 0.24, 0.05]");
@@ -1686,7 +1693,7 @@ describe("renderer UI system", () => {
     expect(threeDView).toContain("focusScope(scope)");
     expect(threeDView).toContain("cameraLookingAt(scope.focusPoint, scope.focusRadius, false)");
     expect(threeDView).toContain("onSelectScope?.(scope.scopeId)");
-    expect(threeDView).toContain('scope.isRoot ? "FLOW" : `L${scope.depth}`');
+    expect(threeDView).toContain('scope.isRoot ? t("FLOW") : t("L {{depth}}"');
     expect(threeDView).toContain('"--flow-scope-hue": scope.hue');
     expect(threeDView).toContain("const activeHierarchyGlow:");
     expect(threeDView).toContain("const activeHierarchyCore:");
@@ -1705,7 +1712,7 @@ describe("renderer UI system", () => {
     expect(threeDView).toContain('keysRef.current.has("control") || keysRef.current.has("meta")');
     expect(threeDView).toContain("normalize(cross(forward, [0, 1, 0]))");
     expect(threeDView).toContain("onPointerMove");
-    expect(threeDView).toContain("onWheel");
+    expect(threeDView).toContain('addEventListener("wheel", moveCameraOnWheel, { passive: false })');
     expect(css).toContain(".canvas-3d-toggle");
     expect(css).toContain("top: 52px;");
     expect(css).toContain(".flow-3d-view");
@@ -1956,8 +1963,10 @@ describe("renderer UI system", () => {
     expect(panel).not.toContain("MutationObserver");
     expect(css).toContain("@container (max-width: 107px)");
     expect(css).toContain(".research-auto-approve-fit .ui-switch-row > span");
+    expect(css).toContain("max-width: 136px;");
+    expect(css).toContain("-webkit-line-clamp: 2;");
     expect(panel).toContain("delphiArgs.objective || run.subtitle");
-    expect(panel).toContain('summaryExpanded ? "Show less" : "Show more"');
+    expect(panel).toContain('summaryExpanded ? t("Show less") : t("Show more")');
     expect(css).toContain(".research-subagent-summary:not(.is-expanded) small");
     expect(panel).toContain("isTimeoutFailureMessage");
     expect(panel).toContain('displayStatus === "timed-out" ? "Timed out"');
@@ -2055,7 +2064,7 @@ describe("renderer UI system", () => {
     expect(panel).toContain("research-recording-send");
     expect(panel).toContain("research-recording-done");
     expect(panel).toContain('stopSpeechRecording("send")');
-    expect(panel).toContain('aria-label="Done"');
+    expect(panel).toContain('aria-label={t("Done")}');
     expect(panel).toContain("Download the active speech model in Advanced settings before recording.");
     expect(panel).toContain("onSpeechModelDownloadProgress");
     expect(toolbar).toContain("Voice input (STT)");
@@ -2068,8 +2077,8 @@ describe("renderer UI system", () => {
     expect(toolbar).toContain('role="button"');
     expect(toolbar).toContain("event.stopPropagation()");
     expect(toolbar).toContain("Transformers.js Whisper does not auto-detect language yet");
-    expect(toolbar).toContain('{ value: "arabic", label: "Arabic" }');
-    expect(toolbar).toContain('{ value: "french", label: "French" }');
+    expect(toolbar).toContain('{ value: "arabic", label: t("Arabic") }');
+    expect(toolbar).toContain('{ value: "french", label: t("French") }');
     expect(toolbar).toContain("Record test");
     expect(toolbar).toContain("Stop and transcribe");
     expect(toolbar).toContain("Delete downloaded speech model");
@@ -2161,7 +2170,7 @@ describe("renderer UI system", () => {
     expect(toolbar).toContain("MiniLM · Faster");
     expect(toolbar).toContain("setSemanticModelPreference");
     const inspector = readNodeInspectorSource();
-    expect(inspector).toContain('semanticContextHasData ? "available"');
+    expect(inspector).toContain('semanticContextHasData ? t("available")');
     expect(inspector).toContain("!semanticContextHasData ? <small>{semanticContext.message}</small> : null");
     expect(inspector).toContain("Same subject across flows");
     expect(inspector).toContain("No matching subject identity appears in another flow.");
@@ -2176,7 +2185,7 @@ describe("renderer UI system", () => {
     expect(panel).toContain("call.serverLabel?.trim() || call.serverId");
     expect(panel).toContain("`${server}: ${tool}${count > 1 ? ` ×${count}` : \"\"}`");
     expect(panel).toContain("ResearchToolTrace");
-    expect(panel).toContain('aria-label="Agent tool activity in chronological order"');
+    expect(panel).toContain('aria-label={t("Agent tool activity in chronological order")}');
     expect(panel).toContain("left.createdAt.localeCompare(right.createdAt)");
     expect(panel).toContain('message.mcpApprovalRequest && call.status === "approval-required"');
     expect(panel).toContain('command ? "Ran CLI" : "Used tool"');
@@ -2377,7 +2386,8 @@ describe("renderer UI system", () => {
     expect(storage).toContain("AGENT_INSTRUCTION_FILE_CANDIDATES");
     expect(storage).toContain("CLAUDE.md");
     expect(storage).toContain(".github/copilot-instructions.md");
-    expect(toolbar).toContain("Put shared guidance in <code>AGENTS.md</code>");
+    expect(toolbar).toContain('t("ArchiCode loads every existing instruction file into both Chat and Build context, regardless of the selected LLM provider. Put shared guidance in")');
+    expect(toolbar).toContain('<code>{t("AGENTS.md")}</code>');
     expect(toolbar).toContain("# Project Agent Instructions");
   });
 
@@ -2433,6 +2443,28 @@ describe("renderer UI system", () => {
     expect(styles).toContain(".ui-select-scroll-indicator");
   });
 
+  it("keeps language in General settings and scrolls overflowing settings tabs", () => {
+    const toolbar = readProjectToolbarSource();
+    const styles = readFileSync(resolve(repoRoot, "src/renderer/src/styles/app.css"), "utf8");
+    const app = readFileSync(resolve(repoRoot, "src/renderer/src/App.tsx"), "utf8");
+
+    expect(toolbar).toContain('<TabsTrigger value="general">{t("General")}</TabsTrigger>');
+    expect(toolbar).toContain('<TabsContent value="general" className="settings-tab-content narrow">');
+    expect(toolbar).toContain('label={t("app.language")}');
+    expect(toolbar).toContain('{ value: "fr", label: t("app.languageFrench") }');
+    const generalTabStart = toolbar.indexOf('<TabsContent value="general"');
+    expect(toolbar.indexOf('label={t("Project name")}', generalTabStart)).toBeLessThan(
+      toolbar.indexOf('label={t("app.language")}', generalTabStart)
+    );
+    expect(toolbar).not.toContain('TabsTrigger value="language"');
+    expect(toolbar).not.toContain('TabsContent value="language"');
+    expect(app).toContain('detail: { tab: "general" }');
+    expect(styles).toContain(".settings-tabs > .ui-tabs-list {");
+    expect(styles).toContain("overflow-x: auto;");
+    expect(styles).toContain(".settings-tabs > .ui-tabs-list [role=\"tab\"]");
+    expect(styles).toContain("flex: 0 0 auto;");
+  });
+
   it("keeps visual group creation tied to a confirmed flow save", () => {
     const inspector = readNodeInspectorSource();
     const store = readStoreSource();
@@ -2455,8 +2487,8 @@ describe("renderer UI system", () => {
     const ui = readFileSync(resolve(repoRoot, "src/renderer/src/components/ui.tsx"), "utf8");
     const styles = readFileSync(resolve(repoRoot, "src/renderer/src/styles/app.css"), "utf8");
 
-    expect(inspector).toContain('title="Open description in large editor"');
-    expect(inspector).toContain('title="Open acceptance criteria in large editor"');
+    expect(inspector).toContain('title={t("Open description in large editor")}');
+    expect(inspector).toContain('title={t("Open acceptance criteria in large editor")}');
     expect(inspector).toContain('className="node-large-text-editor-dialog"');
     expect(inspector).toContain("resizable");
     expect(inspector).toContain("Ctrl/Cmd+Enter to save");
@@ -2498,7 +2530,7 @@ describe("renderer UI system", () => {
     expect(store).toContain("isReservedAction(id)) return");
     // Shortcuts tab is part of the project settings dialog's tab set.
     expect(store).toContain('"shortcuts"');
-    expect(toolbar).toContain('<TabsTrigger value="shortcuts">Shortcuts</TabsTrigger>');
+    expect(toolbar).toContain('<TabsTrigger value="shortcuts">{t("Shortcuts")}</TabsTrigger>');
     expect(toolbar).toContain("ShortcutsSettingsTab");
     // App routes app-global chords (settings, theme, workbench, activity tabs).
     expect(app).toContain("project.openPreferences");

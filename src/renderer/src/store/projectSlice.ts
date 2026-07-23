@@ -1,3 +1,4 @@
+import { t } from "@renderer/i18n";
 import { create } from "zustand";
 import type {
   ArchicodeNode,
@@ -568,7 +569,7 @@ export const createProjectSlice = (set: StoreSet, get: StoreGet): Pick<Archicode
     if (!window.archicode?.getInitialCodebaseImportReport || !rootPath) return;
     const report = await window.archicode.getInitialCodebaseImportReport(rootPath);
     if (!report) {
-      set({ appNotice: { tone: "warning", title: "No saved initial import report", message: "This project does not have a saved report from its initial codebase import." } });
+      set({ appNotice: { tone: "warning", title: t("No saved initial import report"), message: t("This project does not have a saved report from its initial codebase import.") } });
       return;
     }
     set({

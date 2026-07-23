@@ -1,3 +1,4 @@
+import { t } from "@renderer/i18n";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties } from "react";
 import { Maximize2 } from "lucide-react";
@@ -1180,6 +1181,17 @@ export function FlowCanvas3DView({
     camera.z += forward[2] * delta;
   };
 
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    const moveCameraOnWheel = (event: WheelEvent) => {
+      event.preventDefault();
+      moveCameraAlongView(event.deltaY * 0.32);
+    };
+    canvas.addEventListener("wheel", moveCameraOnWheel, { passive: false });
+    return () => canvas.removeEventListener("wheel", moveCameraOnWheel);
+  }, []);
+
   const updateHoverFromPointer = useCallback((clientX: number, clientY: number, canvas: HTMLCanvasElement) => {
     if (dragRef.current) return;
     const picked = pickNodeFromPointer(canvas, scene.nodes, cameraRef.current, clientX, clientY);
@@ -1204,7 +1216,7 @@ export function FlowCanvas3DView({
     : "Root flow";
 
   return (
-    <div className="flow-3d-view" aria-label="Read-only 3D flow visualization. Use WASD keys and mouse drag to navigate.">
+    <div className="flow-3d-view" aria-label={t("Read-only 3D flow visualization. Use WASD keys and mouse drag to navigate.")}>
       <canvas
         ref={canvasRef}
         className={`flow-3d-webgl${dragging ? " is-dragging" : ""}`}
@@ -1244,49 +1256,43 @@ export function FlowCanvas3DView({
         onPointerLeave={() => {
           if (!dragRef.current) setHoveredNodeId(null);
         }}
-        onWheel={(event) => {
-          event.preventDefault();
-          moveCameraAlongView(event.deltaY * 0.32);
-        }}
       />
-      <div className="flow-3d-toolbar" role="toolbar" aria-label="3D view mode">
+      <div className="flow-3d-toolbar" role="toolbar" aria-label={t("3D view mode")}>
         <button
           type="button"
           className={`flow-3d-mode-btn${viewMode === "active" ? " is-active" : ""}`}
           aria-pressed={viewMode === "active"}
-          title="Emphasize the active layer; other layers stay visible but dimmed"
+          title={t("Emphasize the active layer; other layers stay visible but dimmed")}
           onClick={() => setViewMode("active")}
         >
-          Active
-        </button>
+          {t("Active")}{" "}</button>
         <button
           type="button"
           className={`flow-3d-mode-btn${viewMode === "overview" ? " is-active" : ""}`}
           aria-pressed={viewMode === "overview"}
-          title="Even multi-layer overview; edges appear on focus"
+          title={t("Even multi-layer overview; edges appear on focus")}
           onClick={() => setViewMode("overview")}
         >
-          Overview
-        </button>
+          {t("Overview")}{" "}</button>
         <button
           type="button"
           className={`flow-3d-mode-btn flow-3d-focus-toggle${trackSelection ? " is-active" : ""}`}
           aria-pressed={trackSelection}
-          title={trackSelection ? "Camera follows selection (click to keep camera fixed)" : "Camera stays fixed on selection (click to follow selection)"}
+          title={trackSelection ? t("Camera follows selection (click to keep camera fixed)") : t("Camera stays fixed on selection (click to follow selection)")}
           onClick={() => setTrackSelection((value) => !value)}
         >
-          {trackSelection ? "✓ Follow" : "Follow"}
+          {trackSelection ? t("✓ Follow") : t("Follow")}
         </button>
-        <span className="flow-3d-toolbar-meta" title="Active layer emphasis">
-          {viewMode === "active" ? activeLayerLabel : "All layers"}
-          <span className="flow-3d-toolbar-counts"> · {scene.scopes.length}f · {scene.nodes.length}n · {scene.edges.length}e</span>
+        <span className="flow-3d-toolbar-meta" title={t("Active layer emphasis")}>
+          {viewMode === "active" ? activeLayerLabel : t("All layers")}
+          <span className="flow-3d-toolbar-counts">{t("· {{length}} f · {{length2}} n · {{length3}} e", { length: scene.scopes.length, length2: scene.nodes.length, length3: scene.edges.length })}</span>
         </span>
       </div>
-      <div className="flow-3d-corner-controls" role="toolbar" aria-label="3D canvas controls">
+      <div className="flow-3d-corner-controls" role="toolbar" aria-label={t("3D canvas controls")}>
         <button
           type="button"
-          title="Toggle full screen mode"
-          aria-label="Toggle full screen mode"
+          title={t("Toggle full screen mode")}
+          aria-label={t("Toggle full screen mode")}
           onClick={onToggleFocusMode}
         >
           <Maximize2 size={15} />
@@ -1302,9 +1308,9 @@ export function FlowCanvas3DView({
               else scopeLabelRefs.current.delete(scope.id);
             }}
             className={`flow-3d-scope-label ${scope.isRoot ? "is-root" : "is-subflow"}${scope.isActive ? " is-active" : ""}`}
-            aria-label={`Focus ${scope.isRoot ? "flow" : `level ${scope.depth} subflow`} ${scope.name}`}
+            aria-label={t("Focus {{value1}}{{name}}", { value1: scope.isRoot ? "flow" : `level ${scope.depth} subflow`, name: scope.name })}
             aria-pressed={scope.isActive}
-            title={`Focus ${scope.name}`}
+            title={t("Focus {{name}}", { name: scope.name })}
             onPointerDown={(event) => event.stopPropagation()}
             onClick={(event) => {
               event.stopPropagation();
@@ -1315,7 +1321,7 @@ export function FlowCanvas3DView({
               "--flow-scope-font-size": `${scope.fontSize}px`
             } as CSSProperties}
           >
-            <span className="flow-3d-scope-kind">{scope.isRoot ? "FLOW" : `L${scope.depth}`}</span>
+            <span className="flow-3d-scope-kind">{scope.isRoot ? t("FLOW") : t("L {{depth}}", { depth: scope.depth })}</span>
             <span className="flow-3d-scope-name">{scope.name}</span>
           </button>
         ))}

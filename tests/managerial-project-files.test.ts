@@ -33,7 +33,7 @@ describe("managed target-project instruction files", () => {
 
     expect(instructions).toContain("# Project Agent Instructions");
     expect(instructions).toContain("the target project");
-    expect(instructions).toContain("They are not instructions for developing the ArchiCode application itself.");
+    expect(instructions).not.toContain("They are not instructions for developing the ArchiCode application itself.");
     expect(instructions).toContain("Recorded technology choices for this project: Vue 3, Vite");
     expect(instructions).toContain("this target project's graph");
     expect(instructions).not.toContain("Treat ArchiCode as stack-neutral");
@@ -60,8 +60,17 @@ describe("managed target-project instruction files", () => {
     await ensureFixtureProject(root);
     const migrated = await readFile(path.join(root, "AGENTS.md"), "utf8");
     expect(migrated).toContain("# Project Agent Instructions");
-    expect(migrated).toContain("They are not instructions for developing the ArchiCode application itself.");
+    expect(migrated).not.toContain("They are not instructions for developing the ArchiCode application itself.");
     expect(migrated).not.toContain("Treat ArchiCode as stack-neutral");
+
+    const previousGenerated = generatedTargetProjectAgentInstructions(bundle, ["npm run build"]).replace(
+      "the target project represented by this repository and its ArchiCode graph.",
+      "the target project represented by this repository and its ArchiCode graph. They are not instructions for developing the ArchiCode application itself."
+    );
+    await writeFile(path.join(root, "AGENTS.md"), `${previousGenerated}\n`, "utf8");
+    await ensureFixtureProject(root);
+    const refreshed = await readFile(path.join(root, "AGENTS.md"), "utf8");
+    expect(refreshed).not.toContain("They are not instructions for developing the ArchiCode application itself.");
 
     const custom = "# Project Team Rules\n\n- Preserve the team's custom deployment workflow.\n";
     await writeFile(path.join(root, "AGENTS.md"), custom, "utf8");

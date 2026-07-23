@@ -1,3 +1,4 @@
+import { t } from "@renderer/i18n";
 import { ChevronDown } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { IconButton, TextInput } from "./ui";
@@ -103,7 +104,7 @@ export function ModelCombobox({
         aria-expanded={open}
         aria-activedescendant={open && activeIndex >= 0 ? `${listId}-option-${activeIndex}` : undefined}
         value={catalogMode && open ? filter : catalogMode ? selectedLabel : value}
-        placeholder={catalogMode && open ? "Search models…" : placeholder}
+        placeholder={catalogMode && open ? t("Search models…") : placeholder}
         onFocus={showAllOptions}
         onChange={(event) => {
           if (!catalogMode) onValueChange(event.target.value);
@@ -135,7 +136,7 @@ export function ModelCombobox({
       />
       <IconButton
         className="model-combobox-trigger"
-        title="Show model options"
+        title={t("Show model options")}
         aria-expanded={open}
         aria-controls={listId}
         onMouseDown={(event) => event.preventDefault()}
@@ -147,7 +148,7 @@ export function ModelCombobox({
         <ChevronDown size={16} />
       </IconButton>
       {open ? (
-        <div id={listId} className="model-combobox-options" role="listbox" aria-label="Model options">
+        <div id={listId} className="model-combobox-options" role="listbox" aria-label={t("Model options")}>
           {visibleOptions.length ? visibleOptions.map((option, index) => (
             <button
               key={option.value}
@@ -168,11 +169,9 @@ export function ModelCombobox({
             >
               {option.label}
             </button>
-          )) : <small>No matching model suggestions.</small>}
+          )) : <small>{t("No matching model suggestions.")}</small>}
           {filteredOptions.length > visibleOptions.length ? (
-            <small className="model-combobox-limit-note">
-              Showing {visibleOptions.length} of {filteredOptions.length} matches. Keep typing to narrow the list.
-            </small>
+            <small className="model-combobox-limit-note">{t("Showing {{length}} of {{length2}} matches. Keep typing to narrow the list.", { length: visibleOptions.length, length2: filteredOptions.length })}</small>
           ) : null}
         </div>
       ) : null}

@@ -1,3 +1,5 @@
+import { formatNumber } from "@renderer/i18n";
+import { t } from "@renderer/i18n";
 import { Check, ChevronDown, ChevronRight, CircleHelp, ExternalLink, FileCode2, FileDiff, Folder, FolderOpen, Loader2, Maximize2, Minimize2, Palette, RefreshCw, Search, Sparkles } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -13,12 +15,12 @@ const maxSidebarWidth = 520;
 const minPreviewWidth = 320;
 
 const fileReaderThemes = [
-  { value: "slate", label: "Slate", swatch: "#5d7d8f" },
-  { value: "ocean", label: "Ocean", swatch: "#38a8c6" },
-  { value: "forest", label: "Forest", swatch: "#62b689" },
-  { value: "violet", label: "Violet", swatch: "#a98df7" },
-  { value: "ember", label: "Ember", swatch: "#f08a61" },
-  { value: "paper", label: "Paper", swatch: "#d6c2a4" }
+  { value: "slate", label: t("Slate"), swatch: "#5d7d8f" },
+  { value: "ocean", label: t("Ocean"), swatch: "#38a8c6" },
+  { value: "forest", label: t("Forest"), swatch: "#62b689" },
+  { value: "violet", label: t("Violet"), swatch: "#a98df7" },
+  { value: "ember", label: t("Ember"), swatch: "#f08a61" },
+  { value: "paper", label: t("Paper"), swatch: "#d6c2a4" }
 ] as const;
 
 type FileReaderTheme = (typeof fileReaderThemes)[number]["value"];
@@ -61,8 +63,8 @@ function SemanticMatchRadial({ score }: { score: number }) {
     <span
       className="semantic-match-radial"
       style={{ "--semantic-match-angle": `${percentage * 3.6}deg` } as CSSProperties}
-      title={`${percentage}% semantic similarity`}
-      aria-label={`${percentage}% semantic similarity`}
+      title={t("{{percentage}}% semantic similarity", { percentage: percentage })}
+      aria-label={t("{{percentage}}% semantic similarity", { percentage: percentage })}
     >
       <span>{percentage}</span>
     </span>
@@ -253,7 +255,7 @@ function TreeRow({
         {isDirectory ? <ChevronRight size={13} className={visible ? "tree-chevron is-open" : "tree-chevron"} /> : <span className="tree-spacer" />}
         {isDirectory ? (visible ? <FolderOpen size={15} /> : <Folder size={15} />) : <FileCode2 size={15} />}
         <span>{renderSearchHighlightedText(node.name, searchQuery, `tree-${node.path || node.name}`)}</span>
-        {changed ? <Badge tone="warning" className="file-change-badge">changed</Badge> : null}
+        {changed ? <Badge tone="warning" className="file-change-badge">{t("changed")}</Badge> : null}
       </button>
       {isDirectory && visible && node.children?.length ? (
         <div>
@@ -268,7 +270,7 @@ function TreeRow({
               onSelect={onSelect}
             />
           ))}
-          {node.truncated ? <small className="file-tree-truncated">More files hidden.</small> : null}
+          {node.truncated ? <small className="file-tree-truncated">{t("More files hidden.")}</small> : null}
         </div>
       ) : null}
     </div>
@@ -509,12 +511,12 @@ export function ProjectFileBrowser({ expanded = false, onToggleExpanded }: { exp
     return (
       <span className="semantic-lens-tooltip">
         <span className="semantic-lens-tooltip-heading">
-          <span><Sparkles size={13} aria-hidden="true" /><strong>Semantic lens</strong></span>
-          <small>{context.symbol ?? "Code section"}{rangeLabel ? ` · ${rangeLabel}` : ""}</small>
+          <span><Sparkles size={13} aria-hidden="true" /><strong>{t("Semantic lens")}</strong></span>
+          <small>{t("{{value1}} {{value2}}", { value1: context.symbol ?? "Code section", value2: rangeLabel ? ` · ${rangeLabel}` : "" })}</small>
         </span>
         <span className="semantic-lens-section-title">
-          <b>Related graph nodes</b>
-          <small>How this code aligns with the project graph</small>
+          <b>{t("Related graph nodes")}</b>
+          <small>{t("How this code aligns with the project graph")}</small>
         </span>
         {context.relatedNodes.slice(0, 2).map((node) => (
           <span className="semantic-lens-node" key={`${node.flowId}:${node.nodeId}`}>
@@ -522,31 +524,31 @@ export function ProjectFileBrowser({ expanded = false, onToggleExpanded }: { exp
             <span className="semantic-lens-node-copy">
               <span className="semantic-lens-node-heading">
                 <b>{node.title}</b>
-                <small>{node.relationship ? `${node.relationship}s this code` : "Graph node"}</small>
+                <small>{node.relationship ? t("{{relationship}} s this code", { relationship: node.relationship }) : t("Graph node")}</small>
               </span>
-              <span>{node.description.length > 180 ? `${node.description.slice(0, 177)}…` : node.description}</span>
-              {node.acceptanceCriteria[0] ? <em>Criterion: {node.acceptanceCriteria[0]}</em> : null}
+              <span>{node.description.length > 180 ? t("{{value1}}…", { value1: node.description.slice(0, 177) }) : node.description}</span>
+              {node.acceptanceCriteria[0] ? <em>{t("Criterion: {{value1}}", { value1: node.acceptanceCriteria[0] })}</em> : null}
             </span>
           </span>
         ))}
         {context.relatedCode.length ? (
           <span className="semantic-lens-related-code">
             <span className="semantic-lens-section-title">
-              <b>Related code files</b>
-              <small>Other indexed code with similar meaning</small>
+              <b>{t("Related code files")}</b>
+              <small>{t("Other indexed code with similar meaning")}</small>
             </span>
             {context.relatedCode.map((item) => (
               <span className="semantic-lens-related-file" key={`${item.path}:${item.symbol}`}>
                 <SemanticMatchRadial score={item.score} />
                 <span>
                   <b>{item.symbol}</b>
-                  <small>{item.path}{item.startLine ? `:${item.startLine}` : ""}</small>
+                  <small>{t("{{path}} {{value2}}", { path: item.path, value2: item.startLine ? `:${item.startLine}` : "" })}</small>
                 </span>
               </span>
             ))}
           </span>
         ) : null}
-        <small className="semantic-lens-score-note">Percentages are local embedding similarity scores. They suggest relevance; they do not prove ownership or dependency.</small>
+        <small className="semantic-lens-score-note">{t("Percentages are local embedding similarity scores. They suggest relevance; they do not prove ownership or dependency.")}</small>
       </span>
     );
   };
@@ -554,8 +556,8 @@ export function ProjectFileBrowser({ expanded = false, onToggleExpanded }: { exp
   if (!fileBrowser) {
     return (
       <div className="file-browser-empty">
-        <EmptyState icon={<Loader2 size={24} className="is-spinning" />} title="Project files">
-          {fileBusy ? "Loading project files…" : "Preparing the project file browser…"}
+        <EmptyState icon={<Loader2 size={24} className="is-spinning" />} title={t("Project files")}>
+          {fileBusy ? t("Loading project files…") : t("Preparing the project file browser…")}
         </EmptyState>
       </div>
     );
@@ -565,23 +567,23 @@ export function ProjectFileBrowser({ expanded = false, onToggleExpanded }: { exp
     <section
       ref={browserRef}
       className="file-browser"
-      aria-label="Project file browser"
+      aria-label={t("Project file browser")}
       style={{ "--file-browser-sidebar-width": `${sidebarWidth}px` } as CSSProperties}
     >
       <aside className="file-browser-sidebar">
         <div className="file-browser-header">
           <div>
-            <strong>Files</strong>
-            <small>{historicalInspection ? `Historical · ${historicalInspection.entry.shortCommit}` : fileBrowser?.gitStatus.isRepo ? `${fileBrowser.gitStatus.changes.length} changed` : "No Git repo"}</small>
+            <strong>{t("Files")}</strong>
+            <small>{historicalInspection ? t("Historical ·{{shortCommit}}", { shortCommit: historicalInspection.entry.shortCommit }) : fileBrowser?.gitStatus.isRepo ? t("{{length}} changed", { length: fileBrowser.gitStatus.changes.length }) : t("No Git repo")}</small>
           </div>
           <div className="file-browser-header-actions">
-            <IconButton type="button" title="Refresh" aria-label="Refresh files" onClick={() => void refreshProjectFiles()} disabled={fileBusy}>
+            <IconButton type="button" title={t("Refresh")} aria-label={t("Refresh files")} onClick={() => void refreshProjectFiles()} disabled={fileBusy}>
               <RefreshCw size={15} className={fileBusy ? "is-spinning" : undefined} />
             </IconButton>
             <IconButton
               type="button"
-              title={expanded ? "Show sidebars and activity panel" : "Hide sidebars and activity panel"}
-              aria-label={expanded ? "Show sidebars and activity panel" : "Hide sidebars and activity panel"}
+              title={expanded ? t("Show sidebars and activity panel") : t("Hide sidebars and activity panel")}
+              aria-label={expanded ? t("Show sidebars and activity panel") : t("Hide sidebars and activity panel")}
               aria-pressed={expanded}
               onClick={onToggleExpanded}
             >
@@ -594,8 +596,8 @@ export function ProjectFileBrowser({ expanded = false, onToggleExpanded }: { exp
           <TextInput
             value={fileTreeSearchQuery}
             onChange={(event) => setFileTreeSearchQuery(event.target.value)}
-            placeholder="Search files and folders"
-            aria-label="Search files and folders"
+            placeholder={t("Search files and folders")}
+            aria-label={t("Search files and folders")}
           />
         </div>
         <ScrollArea className="file-tree-scroll">
@@ -608,14 +610,14 @@ export function ProjectFileBrowser({ expanded = false, onToggleExpanded }: { exp
               searchQuery={fileTreeSearchQuery}
               onSelect={(path) => void selectProjectFile(path)}
             />
-          ) : <div className="file-tree-empty">No files or folders match.</div>}
+          ) : <div className="file-tree-empty">{t("No files or folders match.")}</div>}
         </ScrollArea>
       </aside>
 
       <div
         className="file-browser-resizer"
         role="separator"
-        aria-label="Resize file browser columns"
+        aria-label={t("Resize file browser columns")}
         aria-orientation="vertical"
         aria-valuemin={minSidebarWidth}
         aria-valuemax={maxSidebarWidth}
@@ -627,18 +629,16 @@ export function ProjectFileBrowser({ expanded = false, onToggleExpanded }: { exp
 
       <section className="file-browser-main">
         {!selectedFilePath ? (
-          <EmptyState icon={<FileCode2 size={24} />} title="Select a file">
-            Code preview and Git diff will appear here.
-          </EmptyState>
+          <EmptyState icon={<FileCode2 size={24} />} title={t("Select a file")}>{t("{{value1}} {{value2}}", { value1: t("Code preview and Git diff will appear here."), value2: " " })}</EmptyState>
         ) : (
           <>
             <div className="file-preview-header">
               <div>
                 <strong>{selectedFilePath}</strong>
                 <small>
-                  {historicalInspection ? `Historical source · ${historicalInspection.entry.shortCommit}` : filePreviewRequest?.preferredTab === "diff" && filePreview?.size === 0
-                    ? "Deleted file"
-                    : filePreview ? `${filePreview.language} · ${filePreview.size.toLocaleString()} bytes` : "Loading..."}
+                  {historicalInspection ? t("Historical source ·{{shortCommit}}", { shortCommit: historicalInspection.entry.shortCommit }) : filePreviewRequest?.preferredTab === "diff" && filePreview?.size === 0
+                    ? t("Deleted file")
+                    : filePreview ? t("{{language}} · {{value2}} bytes", { language: filePreview.language, value2: formatNumber(filePreview.size) }) : t("Loading...")}
                 </small>
               </div>
               <div className="file-preview-actions">
@@ -652,17 +652,17 @@ export function ProjectFileBrowser({ expanded = false, onToggleExpanded }: { exp
                         setSearchQuery(event.target.value);
                         setActiveSearchMatchIndex(0);
                       }}
-                      placeholder="Search in file"
-                      aria-label="Search in file"
+                      placeholder={t("Search in file")}
+                      aria-label={t("Search in file")}
                     />
-                    <small>{searchMatches.length ? `${activeSearchMatchIndex + 1}/${searchMatches.length}` : "0 matches"}</small>
+                    <small>{searchMatches.length ? t("{{value1}}/{{length}}", { value1: activeSearchMatchIndex + 1, length: searchMatches.length }) : t("0 matches")}</small>
                     <Button type="button" size="sm" disabled={!searchMatches.length} onClick={() => scrollToSearchMatch(activeSearchMatchIndex - 1)}>
                       <ChevronRight size={14} style={{ transform: "rotate(-90deg)" }} />
-                      <span>Prev</span>
+                      <span>{t("Prev")}</span>
                     </Button>
                     <Button type="button" size="sm" disabled={!searchMatches.length} onClick={() => scrollToSearchMatch(activeSearchMatchIndex + 1)}>
                       <ChevronDown size={14} />
-                      <span>Next</span>
+                      <span>{t("Next")}</span>
                     </Button>
                   </div>
                 ) : null}
@@ -677,28 +677,28 @@ export function ProjectFileBrowser({ expanded = false, onToggleExpanded }: { exp
                     disabled={Boolean(historicalInspection) || !bundle || !selectedFilePath}
                   >
                     <CircleHelp size={14} />
-                    <span>Explain this</span>
+                    <span>{t("Explain this")}</span>
                   </Button>
                   <Button type="button" size="sm" className="file-preview-open-with" onClick={() => void openSelectedFileExternally()} disabled={Boolean(historicalInspection) || !rootPath || !selectedFilePath}>
                     <ExternalLink size={14} />
-                    <span>Open with…</span>
+                    <span>{t("Open with…")}</span>
                   </Button>
                   <MenuRoot>
                     <MenuTrigger asChild>
-                      <Button type="button" size="sm" className="file-reader-theme-trigger" aria-label="Choose file reader theme">
+                      <Button type="button" size="sm" className="file-reader-theme-trigger" aria-label={t("Choose file reader theme")}>
                         <Palette size={14} />
-                        <span>Theme</span>
+                        <span>{t("Theme")}</span>
                         <ChevronDown size={14} />
                       </Button>
                     </MenuTrigger>
                     <MenuContent className="file-reader-theme-menu">
-                      <MenuLabel>File reader theme</MenuLabel>
+                      <MenuLabel>{t("File reader theme")}</MenuLabel>
                       {fileReaderThemes.map((theme) => (
                         <MenuItem key={theme.value} onSelect={() => selectReaderTheme(theme.value)}>
                           <span className="file-reader-theme-option">
                             <span className="file-reader-theme-swatch" style={{ background: theme.swatch }} aria-hidden="true" />
                             <span>{theme.label}</span>
-                            {readerTheme === theme.value ? <Check size={14} aria-label="Selected" /> : null}
+                            {readerTheme === theme.value ? <Check size={14} aria-label={t("Selected")} /> : null}
                           </span>
                         </MenuItem>
                       ))}
@@ -713,18 +713,16 @@ export function ProjectFileBrowser({ expanded = false, onToggleExpanded }: { exp
                 <TabsList className="ui-tabs-list compact">
                   <TabsTrigger value="preview">
                     <FileCode2 size={14} />
-                    Preview
-                  </TabsTrigger>
+                    {t("Preview")}{" "}</TabsTrigger>
                   <TabsTrigger value="diff" disabled={Boolean(historicalInspection)}>
                     <FileDiff size={14} />
-                    Diff
-                  </TabsTrigger>
+                    {t("Diff")}{" "}</TabsTrigger>
                 </TabsList>
                 <IconButton
                   className={semanticLensEnabled ? "semantic-lens-toggle is-active" : "semantic-lens-toggle"}
                   title={semanticLensAvailable
-                    ? semanticLensEnabled ? "Disable semantic lens" : "Enable semantic lens"
-                    : "Enable semantic indexing in Advanced Settings to use the semantic lens"}
+                    ? semanticLensEnabled ? t("Disable semantic lens") : t("Enable semantic lens")
+                    : t("Enable semantic indexing in Advanced Settings to use the semantic lens")}
                   aria-pressed={semanticLensEnabled}
                   disabled={!semanticLensAvailable}
                   onClick={toggleSemanticLens}
@@ -734,10 +732,10 @@ export function ProjectFileBrowser({ expanded = false, onToggleExpanded }: { exp
               </div>
               <TabsContent value="preview" className="file-preview-tab">
                 {filePreview?.binary ? (
-                  <EmptyState title="Binary file">This file is binary and cannot be displayed as text.</EmptyState>
+                  <EmptyState title={t("Binary file")}>{t("This file is binary and cannot be displayed as text.")}</EmptyState>
                 ) : (
                   <ScrollArea className="code-view-scroll" viewportRef={codeViewportRef}>
-                    {filePreview?.truncated ? <div className="file-warning">Large file preview truncated.</div> : null}
+                    {filePreview?.truncated ? <div className="file-warning">{t("Large file preview truncated.")}</div> : null}
                     <pre className="code-view">
                       {lines.map((line, index) => {
                         const lineNumber = index + 1;
@@ -794,9 +792,9 @@ export function ProjectFileBrowser({ expanded = false, onToggleExpanded }: { exp
                       })}
                     </pre>
                   ) : (
-                    <EmptyState title="No diff">{filePreviewRequest?.preferredTab === "diff"
-                      ? "This file no longer exists and no working-tree Git diff is available."
-                      : "No tracked Git diff is available for this file."}</EmptyState>
+                    <EmptyState title={t("No diff")}>{filePreviewRequest?.preferredTab === "diff"
+                      ? t("This file no longer exists and no working-tree Git diff is available.")
+                      : t("No tracked Git diff is available for this file.")}</EmptyState>
                   )}
                 </ScrollArea>
               </TabsContent>

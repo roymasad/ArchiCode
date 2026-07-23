@@ -1,3 +1,5 @@
+import { formatTime } from "@renderer/i18n";
+import { t } from "@renderer/i18n";
 import { Bot, ChevronRight, Eye, EyeOff, FileText } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -205,7 +207,7 @@ export function RunTrace() {
   const actionResizerLeft = columnWidths.time + traceColumnGap + columnWidths.action + traceColumnGap / 2;
 
   if (!selected) {
-    return <EmptyState icon={<Bot size={20} />} title="No visible run selected">Run activity will appear here for runs still shown in the queue.</EmptyState>;
+    return <EmptyState icon={<Bot size={20} />} title={t("No visible run selected")}>{t("Run activity will appear here for runs still shown in the queue.")}</EmptyState>;
   }
 
   return (
@@ -215,14 +217,14 @@ export function RunTrace() {
           {showStatusPill ? (
             <StatusPill tone={selected.status === "failed" ? "danger" : selected.status === "succeeded" ? "success" : "accent"}>{selected.status}</StatusPill>
           ) : null}
-          <TextInput className="run-trace-search" value={query} placeholder="Search trace" onChange={(event) => setQuery(event.target.value)} />
+          <TextInput className="run-trace-search" value={query} placeholder={t("Search trace")} onChange={(event) => setQuery(event.target.value)} />
           <Button type="button" size="sm" variant={raw ? "secondary" : "primary"} onClick={() => setRaw(false)}>
             <Bot size={14} />
-            <span>Compact</span>
+            <span>{t("Compact")}</span>
           </Button>
           <Button type="button" size="sm" variant={raw ? "primary" : "secondary"} onClick={() => setRaw(true)}>
             <FileText size={14} />
-            <span>Raw</span>
+            <span>{t("Raw")}</span>
           </Button>
           <Button
             type="button"
@@ -230,10 +232,10 @@ export function RunTrace() {
             variant="ghost"
             onClick={hasStoredClear ? showAllTrace : clearTrace}
             disabled={!selected.logs.length && !hasStoredClear}
-            title={hasStoredClear ? "Show the full saved trace again" : "Hide the current trace for this run without deleting run files or artifacts"}
+            title={hasStoredClear ? t("Show the full saved trace again") : t("Hide the current trace for this run without deleting run files or artifacts")}
           >
             {hasStoredClear ? <Eye size={14} /> : <EyeOff size={14} />}
-            <span>{hasStoredClear ? "Show all" : "Clear"}</span>
+            <span>{hasStoredClear ? t("Show all") : t("Clear")}</span>
           </Button>
         </div>
       </div>
@@ -247,7 +249,7 @@ export function RunTrace() {
               className="run-trace-column-resizer"
               style={{ left: timeResizerLeft }}
               role="separator"
-              aria-label="Resize trace time column"
+              aria-label={t("Resize trace time column")}
               aria-orientation="vertical"
               aria-valuemin={minTraceTimeWidth}
               aria-valuemax={Math.max(minTraceTimeWidth, (traceListRef.current?.getBoundingClientRect().width ?? 0) - columnWidths.action - minTraceDetailWidth - traceColumnGap * 2)}
@@ -260,7 +262,7 @@ export function RunTrace() {
               className="run-trace-column-resizer"
               style={{ left: actionResizerLeft }}
               role="separator"
-              aria-label="Resize trace action column"
+              aria-label={t("Resize trace action column")}
               aria-orientation="vertical"
               aria-valuemin={minTraceActionWidth}
               aria-valuemax={Math.max(minTraceActionWidth, (traceListRef.current?.getBoundingClientRect().width ?? 0) - columnWidths.time - minTraceDetailWidth - traceColumnGap * 2)}
@@ -273,8 +275,8 @@ export function RunTrace() {
           {traceGroups.length ? traceGroups.map((group) => {
             const expanded = expandedGroupIds[group.id] ?? group.defaultExpanded;
             const timeLabel = group.at === group.endAt
-              ? new Date(group.at).toLocaleTimeString()
-              : `${new Date(group.at).toLocaleTimeString()} - ${new Date(group.endAt).toLocaleTimeString()}`;
+              ? formatTime(new Date(group.at))
+              : `${formatTime(new Date(group.at))} - ${formatTime(new Date(group.endAt))}`;
             return (
               <section key={group.id} className={`run-trace-group run-progress-item run-progress-${group.tone}${group.detail ? "" : " no-detail"}${group.collapsible ? " is-collapsible" : ""}${expanded ? " is-expanded" : ""}`}>
                 <button
@@ -288,12 +290,12 @@ export function RunTrace() {
                     {group.collapsible ? <ChevronRight size={14} className="run-trace-group-chevron" /> : null}
                     {group.label}
                   </strong>
-                  <small>{group.detail ?? `${group.lineCount} line${group.lineCount === 1 ? "" : "s"}`}</small>
+                  <small>{group.detail ?? t("{{lineCount}} line {{value2}}", { lineCount: group.lineCount, value2: group.lineCount === 1 ? "" : "s" })}</small>
                 </button>
                 {group.collapsible && expanded ? <pre className="run-log run-trace-group-raw">{group.raw}</pre> : null}
               </section>
             );
-          }) : <small>{query.trim() ? "No matching trace items." : hasStoredClear ? "Trace cleared for this run. New activity will appear here." : "Waiting for provider activity..."}</small>}
+          }) : <small>{query.trim() ? t("No matching trace items.") : hasStoredClear ? t("Trace cleared for this run. New activity will appear here.") : t("Waiting for provider activity...")}</small>}
         </div>
       )}
     </div>

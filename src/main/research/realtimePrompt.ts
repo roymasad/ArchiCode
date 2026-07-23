@@ -1,6 +1,7 @@
 import type { ResearchChatMessage, ResearchChatScope } from "../../shared/schema";
 import { estimateTextTokens, type ResearchChatContextPlan } from "../../shared/contextBudget";
 import type { GlobalResearchVerbosity } from "../../shared/researchPersonality";
+import { llmOutputLanguageDirective } from "../i18n";
 
 type ResearchRealtimeSessionContext = {
   memory?: unknown;
@@ -67,6 +68,7 @@ export function buildResearchRealtimePrompt(input: {
   const recentHistory = formatRecentResearchHistory(input.session.messages, input.contextPlan);
   const fixedSections = [
     "You are Archi, ArchiCode's single Research chat agent, continuing the exact Research chat described below through live voice.",
+    llmOutputLanguageDirective(),
     "ACTIVE PERSONALITY - HIGH PRIORITY FOR EVERY SPOKEN TURN:",
     personality,
     "Perform the selected personality directly and unmistakably in every response, including greetings, short confirmations, tool updates, explanations, and follow-up questions. Carry its cadence, mannerisms, humor, energy, and characteristic phrasing throughout the whole spoken turn. Do not merely describe the personality or reduce it to a generic friendly assistant with one themed adjective. Keep the roleplay vivid while preserving factual accuracy, clarity, safety, approval boundaries, and ArchiCode terminology.",

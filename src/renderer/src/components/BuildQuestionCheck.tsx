@@ -1,3 +1,4 @@
+import { t } from "@renderer/i18n";
 import { AlertCircle, CheckCircle2, MessageSquare, Play, X } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { useArchicodeStore } from "../store/useArchicodeStore";
@@ -22,8 +23,8 @@ export function BuildQuestionCheck() {
     }}>
       {buildQuestionCheck ? (
         <DialogContent
-          title="Questions Need Reply"
-          description="The agent asked for input before coding. Resolve these node notes to keep the build grounded."
+          title={t("Questions Need Reply")}
+          description={t("The agent asked for input before coding. Resolve these node notes to keep the build grounded.")}
           className="question-check-modal"
         >
           <div className="question-check-list">
@@ -42,18 +43,18 @@ export function BuildQuestionCheck() {
                   <strong>{question.nodeTitle}</strong>
                 </div>
                 <p>{question.body}</p>
-                <StatusPill tone="warning">open question</StatusPill>
+                <StatusPill tone="warning">{t("open question")}</StatusPill>
               </button>
             ))}
           </div>
           <div className="question-check-note">
             <AlertCircle size={16} />
-            <span>Build is paused so the LLM does not code from missing requirements. Continue only when you intentionally want it to proceed with current assumptions.</span>
+            <span>{t("Build is paused so the LLM does not code from missing requirements. Continue only when you intentionally want it to proceed with current assumptions.")}</span>
           </div>
           <div className="dialog-actions">
             <Button type="button" onClick={dismissQuestionCheck}>
               <X size={16} />
-              <span>Cancel</span>
+              <span>{t("Cancel")}</span>
             </Button>
             <Button
               type="button"
@@ -63,11 +64,11 @@ export function BuildQuestionCheck() {
               }}
             >
               <CheckCircle2 size={16} />
-              <span>Review First</span>
+              <span>{t("Review First")}</span>
             </Button>
             <Button type="button" variant="primary" onClick={() => void continueQuestionBlockedRun()}>
               <Play size={16} />
-              <span>Continue Anyway</span>
+              <span>{t("Continue Anyway")}</span>
             </Button>
           </div>
         </DialogContent>

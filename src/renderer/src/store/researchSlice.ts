@@ -1,3 +1,4 @@
+import { t } from "@renderer/i18n";
 import { create } from "zustand";
 import type {
   ArchicodeNode,
@@ -817,7 +818,7 @@ export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
               {
                 id: optimisticAssistantId,
                 role: "assistant" as const,
-                content: "Summarizing chat...",
+                content: t("Summarizing chat..."),
                 createdAt: now(),
                 attachmentIds: [],
                 webUsed: false,
@@ -859,7 +860,7 @@ export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
               messages: session.messages.map((message) => message.id === optimisticAssistantId
                 ? {
                     ...message,
-                    content: "Chat summary failed.",
+                    content: t("Chat summary failed."),
                     error: error instanceof Error ? error.message : String(error)
                   }
                 : message)

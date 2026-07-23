@@ -1,3 +1,5 @@
+import { formatDateTime } from "@renderer/i18n";
+import { t } from "@renderer/i18n";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import type { CSSProperties, PointerEvent as ReactPointerEvent, ReactNode } from "react";
@@ -21,6 +23,7 @@ import { projectTemplates, type ProjectTemplateId } from "@shared/templates";
 import { collectRunErrors } from "./utils/runErrors";
 import { isRunBlockingNewChange } from "./utils/runStatus";
 import { matches as chordMatches } from "./utils/keybindings";
+import { applyRendererLocale } from "./i18n";
 
 type PanelId = "sidebar" | "activity" | "inspector" | "research";
 
@@ -148,7 +151,7 @@ function FloatingPanel({
           type="button"
           className="panel-dock-button"
           onClick={onDock}
-          title={`Dock ${label}`}
+          title={t("Dock {{label}}", { label: label })}
         >
           <Dock size={14} />
         </IconButton>
@@ -204,25 +207,23 @@ function WelcomeScreen({ onReturnToProject }: { onReturnToProject?: () => void }
   };
   return (
     <>
-      <section className="welcome-screen" aria-label="Welcome to ArchiCode">
+      <section className="welcome-screen" aria-label={t("Welcome to ArchiCode")}>
         <div className="welcome-panel">
           {onReturnToProject ? (
             <Button type="button" size="sm" variant="ghost" className="welcome-return-button" onClick={onReturnToProject}>
               <ChevronLeft size={15} />
-              <span>Back to current project</span>
+              <span>{t("Back to current project")}</span>
             </Button>
           ) : null}
           <div className="welcome-copy">
-            <span className="ui-eyebrow">ARCHICODE</span>
-            <h1>Start with a project</h1>
-            <p>
-              Open a local codebase, clone a Git repository, or start from a template. Configure an LLM provider when you want ArchiCode to map and reason across the project.
-            </p>
+            <span className="ui-eyebrow">{t("ARCHICODE")}</span>
+            <h1>{t("Start with a project")}</h1>
+            <p>{t("{{value1}} {{value2}}", { value1: t("Open a local codebase, clone a Git repository, or start from a template. Configure an LLM provider when you want ArchiCode to map and reason across the project."), value2: " " })}</p>
           </div>
           <div className="welcome-actions">
             <Button type="button" variant="primary" onClick={() => void openProjectFolder().then(() => onReturnToProject?.())}>
               <FolderOpen size={16} />
-              <span>Open codebase</span>
+              <span>{t("Open codebase")}</span>
             </Button>
             <GlobalProviderSetup />
             <Button className="welcome-git-import" type="button" onClick={() => {
@@ -230,7 +231,7 @@ function WelcomeScreen({ onReturnToProject }: { onReturnToProject?: () => void }
               setGitImportOpen(true);
             }}>
               <GitBranch size={16} />
-              <span>Import from Git URL</span>
+              <span>{t("Import from Git URL")}</span>
             </Button>
           </div>
           <div className="welcome-secondary">
@@ -239,11 +240,11 @@ function WelcomeScreen({ onReturnToProject }: { onReturnToProject?: () => void }
                 <MenuTrigger asChild>
                   <Button type="button">
                     <Plus size={16} />
-                    <span>New project from template</span>
+                    <span>{t("New project from template")}</span>
                   </Button>
                 </MenuTrigger>
                 <MenuContent align="center">
-                  <MenuLabel>Start from template</MenuLabel>
+                  <MenuLabel>{t("Start from template")}</MenuLabel>
                   {projectTemplates.map((template) => (
                     <MenuItem key={template.id} onSelect={() => void createProjectFromTemplate(template.id as ProjectTemplateId).then(() => onReturnToProject?.())}>
                       <span className="menu-item-stack">
@@ -263,8 +264,8 @@ function WelcomeScreen({ onReturnToProject }: { onReturnToProject?: () => void }
         if (!gitCloneBusy) setGitImportOpen(open);
       }}>
         <DialogContent
-          title="Import from Git URL"
-          description="Choose a repository and then a local parent folder. ArchiCode clones into a repository-named folder and opens the codebase importer."
+          title={t("Import from Git URL")}
+          description={t("Choose a repository and then a local parent folder. ArchiCode clones into a repository-named folder and opens the codebase importer.")}
           className="git-clone-dialog"
           hideCloseButton={gitCloneBusy}
           onEscapeKeyDown={(event) => { if (gitCloneBusy) event.preventDefault(); }}
@@ -275,7 +276,7 @@ function WelcomeScreen({ onReturnToProject }: { onReturnToProject?: () => void }
             void importFromGit();
           }}>
             <label>
-              <span>Repository URL</span>
+              <span>{t("Repository URL")}</span>
               <input
                 className="ui-input"
                 type="text"
@@ -292,12 +293,12 @@ function WelcomeScreen({ onReturnToProject }: { onReturnToProject?: () => void }
               />
             </label>
             {gitUrlError ? <p className="git-clone-error" role="alert">{gitUrlError}</p> : null}
-            {gitCloneBusy ? <p className="git-clone-status" role="status">Cloning repository… This can take a few minutes.</p> : null}
+            {gitCloneBusy ? <p className="git-clone-status" role="status">{t("Cloning repository… This can take a few minutes.")}</p> : null}
             <div className="action-row git-clone-actions">
-              <Button type="button" disabled={gitCloneBusy} onClick={() => setGitImportOpen(false)}>Cancel</Button>
+              <Button type="button" disabled={gitCloneBusy} onClick={() => setGitImportOpen(false)}>{t("Cancel")}</Button>
               <Button type="submit" variant="primary" disabled={gitCloneBusy || !gitUrl.trim()}>
                 <GitBranch size={15} />
-                <span>{gitCloneBusy ? "Cloning…" : "Choose folder and clone"}</span>
+                <span>{gitCloneBusy ? t("Cloning…") : t("Choose folder and clone")}</span>
               </Button>
             </div>
           </form>
@@ -323,7 +324,7 @@ function UnifiedRightSidebar({
   onToggleChatFocusMode?: () => void;
 }) {
   return (
-    <aside className={chatFocusMode ? "unified-right-sidebar is-chat-focus" : "unified-right-sidebar"} aria-label={chatFocusMode ? "Chat focus mode" : "Right sidebar"}>
+    <aside className={chatFocusMode ? "unified-right-sidebar is-chat-focus" : "unified-right-sidebar"} aria-label={chatFocusMode ? t("Chat focus mode") : t("Right sidebar")}>
       <TabsRoot value={activeTab} onValueChange={(value) => onActiveTabChange(value as RightSidebarTab)} className={chatFocusMode ? "unified-right-sidebar-tabs is-chat-focus" : "unified-right-sidebar-tabs"}>
         {!chatFocusMode ? (
           <div className="unified-right-sidebar-topbar">
@@ -331,16 +332,16 @@ function UnifiedRightSidebar({
               <TabsTrigger
                 key={`properties-${propertiesLabelShineKey}`}
                 value="properties"
-                aria-label="Properties"
-                title="Properties"
+                aria-label={t("Properties")}
+                title={t("Properties")}
                 className={propertiesLabelShineKey ? "properties-tab-attention" : undefined}
               >
                 <SlidersHorizontal size={14} />
-                <span>Properties</span>
+                <span>{t("Properties")}</span>
               </TabsTrigger>
-              <TabsTrigger value="chat" aria-label="Chat" title="Chat">
+              <TabsTrigger value="chat" aria-label={t("Chat")} title={t("Chat")}>
                 <MessageSquare size={14} />
-                <span className="chat-tab-label">Chat</span>
+                <span className="chat-tab-label">{t("Chat")}</span>
                 <Sparkles className="chat-tab-ai-icon" size={14} aria-hidden="true" />
               </TabsTrigger>
             </TabsList>
@@ -409,7 +410,7 @@ function ExpandableBanner({
             <pre className="error-details-pre">{detailText}</pre>
             <div className="error-details-actions">
               <Button type="button" variant="secondary" onClick={() => setDetailsOpen(false)}>
-                <span>Close</span>
+                <span>{t("Close")}</span>
               </Button>
               {onDismiss ? (
                 <Button
@@ -420,7 +421,7 @@ function ExpandableBanner({
                     onDismiss();
                   }}
                 >
-                  <span>Dismiss</span>
+                  <span>{t("Dismiss")}</span>
                 </Button>
               ) : null}
             </div>
@@ -436,12 +437,12 @@ function ExpandableBanner({
           <div className="validation-bar-actions">
             {canShowDetails ? (
               <Button type="button" size="sm" variant="secondary" onClick={() => setDetailsOpen(true)}>
-                <span>Details</span>
+                <span>{t("Details")}</span>
               </Button>
             ) : null}
             {onDismiss ? (
               <Button type="button" size="sm" variant="ghost" onClick={onDismiss}>
-                <span>Dismiss</span>
+                <span>{t("Dismiss")}</span>
               </Button>
             ) : null}
           </div>
@@ -532,6 +533,7 @@ export function App() {
   const [focusMode, setFocusMode] = useState(false);
   const [chatFocusMode, setChatFocusMode] = useState(false);
   const [projectLauncherOpen, setProjectLauncherOpen] = useState(false);
+  const [, setLocaleRevision] = useState(0);
   const [panelLayouts, setPanelLayouts] = useState<Record<PanelId, FloatingPanelLayout>>(defaultPanelLayouts);
   const dismissedErrorMessageRef = useRef<string | null>(null);
   const manualActivityOverrideRef = useRef(false);
@@ -553,6 +555,20 @@ export function App() {
   }, [loadKeybindings]);
 
   useEffect(() => {
+    let disposed = false;
+    void window.archicode.getLocale().then((locale) => {
+      if (!disposed) void applyRendererLocale(locale).then(() => setLocaleRevision((revision) => revision + 1));
+    });
+    const unsubscribe = window.archicode.onLocaleChanged((locale) => {
+      if (!disposed) void applyRendererLocale(locale).then(() => setLocaleRevision((revision) => revision + 1));
+    });
+    return () => {
+      disposed = true;
+      unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
     void loadGlobalSpeechSettings();
     void loadGlobalTtsSettings();
     void loadGlobalVoiceSettings();
@@ -560,7 +576,7 @@ export function App() {
   }, [loadGlobalCodeIdeSettings, loadGlobalSpeechSettings, loadGlobalTtsSettings, loadGlobalVoiceSettings]);
 
   useEffect(() => {
-    const onOpenPreferences = () => window.dispatchEvent(new CustomEvent("archicode:open-project-settings", { detail: { tab: "shortcuts" } }));
+    const onOpenPreferences = () => window.dispatchEvent(new CustomEvent("archicode:open-project-settings", { detail: { tab: "general" } }));
     window.addEventListener("archicode:open-preferences", onOpenPreferences);
     return () => window.removeEventListener("archicode:open-preferences", onOpenPreferences);
   }, []);
@@ -932,8 +948,8 @@ export function App() {
   if (loading) {
     return (
       <main className="loading-screen">
-        <h1>ArchiCode</h1>
-        <p>Loading the visual harness and JSON project model...</p>
+        <h1>{t("ArchiCode")}</h1>
+        <p>{t("Loading the visual harness and JSON project model...")}</p>
       </main>
     );
   }
@@ -1050,7 +1066,7 @@ export function App() {
       type="button"
       className="panel-dock-button"
       onClick={() => setPanelDocked(panel, false)}
-      title={`Detach ${label}`}
+      title={t("Detach {{label}}", { label: label })}
     >
       <PictureInPicture2 size={14} />
     </IconButton>
@@ -1062,7 +1078,7 @@ export function App() {
         type="button"
         className="panel-dock-button"
         onClick={() => collapsePanel(panel)}
-        title={`Collapse ${label}`}
+        title={t("Collapse {{label}}", { label: label })}
       >
         {panel === "sidebar" ? <ChevronLeft size={14} /> : <ChevronRight size={14} />}
       </IconButton>
@@ -1125,7 +1141,7 @@ export function App() {
         } as CSSProperties}
       >
         {sidebarDocked ? (
-          <DockedPanel panel="sidebar" label="Project Sidebar" renderDetachButton={renderDetachButton} panelActionInContent>
+          <DockedPanel panel="sidebar" label={t("Project Sidebar")} renderDetachButton={renderDetachButton} panelActionInContent>
             <ProjectSidebar
               panelAction={renderDockedSidePanelActions("sidebar", "Project Sidebar")}
               onOpenProjectLauncher={() => setProjectLauncherOpen(true)}
@@ -1136,26 +1152,26 @@ export function App() {
           <div
             className="panel-resizer vertical panel-resizer-left"
             role="separator"
-            aria-label="Resize project sidebar"
+            aria-label={t("Resize project sidebar")}
             onPointerDown={startHorizontalResize("left")}
           />
         ) : null}
         <div className="workbench">
           {bundle?.validationErrors.length ? (
             <ExpandableBanner
-              title="JSON validation"
+              title={t("JSON validation")}
               message={bundle.validationErrors.join(" | ")}
               details={bundle.validationErrors.join(" | ")}
-              detailsTitle="JSON validation details"
+              detailsTitle={t("JSON validation details")}
             />
           ) : null}
           {stickyError ? (
             <ExpandableBanner
-              title="Error"
+              title={t("Error")}
               message={stickyError.message}
               details={stickyError.details}
-              detailsTitle="Error details"
-              detailsDescription={new Date(stickyError.raisedAt).toLocaleString()}
+              detailsTitle={t("Error details")}
+              detailsDescription={formatDateTime(new Date(stickyError.raisedAt))}
               tone="error"
               role="alert"
               onDismiss={dismissStickyError}
@@ -1166,7 +1182,7 @@ export function App() {
               title={appNotice.title}
               message={appNotice.message}
               details={appNotice.message}
-              detailsTitle={`${appNotice.title} details`}
+              detailsTitle={t("{{title}} details", { title: appNotice.title })}
               tone={appNotice.tone}
               role="alert"
               onDismiss={dismissAppNotice}
@@ -1198,12 +1214,12 @@ export function App() {
                 <div
                   className="panel-resizer horizontal"
                   role="separator"
-                  aria-label="Resize activity panel"
+                  aria-label={t("Resize activity panel")}
                   onPointerDown={startActivityResize}
                 />
               ) : null}
               {!focusMode && activityDocked ? (
-                <DockedPanel panel="activity" label="Activity Panel" renderDetachButton={renderDetachButton} panelActionInContent>
+                <DockedPanel panel="activity" label={t("Activity Panel")} renderDetachButton={renderDetachButton} panelActionInContent>
                   <SettingsAndRuns
                     open={activityOpen}
                     height={activityHeight}
@@ -1223,12 +1239,12 @@ export function App() {
           <div
             className="panel-resizer vertical panel-resizer-right"
             role="separator"
-            aria-label="Resize node inspector"
+            aria-label={t("Resize node inspector")}
             onPointerDown={startHorizontalResize("right")}
           />
         ) : null}
         {inspectorDocked ? (
-          <DockedPanel panel="inspector" label="Right Sidebar" renderDetachButton={renderDetachButton} panelActionInContent>
+          <DockedPanel panel="inspector" label={t("Right Sidebar")} renderDetachButton={renderDetachButton} panelActionInContent>
             <UnifiedRightSidebar
               activeTab={rightSidebarTab}
               onActiveTabChange={selectRightSidebarTab}
@@ -1244,7 +1260,7 @@ export function App() {
             type="button"
             className="collapsed-panel-restore collapsed-panel-restore-left"
             onClick={() => restorePanel("sidebar")}
-            title="Show project sidebar"
+            title={t("Show project sidebar")}
           >
             <ChevronRight size={16} />
           </IconButton>
@@ -1252,7 +1268,7 @@ export function App() {
         {sidebarFloating ? (
           <FloatingPanel
             panel="sidebar"
-            label="Project Sidebar"
+            label={t("Project Sidebar")}
             layout={panelLayouts.sidebar}
             onDock={() => setPanelDocked("sidebar", true)}
             onTitlebarPointerDown={startFloatingDrag("sidebar")}
@@ -1263,7 +1279,7 @@ export function App() {
         {projectWorkspaceVisible && !focusMode && !chatFocusActive && !activityDocked ? (
           <FloatingPanel
             panel="activity"
-            label="Activity Panel"
+            label={t("Activity Panel")}
             layout={panelLayouts.activity}
             onDock={() => setPanelDocked("activity", true)}
             onTitlebarPointerDown={startFloatingDrag("activity")}
@@ -1279,7 +1295,7 @@ export function App() {
         {inspectorFloating ? (
           <FloatingPanel
             panel="inspector"
-            label="Right Sidebar"
+            label={t("Right Sidebar")}
             layout={panelLayouts.inspector}
             onDock={() => setPanelDocked("inspector", true)}
             onTitlebarPointerDown={startFloatingDrag("inspector")}

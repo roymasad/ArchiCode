@@ -10264,6 +10264,15 @@ button.activity-maintenance-indicator {
 
 .settings-tabs > .ui-tabs-list {
   flex: 0 0 auto;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+}
+
+.settings-tabs > .ui-tabs-list [role="tab"] {
+  flex: 0 0 auto;
 }
 
 .settings-tabs > .settings-tab-content[data-state="inactive"],
@@ -12040,10 +12049,10 @@ button.activity-maintenance-indicator {
 
 .research-auto-approve {
   display: flex;
-  flex: 0 1 112px;
-  width: 112px;
+  flex: 0 1 136px;
+  width: 136px;
   min-width: 34px;
-  max-width: 112px;
+  max-width: 136px;
   overflow: hidden;
 }
 
@@ -12051,6 +12060,15 @@ button.activity-maintenance-indicator {
   container-type: inline-size;
   width: 100%;
   min-width: 0;
+}
+
+.research-auto-approve-fit .ui-switch-row > span {
+  display: -webkit-box;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  line-height: 1.15;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 @container (max-width: 107px) {

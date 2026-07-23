@@ -1,3 +1,4 @@
+import { t } from "@renderer/i18n";
 import { create } from "zustand";
 import type {
   ArchicodeNode,
@@ -94,8 +95,8 @@ export function appendEdgeLabelHistory(history: string[] | undefined, label: str
 
 export const directUndoNotice: AppNotice = {
   tone: "warning",
-  title: "No safe presentation change to undo",
-  message: "ArchiCode only undoes node movement, layout, size, shape, and color. Semantic graph and node-property changes remain protected from realtime undo; use Git when you need to revert them."
+  title: t("No safe presentation change to undo"),
+  message: t("ArchiCode only undoes node movement, layout, size, shape, and color. Semantic graph and node-property changes remain protected from realtime undo; use Git when you need to revert them.")
 };
 
 export async function offerGitAttributesSetup(projectRoot: string): Promise<AppNotice | null> {
@@ -106,8 +107,8 @@ export async function offerGitAttributesSetup(projectRoot: string): Promise<AppN
     if (status === "conflicting") {
       return {
         tone: "warning",
-        title: "Review Git merge rules",
-        message: "This project already has a conflicting .gitattributes rule for ArchiCode graph history. ArchiCode left it unchanged."
+        title: t("Review Git merge rules"),
+        message: t("This project already has a conflicting.gitattributes rule for ArchiCode graph history. ArchiCode left it unchanged.")
       };
     }
     const dismissedKey = projectScopedUiKey(projectRoot, "git-attributes-offer");
@@ -122,14 +123,14 @@ export async function offerGitAttributesSetup(projectRoot: string): Promise<AppN
     const result = await window.archicode.enableGitAttributes(projectRoot);
     return result === "enabled" ? null : {
       tone: "warning",
-      title: "Review Git merge rules",
-      message: "ArchiCode found a conflicting .gitattributes rule and left it unchanged."
+      title: t("Review Git merge rules"),
+      message: t("ArchiCode found a conflicting.gitattributes rule and left it unchanged.")
     };
   } catch (error) {
     return {
       tone: "warning",
-      title: "Git merge rules check failed",
-      message: `ArchiCode couldn't read or update this project's .gitattributes file: ${String(error)}. Fix the file (content or permissions) and reload the project to set up merge-friendly storage.`
+      title: t("Git merge rules check failed"),
+      message: t("ArchiCode couldn't read or update this project's.gitattributes file: {{value1}}. Fix the file (content or permissions) and reload the project to set up merge-friendly storage.", { value1: String(error) })
     };
   }
 }
@@ -209,19 +210,19 @@ export function notifyReviewRequired(bundle: ProjectBundle | null, run: Run): vo
   if (!bundle?.project.settings.notifications.reviewRequired) return;
   if (run.status === "needs-permission" && run.sourceReview) {
     void window.archicode?.showSystemNotification?.({
-      title: "Source deletion needs approval",
+      title: t("Source deletion needs approval"),
       body: run.sourceReview.paths.join(", ")
     });
   }
   if (run.status === "awaiting-plan-review") {
     void window.archicode?.showSystemNotification?.({
-      title: "Plan ready for review",
+      title: t("Plan ready for review"),
       body: run.promptSummary
     });
   }
   if (run.status === "awaiting-code-review") {
     void window.archicode?.showSystemNotification?.({
-      title: "Source changes ready for review",
+      title: t("Source changes ready for review"),
       body: run.promptSummary
     });
   }
@@ -394,8 +395,8 @@ export function createFallbackBundle(rootPath = "/browser-preview"): ProjectBund
       ? Array.from({ length: 18 }, (_, index): ArchicodeNode => ({
         id: `node-visual-${index}`,
         type: index % 3 === 0 ? "feature" : index % 3 === 1 ? "component" : "task",
-        title: `Dense Node ${index + 1}`,
-        description: "Visual QA node used to verify dense graph layout, dark/light theme rendering, and sidebar scrolling.",
+        title: t("Dense Node {{value1}}", { value1: index + 1 }),
+        description: t("Visual QA node used to verify dense graph layout, dark/light theme rendering, and sidebar scrolling."),
         stage: index % 2 === 0 ? "working" : "planned",
         ignored: false,
         flags: index % 4 === 0 ? ["needs-attention"] : ["changed"],
@@ -416,7 +417,7 @@ export function createFallbackBundle(rootPath = "/browser-preview"): ProjectBund
         id: `edge-visual-${index}`,
         source: denseNodes[index].id,
         target: node.id,
-        label: "flows"
+        label: t("flows")
       }))
     : [];
   const visualArtifacts = denseMode
@@ -424,7 +425,7 @@ export function createFallbackBundle(rootPath = "/browser-preview"): ProjectBund
         {
           id: "visual-plan",
           type: "plan" as const,
-          title: "Implementation plan",
+          title: t("Implementation plan"),
           path: ".archicode/artifacts/visual-plan.md",
           runId: "visual-run-succeeded",
           summary: "Plan: reduce navigation clutter, keep primary graph workflows visible, and verify the app with build plus visual QA.",
@@ -434,7 +435,7 @@ export function createFallbackBundle(rootPath = "/browser-preview"): ProjectBund
         {
           id: "visual-diff",
           type: "diff" as const,
-          title: "Source changes",
+          title: t("Source changes"),
           path: ".archicode/artifacts/visual-diff.patch",
           runId: "visual-run-succeeded",
           status: "applied" as const,
@@ -445,7 +446,7 @@ export function createFallbackBundle(rootPath = "/browser-preview"): ProjectBund
         {
           id: "visual-log",
           type: "log" as const,
-          title: "Verification log",
+          title: t("Verification log"),
           path: ".archicode/artifacts/visual-verification.log",
           runId: "visual-run-succeeded",
           summary: "npm test passed. npm run build passed. Visual QA screenshots generated.",
@@ -455,7 +456,7 @@ export function createFallbackBundle(rootPath = "/browser-preview"): ProjectBund
         {
           id: "visual-context",
           type: "context-manifest" as const,
-          title: "Context manifest",
+          title: t("Context manifest"),
           path: ".archicode/artifacts/visual-context.json",
           runId: "visual-run-running",
           summary: "Current flow, selected node, recent runs, and UI shell state included for review.",
@@ -578,9 +579,9 @@ export function createFallbackBundle(rootPath = "/browser-preview"): ProjectBund
               completedAt: createdAt
             }],
             tasks: [
-              { id: "visual-task-plan", title: "Plan", status: "done" as const },
-              { id: "visual-task-code", title: "Code", status: "done" as const },
-              { id: "visual-task-verify", title: "Verify", status: "done" as const }
+              { id: "visual-task-plan", title: t("Plan"), status: "done" as const },
+              { id: "visual-task-code", title: t("Code"), status: "done" as const },
+              { id: "visual-task-verify", title: t("Verify"), status: "done" as const }
             ]
           },
           runInstructions: "All required visual QA stages finished.",

@@ -9,6 +9,8 @@ import { fileURLToPath } from "node:url";
 import * as pty from "node-pty";
 import type { IPty } from "node-pty";
 import { reconcileProjectRoots } from "./recentProjects";
+import { setMainLocale, tMain } from "./i18n";
+import { isLocalePreference, resolveSupportedLocale, type LocalePreference, type LocaleState } from "../shared/i18n/locale";
 import { authorAcceptanceTestsScoped, clearNodeAcceptanceTests, enhanceNodeField, generateGitCommitMessage, runNodeAcceptanceChecks } from "./storage/acceptanceChecks";
 import { listAgentInstructionFiles, readAgentInstructionFile, readAgentMemory, writeAgentInstructionFile, writeAgentMemory } from "./storage/agentFiles";
 import { exportDrawioFlow, exportFlow, exportProjectBundle, importDrawioFlow, importFlow, listDrawioPages } from "./storage/flowImportExport";
@@ -167,9 +169,9 @@ function runIsTerminal(run: Run): boolean {
 }
 
 function runNotificationTitle(run: Run): string {
-  if (run.status === "succeeded") return "ArchiCode job completed";
-  if (run.status === "failed") return "ArchiCode job failed";
-  return "ArchiCode job cancelled";
+  if (run.status === "succeeded") return tMain("notification.jobCompleted");
+  if (run.status === "failed") return tMain("notification.jobFailed");
+  return tMain("notification.jobCancelled");
 }
 
 function showSystemNotification(input: { title: string; body?: string }, source: string): boolean {
@@ -319,6 +321,7 @@ type AppState = {
   tts?: TtsSettings;
   voice?: VoiceSettings;
   semanticModelPreference?: SemanticModelPreferenceId;
+  localePreference?: LocalePreference;
   // Sanitized (secret-free) server configs; auth material lives encrypted in
   // mcpServerSecrets, keyed by server id, the same split providers/apiKeys use.
   globalMcpServers?: ProjectSettings["mcp"]["servers"];
@@ -326,6 +329,36 @@ type AppState = {
   globalMcpToolSettings?: unknown;
   mcpServerSecrets?: Record<string, string>;
 };
+
+function preferredSystemLanguages(): string[] {
+  const preferred = app.getPreferredSystemLanguages();
+  return preferred.length ? preferred : [app.getLocale()];
+}
+
+async function globalLocaleState(): Promise<LocaleState> {
+  const state = await readAppState();
+  const preference = isLocalePreference(state.localePreference) ? state.localePreference : "system";
+  return {
+    preference,
+    resolvedLocale: preference === "system" ? resolveSupportedLocale(preferredSystemLanguages()) : preference
+  };
+}
+
+async function rememberGlobalLocalePreference(preference: LocalePreference): Promise<LocaleState> {
+  if (!isLocalePreference(preference)) throw new Error("Unsupported application language.");
+  const state = await readAppState();
+  await writeAppState({ ...state, localePreference: preference });
+  const localeState: LocaleState = {
+    preference,
+    resolvedLocale: preference === "system" ? resolveSupportedLocale(preferredSystemLanguages()) : preference
+  };
+  await setMainLocale(localeState.resolvedLocale);
+  installApplicationMenu();
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send("archicode:locale-changed", localeState);
+  }
+  return localeState;
+}
 
 async function globalSemanticModelPreference(): Promise<SemanticModelPreferenceId> {
   const state = await readAppState();
@@ -1389,7 +1422,7 @@ async function createWindow(): Promise<void> {
       if (params.isEditable && params.editFlags.canDelete) template.push({ role: "delete" });
       template.push({ type: "separator" }, { role: "selectAll" });
     } else if (params.linkURL && isExternalUrl(params.linkURL)) {
-      template.push({ label: "Open Link", click: () => void shell.openExternal(params.linkURL) });
+      template.push({ label: tMain("menu.openLink"), click: () => void shell.openExternal(params.linkURL) });
     }
 
     if (!template.length) return;
@@ -1611,17 +1644,17 @@ function installApplicationMenu(): void {
         ]
       },
       {
-        label: "Edit",
+        label: tMain("menu.edit"),
         submenu: [
           {
-            label: "Undo",
+            label: tMain("menu.undo"),
             accelerator: "CmdOrCtrl+Z",
             click: () => {
               BrowserWindow.getFocusedWindow()?.webContents.send("archicode:direct-undo-requested");
             }
           },
           {
-            label: "Redo",
+            label: tMain("menu.redo"),
             accelerator: "Shift+CmdOrCtrl+Z",
             click: () => {
               BrowserWindow.getFocusedWindow()?.webContents.send("archicode:direct-redo-requested");
@@ -2379,6 +2412,8 @@ function registerIpc(): void {
   ipcMain.handle("archicode:default-root", () => lastProjectRoot());
   ipcMain.handle("archicode:list-recent-projects", () => listRecentProjects());
   ipcMain.handle("archicode:check-for-updates", () => checkForAppUpdate(app.getVersion(), undefined, { windowsStore: process.windowsStore }));
+  ipcMain.handle("archicode:get-locale", () => globalLocaleState());
+  ipcMain.handle("archicode:set-locale", (_event, preference: LocalePreference) => rememberGlobalLocalePreference(preference));
   ipcMain.handle("archicode:get-global-providers", async () =>
     (await globalProviders({ includeSecrets: true })) ?? applyPlatformCodexLocalDefaults(createSeedProject("", { includeProviderTemplates: false }).project.settings.providers)
   );
@@ -3174,6 +3209,7 @@ ipcMain.handle("archicode:retry-run", async (_event, projectRoot, runId, guidanc
 
 app.whenReady().then(async () => {
   installAppBranding();
+  await setMainLocale((await globalLocaleState()).resolvedLocale);
   installApplicationMenu();
   setResearchStorageRoot(app.getPath("userData"));
   setDelphiToolCacheRoot(app.getPath("userData"));

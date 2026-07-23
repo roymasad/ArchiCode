@@ -24,6 +24,7 @@ import type { SemanticCodeLineContext, SemanticIndexProgress, SemanticIndexStatu
 import type { GraphEvidenceRefreshProgress, GraphEvidenceRefreshResult } from "../main/importer/evidenceRefresh";
 import type { CodeKnowledgeSnapshot } from "../shared/codeKnowledge";
 import type { ProjectMaintenanceStatus } from "../shared/projectMaintenance";
+import type { LocalePreference, LocaleState } from "../shared/i18n/locale";
 import type { ResyncProgress, ResyncReport, ResyncResult, ResyncScope } from "../main/importer/resyncTypes";
 export type { ResyncProgress, ResyncReport, ResyncResult, ResyncScope } from "../main/importer/resyncTypes";
 
@@ -277,6 +278,8 @@ const api = {
   defaultRoot: (): Promise<string | null> => ipcRenderer.invoke("archicode:default-root"),
   listRecentProjects: (): Promise<RecentProjectEntry[]> => ipcRenderer.invoke("archicode:list-recent-projects"),
   checkForUpdates: (): Promise<AppUpdateStatus> => ipcRenderer.invoke("archicode:check-for-updates"),
+  getLocale: (): Promise<LocaleState> => ipcRenderer.invoke("archicode:get-locale"),
+  setLocale: (preference: LocalePreference): Promise<LocaleState> => ipcRenderer.invoke("archicode:set-locale", preference),
   getGlobalProviders: (): Promise<ProjectSettings["providers"]> => ipcRenderer.invoke("archicode:get-global-providers"),
   getGlobalResearchPersonality: (): Promise<GlobalResearchPersonality> => ipcRenderer.invoke("archicode:get-global-research-personality"),
   getGlobalResearchVerbosity: (): Promise<GlobalResearchVerbosity> => ipcRenderer.invoke("archicode:get-global-research-verbosity"),
@@ -804,6 +807,11 @@ const api = {
     const listener = (_event: Electron.IpcRendererEvent, payload: ExternalProjectUpdatePayload) => handler(payload);
     ipcRenderer.on("archicode:external-project-updated", listener);
     return () => ipcRenderer.removeListener("archicode:external-project-updated", listener);
+  },
+  onLocaleChanged: (handler: (payload: LocaleState) => void): (() => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: LocaleState) => handler(payload);
+    ipcRenderer.on("archicode:locale-changed", listener);
+    return () => ipcRenderer.removeListener("archicode:locale-changed", listener);
   },
   onDirectUndoRequested: (handler: () => void): (() => void) => {
     const listener = () => handler();

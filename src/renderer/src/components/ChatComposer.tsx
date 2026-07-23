@@ -1,3 +1,4 @@
+import { t } from "@renderer/i18n";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ProjectBundle } from "@shared/schema";
 import { useArchicodeStore, type ComposerSegment } from "../store/useArchicodeStore";
@@ -390,7 +391,7 @@ export function ChatComposer({
               onMouseEnter={() => setHighlightedIndex(index)}
             >
               <span className="chat-mention-option-title">{option.title}</span>
-              <span className="chat-mention-option-context">{option.subflowName ? `${option.flowName} › ${option.subflowName}` : option.flowName}</span>
+              <span className="chat-mention-option-context">{option.subflowName ? t("{{flowName}}›{{subflowName}}", { flowName: option.flowName, subflowName: option.subflowName }) : option.flowName}</span>
             </button>
           ))}
         </div>

@@ -1,3 +1,4 @@
+import { t } from "@renderer/i18n";
 import * as DialogPrimitive from "@radix-ui/react-dialog";
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu";
 import * as LabelPrimitive from "@radix-ui/react-label";
@@ -61,7 +62,7 @@ export const IconButton = forwardRef<HTMLButtonElement, ButtonProps>(function Ic
   ref
 ) {
   return (
-    <Tooltip content={title ?? "Action"}>
+    <Tooltip content={title ?? t("Action")}>
       <button ref={ref} aria-label={title} className={cx("ui-icon-button", className)} type={type} {...props}>
         {children}
       </button>
@@ -117,7 +118,7 @@ export function Field({ label, hint, action, children, className }: { label: Rea
       <span>{label}</span>
       {hint ? (
         <Tooltip content={hint}>
-          <span className="ui-field-hint-button" tabIndex={0} aria-label="Field help">
+          <span className="ui-field-hint-button" tabIndex={0} aria-label={t("Field help")}>
             <HelpCircle size={13} aria-hidden="true" />
           </span>
         </Tooltip>
@@ -381,7 +382,7 @@ export function DialogContent({
           </div>
           {hideCloseButton ? null : (
             <DialogPrimitive.Close asChild>
-              <IconButton title="Close">
+              <IconButton title={t("Close")}>
                 <X size={16} />
               </IconButton>
             </DialogPrimitive.Close>

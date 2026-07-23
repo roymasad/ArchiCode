@@ -1,3 +1,5 @@
+import { formatDateTime } from "@renderer/i18n";
+import { t } from "@renderer/i18n";
 import { ChevronDown, ChevronLeft, ChevronRight, GitCommitHorizontal, History, LoaderCircle, X } from "lucide-react";
 import { useEffect, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -101,12 +103,12 @@ export function GraphHistoryBar({ inline = false }: { inline?: boolean }) {
   const historyPanelContents = (
     <>
       <header>
-        <div><strong>Graph history</strong><small>{hasCurrentUncommittedVersion ? "Current working graph and read-only snapshots from this branch’s Git history" : "Read-only snapshots from the current branch’s Git history"}</small></div>
+        <div><strong>{t("Graph history")}</strong><small>{hasCurrentUncommittedVersion ? t("Current working graph and read-only snapshots from this branch’s Git history") : t("Read-only snapshots from the current branch’s Git history")}</small></div>
         <div>
-          <IconButton title="Refresh graph history" onClick={() => void refreshGraphHistory()} disabled={graphHistoryLoading}>
+          <IconButton title={t("Refresh graph history")} onClick={() => void refreshGraphHistory()} disabled={graphHistoryLoading}>
             {graphHistoryLoading ? <LoaderCircle className="spin" size={16} /> : <History size={16} />}
           </IconButton>
-          <IconButton title="Close graph history" onClick={toggleGraphHistory}><X size={16} /></IconButton>
+          <IconButton title={t("Close graph history")} onClick={toggleGraphHistory}><X size={16} /></IconButton>
         </div>
       </header>
       <div className="graph-history-list">
@@ -118,14 +120,14 @@ export function GraphHistoryBar({ inline = false }: { inline?: boolean }) {
           >
             <span className="graph-history-dot" />
             <span className="graph-history-item-body">
-              <strong>Graph v{currentVersionNumber}</strong>
-              <span>Current uncommitted graph</span>
-              <small>Working tree · {currentFlowCount} flows · {currentNodeCount} nodes · {currentEdgeCount} relationships</small>
+              <strong>{t("Graph v {{currentVersionNumber}}", { currentVersionNumber: currentVersionNumber })}</strong>
+              <span>{t("Current uncommitted graph")}</span>
+              <small>{t("Working tree · {{currentFlowCount}} flows · {{currentNodeCount}} nodes · {{currentEdgeCount}} relationships", { currentFlowCount: currentFlowCount, currentNodeCount: currentNodeCount, currentEdgeCount: currentEdgeCount })}</small>
             </span>
           </button>
         ) : null}
-        {graphHistoryLoading && !graphHistory.length ? <p className="graph-history-empty">Reading graph snapshots from Git…</p> : null}
-        {!graphHistoryLoading && !graphHistory.length ? <p className="graph-history-empty">No committed ArchiCode graphs were found on this branch.</p> : null}
+        {graphHistoryLoading && !graphHistory.length ? <p className="graph-history-empty">{t("Reading graph snapshots from Git…")}</p> : null}
+        {!graphHistoryLoading && !graphHistory.length ? <p className="graph-history-empty">{t("No committed ArchiCode graphs were found on this branch.")}</p> : null}
         {graphHistory.map((version, index) => {
           const latest = version.latest;
           const selected = entry?.graphVersion === version.graphVersion;
@@ -138,16 +140,16 @@ export function GraphHistoryBar({ inline = false }: { inline?: boolean }) {
             >
               <span className="graph-history-dot" />
               <span className="graph-history-item-body">
-                <strong>Graph v{version.versionNumber ?? graphHistory.length - index}</strong>
+                <strong>{t("Graph v {{index}}", { index: version.versionNumber ?? graphHistory.length - index })}</strong>
                 <span>{latest.subject}</span>
-                <small>{version.commits.length === 1 ? latest.shortCommit : `${version.commits.at(-1)?.shortCommit}–${latest.shortCommit}`} · {latest.flowCount} flows · {latest.nodeCount} nodes · {latest.edgeCount} relationships</small>
+                <small>{t("{{value1}} · {{flowCount}} flows · {{nodeCount}} nodes · {{edgeCount}} relationships", { value1: version.commits.length === 1 ? latest.shortCommit : `${version.commits.at(-1)?.shortCommit}–${latest.shortCommit}`, flowCount: latest.flowCount, nodeCount: latest.nodeCount, edgeCount: latest.edgeCount })}</small>
               </span>
             </button>
           );
         })}
         {graphHistoryHasMore ? (
           <div ref={historyEndRef} className="graph-history-loading-more" aria-live="polite">
-            {graphHistoryLoading ? <><LoaderCircle className="spin" size={15} /> Loading older commits…</> : "Scroll for older commits"}
+            {graphHistoryLoading ? <><LoaderCircle className="spin" size={15} /> {" "}{t("Loading older commits…")}</> : t("Scroll for older commits")}
           </div>
         ) : null}
       </div>
@@ -162,27 +164,27 @@ export function GraphHistoryBar({ inline = false }: { inline?: boolean }) {
             <span className="graph-version-tooltip-target">
               <Tooltip content={(
                 <span className="graph-version-tooltip">
-                  <strong>Graph history</strong>
+                  <strong>{t("Graph history")}</strong>
                   <small>{gitStatus?.isRepo
-                    ? `${gitStatus.currentBranch ?? "Current branch"} · ${displayedVersionNumber ? displayedVersionLabel : graphHistoryLoading ? "Reading versions…" : "No committed graph snapshots"}`
-                    : "Available after this project is committed to Git"}</small>
-                  <small>Inspect the graph captured by each Git commit.</small>
+                    ? t("{{value1}} · {{value2}}", { value1: gitStatus.currentBranch ?? "Current branch", value2: displayedVersionNumber ? displayedVersionLabel : graphHistoryLoading ? "Reading versions…" : "No committed graph snapshots" })
+                    : t("Available after this project is committed to Git")}</small>
+                  <small>{t("Inspect the graph captured by each Git commit.")}</small>
                 </span>
               )}>
                 <IconButton
                   className="graph-version-button"
                   type="button"
                   disabled={!gitStatus?.isRepo}
-                  aria-label={displayedVersionNumber ? `Open graph history, Graph v${displayedVersionNumber}` : "Open graph history"}
+                  aria-label={displayedVersionNumber ? `Open graph history, Graph v${displayedVersionNumber}` : t("Open graph history")}
                 >
                   <GitCommitHorizontal size={17} />
-                  {displayedVersionNumber ? <span className="graph-version-badge">v{displayedVersionNumber}</span> : null}
+                  {displayedVersionNumber ? <span className="graph-version-badge">{t("v {{displayedVersionNumber}}", { displayedVersionNumber: displayedVersionNumber })}</span> : null}
                 </IconButton>
               </Tooltip>
             </span>
           </PopoverTrigger>
           <PopoverPortal>
-            <PopoverContent className="graph-history-panel is-popover" align="start" side="bottom" sideOffset={8} aria-label="Graph history">
+            <PopoverContent className="graph-history-panel is-popover" align="start" side="bottom" sideOffset={8} aria-label={t("Graph history")}>
               {historyPanelContents}
             </PopoverContent>
           </PopoverPortal>
@@ -197,21 +199,21 @@ export function GraphHistoryBar({ inline = false }: { inline?: boolean }) {
         {entry ? (
           <>
             <div className="graph-history-summary">
-              <span className="graph-history-mode"><History size={15} /> Historical inspection</span>
+              <span className="graph-history-mode"><History size={15} /> {" "}{t("Historical inspection")}</span>
               <span className="graph-history-context">
                 <span className="graph-history-context-primary"><b>{entry.shortCommit}</b><span>{displayedVersionLabel}</span></span>
                 <span className="graph-history-context-secondary">
-                  <span className="graph-history-change-key"><i aria-hidden="true" /> {historicalInspection.nodeChanges.length} changed node{historicalInspection.nodeChanges.length === 1 ? "" : "s"}</span>
-                  <span className="graph-history-timestamp">{new Date(entry.committedAt).toLocaleString()}</span>
+                  <span className="graph-history-change-key"><i aria-hidden="true" /> {historicalInspection.nodeChanges.length} {" "}{t("changed node")}{historicalInspection.nodeChanges.length === 1 ? "" : t("s")}</span>
+                  <span className="graph-history-timestamp">{formatDateTime(new Date(entry.committedAt))}</span>
                 </span>
               </span>
             </div>
             <div className="graph-history-actions">
-              <IconButton title="Older graph snapshot" disabled={!older || graphHistoryLoading} onClick={() => older && void inspectHistoricalGraph(older.commit)}>
+              <IconButton title={t("Older graph snapshot")} disabled={!older || graphHistoryLoading} onClick={() => older && void inspectHistoricalGraph(older.commit)}>
                 <ChevronLeft size={16} />
               </IconButton>
               <IconButton
-                title={activeIndex === 0 && hasCurrentUncommittedVersion ? "Current uncommitted graph" : "Newer graph snapshot"}
+                title={activeIndex === 0 && hasCurrentUncommittedVersion ? t("Current uncommitted graph") : t("Newer graph snapshot")}
                 disabled={(!newer && !(activeIndex === 0 && hasCurrentUncommittedVersion)) || graphHistoryLoading}
                 onClick={() => {
                   if (newer) void inspectHistoricalGraph(newer.commit);
@@ -221,10 +223,10 @@ export function GraphHistoryBar({ inline = false }: { inline?: boolean }) {
                 <ChevronRight size={16} />
               </IconButton>
               <Button size="sm" variant="secondary" onClick={toggleGraphHistory}>
-                Timeline <ChevronDown size={14} />
+                {t("Timeline")}{" "}<ChevronDown size={14} />
               </Button>
-              <Button className="graph-history-return" size="sm" variant="primary" onClick={() => void exitHistoricalInspection()} disabled={graphHistoryLoading} title="Return to current graph">
-                <X size={14} /> <span>Current</span>
+              <Button className="graph-history-return" size="sm" variant="primary" onClick={() => void exitHistoricalInspection()} disabled={graphHistoryLoading} title={t("Return to current graph")}>
+                <X size={14} /> <span>{t("Current")}</span>
               </Button>
             </div>
           </>
@@ -232,7 +234,7 @@ export function GraphHistoryBar({ inline = false }: { inline?: boolean }) {
       </div>
 
       {graphHistoryOpen ? (
-        <div className="graph-history-panel" role="dialog" aria-label="Graph history">
+        <div className="graph-history-panel" role="dialog" aria-label={t("Graph history")}>
           {historyPanelContents}
         </div>
       ) : null}

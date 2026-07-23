@@ -1,3 +1,4 @@
+import { t } from "@renderer/i18n";
 import { create } from "zustand";
 import type {
   ArchicodeNode,
@@ -312,7 +313,7 @@ export const createRunsSlice = (set: StoreSet, get: StoreGet): Pick<ArchicodeSta
       const artifact: Artifact = {
         id: uid("artifact"),
         type: "instructions",
-        title: "Browser preview run instructions",
+        title: t("Browser preview run instructions"),
         path: "memory://browser-preview-run",
         runId: run.id,
         nodeId: input.nodeId,

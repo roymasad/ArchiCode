@@ -1,3 +1,4 @@
+import { t } from "@renderer/i18n";
 import { BrainCircuit, Check, ChevronDown, Search } from "lucide-react";
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 
@@ -95,11 +96,11 @@ export function ChatModelPicker({
       <button
         type="button"
         className="chat-model-picker-trigger"
-        aria-label={`Chat model: ${selectedOption?.label ?? value}`}
+        aria-label={t("Chat model: {{value}}", { value: selectedOption?.label ?? value })}
         aria-expanded={open}
         aria-controls={listId}
         disabled={disabled}
-        title="Choose the model for this chat"
+        title={t("Choose the model for this chat")}
         onClick={() => {
           setOpen((current) => !current);
           if (!open) requestAnimationFrame(() => searchRef.current?.focus());
@@ -117,8 +118,8 @@ export function ChatModelPicker({
               ref={searchRef}
               role="combobox"
               value={filter}
-              placeholder="Search models…"
-              aria-label="Search models"
+              placeholder={t("Search models…")}
+              aria-label={t("Search models")}
               aria-expanded="true"
               aria-controls={listId}
               aria-activedescendant={activeIndex >= 0 ? `${listId}-option-${activeIndex}` : undefined}
@@ -146,7 +147,7 @@ export function ChatModelPicker({
               }}
             />
           </label>
-          <div id={listId} className="chat-model-picker-options" role="listbox" aria-label="Available chat models">
+          <div id={listId} className="chat-model-picker-options" role="listbox" aria-label={t("Available chat models")}>
             {visibleOptions.length ? visibleOptions.map((option, index) => (
               <button
                 key={option.value}
@@ -162,7 +163,7 @@ export function ChatModelPicker({
                 <span>{option.label}</span>
                 {option.value === value ? <Check size={14} aria-hidden="true" /> : null}
               </button>
-            )) : <small>No matching models.</small>}
+            )) : <small>{t("No matching models.")}</small>}
           </div>
         </div>
       ) : null}

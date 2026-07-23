@@ -1,3 +1,4 @@
+import { t } from "@renderer/i18n";
 import { create } from "zustand";
 import type {
   ArchicodeNode,
@@ -77,7 +78,7 @@ export const createCapabilitiesSlice = (set: StoreSet, get: StoreGet): Pick<Arch
             ok: true,
             status: "ready",
             checkedAt: now(),
-            message: "Browser preview provider check is simulated."
+            message: t("Browser preview provider check is simulated.")
           }
         }
       }));

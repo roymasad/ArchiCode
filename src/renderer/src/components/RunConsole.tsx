@@ -1,3 +1,5 @@
+import { formatDateTime, formatNumber, formatTime } from "@renderer/i18n";
+import { t } from "@renderer/i18n";
 import { Bug, ChevronDown, CircleHelp, EyeOff, FileJson, PauseCircle, RefreshCw, ShieldCheck, XCircle } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type PointerEvent as ReactPointerEvent } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -113,12 +115,12 @@ function openQuestionsForRun(bundle: ProjectBundle | null, run: Run): number {
 }
 
 function statusLabel(status: Run["status"]): string {
-  if (status === "preparing") return "preparing";
-  if (status === "needs-permission") return "approval";
-  if (status === "awaiting-plan-review") return "plan review";
-  if (status === "awaiting-code-review") return "code review";
-  if (status === "needs-replan") return "replan";
-  return status;
+  if (status === "preparing") return t("preparing");
+  if (status === "needs-permission") return t("approval");
+  if (status === "awaiting-plan-review") return t("plan review");
+  if (status === "awaiting-code-review") return t("code review");
+  if (status === "needs-replan") return t("replan");
+  return t(status);
 }
 
 function implementationFallbackReason(run: Run): string | null {
@@ -136,38 +138,38 @@ function implementationFallbackSummary(run: Run): string | null {
 }
 
 function runHeadline(run: Run, openQuestionCount = 0, runs: Run[] = []): string {
-  if (isRunErrorResolved(run, runs)) return "Run error resolved";
+  if (isRunErrorResolved(run, runs)) return t("Run error resolved");
   const failure = runFailureDetails(run, runs);
   if (failure) return failure.title;
   if (run.runProfileId) {
-    if (run.status === "needs-permission") return "Run App needs approval";
-    if (run.status === "queued" || run.status === "preparing") return "Run App waiting in queue";
-    if (run.status === "running" || run.status === "coding") return "Launching Run App";
-    if (run.status === "succeeded") return "Run App started";
-    if (run.status === "failed") return "Run App failed";
-    if (run.status === "cancelled") return "Run App cancelled";
+    if (run.status === "needs-permission") return t("Run App needs approval");
+    if (run.status === "queued" || run.status === "preparing") return t("Run App waiting in queue");
+    if (run.status === "running" || run.status === "coding") return t("Launching Run App");
+    if (run.status === "succeeded") return t("Run App started");
+    if (run.status === "failed") return t("Run App failed");
+    if (run.status === "cancelled") return t("Run App cancelled");
   }
-  if (implementationFallbackReason(run) && run.status === "succeeded") return "Completed with planning fallback";
-  if (hasProblemNoSourceChanges(run)) return "Run produced no code changes";
-  if (run.status === "preparing") return "Preparing the run";
-  if (run.status === "needs-permission") return run.sourceReview ? "Deletion needs your approval" : "Waiting for your approval";
-  if (run.status === "awaiting-plan-review" && openQuestionCount) return "Questions need answers";
-  if (run.status === "awaiting-plan-review") return "Plan ready for review";
-  if (run.status === "awaiting-code-review") return run.sourceDiffArtifactIds.length ? "Source changes ready for review" : "Code review needs source changes";
-  if (run.status === "planning") return "Planning the change";
-  if (run.status === "coding") return "Applying the change";
-  if (run.status === "debugging") return "Debugging the failure";
-  if (run.status === "needs-replan") return "Needs replanning";
-  if (run.status === "verifying") return "Verifying the change";
-  if (run.status === "queued") return "Waiting in queue";
-  if (run.status === "failed") return "Run failed";
-  if (run.status === "succeeded") return "Run completed";
-  if (run.status === "cancelled") return "Run cancelled";
-  return "Run in progress";
+  if (implementationFallbackReason(run) && run.status === "succeeded") return t("Completed with planning fallback");
+  if (hasProblemNoSourceChanges(run)) return t("Run produced no code changes");
+  if (run.status === "preparing") return t("Preparing the run");
+  if (run.status === "needs-permission") return run.sourceReview ? t("Deletion needs your approval") : t("Waiting for your approval");
+  if (run.status === "awaiting-plan-review" && openQuestionCount) return t("Questions need answers");
+  if (run.status === "awaiting-plan-review") return t("Plan ready for review");
+  if (run.status === "awaiting-code-review") return run.sourceDiffArtifactIds.length ? t("Source changes ready for review") : t("Code review needs source changes");
+  if (run.status === "planning") return t("Planning the change");
+  if (run.status === "coding") return t("Applying the change");
+  if (run.status === "debugging") return t("Debugging the failure");
+  if (run.status === "needs-replan") return t("Needs replanning");
+  if (run.status === "verifying") return t("Verifying the change");
+  if (run.status === "queued") return t("Waiting in queue");
+  if (run.status === "failed") return t("Run failed");
+  if (run.status === "succeeded") return t("Run completed");
+  if (run.status === "cancelled") return t("Run cancelled");
+  return t("Run in progress");
 }
 
 function activeRunAgentTitle(run: Run): string | null {
-  if (run.runProfileId) return "Run App";
+  if (run.runProfileId) return t("Run App");
   if (run.status === "debugging" || run.phase === "debugging") return pandoraAgent.title;
   if (run.purpose === "run-discovery") return null;
   if (run.status === "planning" || run.status === "coding" || run.phase === "planning" || run.phase === "coding") return gaiaAgent.title;
@@ -175,24 +177,24 @@ function activeRunAgentTitle(run: Run): string | null {
 }
 
 function runAppStage(run: Run): { label: string; tone: RunStageTone; detail: string } {
-  if (run.status === "needs-permission") return { label: "Run App", tone: "warning", detail: "approval needed" };
-  if (run.status === "queued" || run.status === "preparing") return { label: "Run App", tone: "neutral", detail: "waiting" };
-  if (run.status === "running" || run.status === "coding") return { label: "Run App", tone: "accent", detail: "launching" };
-  if (run.status === "succeeded") return { label: "Run App", tone: "success", detail: "started" };
-  if (run.status === "failed") return { label: "Run App", tone: "danger", detail: "failed" };
-  if (run.status === "cancelled") return { label: "Run App", tone: "danger", detail: "cancelled" };
-  return { label: "Run App", tone: "neutral", detail: run.status };
+  if (run.status === "needs-permission") return { label: t("Run App"), tone: "warning", detail: t("approval needed") };
+  if (run.status === "queued" || run.status === "preparing") return { label: t("Run App"), tone: "neutral", detail: t("waiting") };
+  if (run.status === "running" || run.status === "coding") return { label: t("Run App"), tone: "accent", detail: t("launching") };
+  if (run.status === "succeeded") return { label: t("Run App"), tone: "success", detail: t("started") };
+  if (run.status === "failed") return { label: t("Run App"), tone: "danger", detail: t("failed") };
+  if (run.status === "cancelled") return { label: t("Run App"), tone: "danger", detail: t("cancelled") };
+  return { label: t("Run App"), tone: "neutral", detail: t(run.status) };
 }
 
 function runSummary(run: Run, runs: Run[] = []): string {
-  if (isRunErrorResolved(run, runs)) return run.errorDismissedAt ? `Error dismissed ${new Date(run.errorDismissedAt).toLocaleString()}.` : "Resolved by successful follow-up run.";
+  if (isRunErrorResolved(run, runs)) return run.errorDismissedAt ? `Error dismissed ${formatDateTime(new Date(run.errorDismissedAt))}.` : "Resolved by successful follow-up run.";
   const failure = runFailureDetails(run, runs);
   if (failure) return failure.message;
   if (hasProblemNoSourceChanges(run)) {
     const providerExplanation = latestProviderExplanation(run, 180);
     return providerExplanation
-      ? `Coding finished without source changes. Codex said: ${providerExplanation}`
-      : "Coding finished, but no source files changed. Check Trace to see what the provider did.";
+      ? t("Coding finished without source changes. Codex said: {{explanation}}", { explanation: providerExplanation })
+      : t("Coding finished, but no source files changed. Check Trace to see what the provider did.");
   }
   if (hasBenignNoSourceChanges(run)) return run.runInstructions ?? "Verification passed; no source changes were needed.";
   if (run.status === "needs-permission") {
@@ -204,12 +206,12 @@ function runSummary(run: Run, runs: Run[] = []): string {
       ? run.permission.reason ?? `${pendingTool.serverLabel} wants to run ${pendingTool.toolName}.`
       : run.permission.reason ?? "ArchiCode needs approval before continuing.";
   }
-  if (run.status === "preparing") return run.runInstructions ?? "ArchiCode is preparing context before this run starts.";
-  if (run.status === "awaiting-plan-review") return run.runInstructions ?? "Review is required before the run can continue.";
+  if (run.status === "preparing") return run.runInstructions ?? t("ArchiCode is preparing context before this run starts.");
+  if (run.status === "awaiting-plan-review") return run.runInstructions ?? t("Review is required before the run can continue.");
   if (run.status === "awaiting-code-review") {
     return run.sourceDiffArtifactIds.length
-      ? "Review the generated source changes, then approve the run to continue verification."
-      : "No source-change artifact was recorded for this manual code review. Reject with guidance or cancel this run.";
+      ? t("Review the generated source changes, then approve the run to continue verification.")
+      : t("No source-change artifact was recorded for this manual code review. Reject with guidance or cancel this run.");
   }
   if (run.status === "needs-replan") return run.runInstructions ?? "Coding found a planning gap. Retry to replan from the captured blocker context.";
   const fallbackSummary = implementationFallbackSummary(run);
@@ -249,7 +251,7 @@ function runElapsedLabel(run: Run, nowMs: number): string {
 function runLastUpdatedLabel(run: Run): string {
   const lastLogAt = run.logs.length ? run.logs[run.logs.length - 1].at : undefined;
   const at = lastLogAt ?? run.completedAt ?? run.startedAt ?? run.createdAt;
-  return new Date(at).toLocaleString();
+  return formatDateTime(new Date(at));
 }
 
 function runSubject(bundle: ProjectBundle | null, run: Run): string {
@@ -285,7 +287,7 @@ function runContextIndicator(run: Run): { estimatedTokens: number; maxTokens: nu
   return {
     estimatedTokens: budget.estimatedTokens,
     maxTokens: budget.maxTokens,
-    detail: `Threshold ${budget.compactionThreshold.toLocaleString()} tokens · ${contextBudgetSourceLabel(budget.source)}.`
+    detail: `Threshold ${formatNumber(budget.compactionThreshold)} tokens · ${contextBudgetSourceLabel(budget.source)}.`
   };
 }
 
@@ -387,40 +389,40 @@ function implementationCounter(run: Run): string | null {
   const incompleteTasks = tasks.some((task) => task.status === "todo" || task.status === "doing") || Boolean(run.implementation.needsMoreWork);
   const taskText = tasks.length
     ? terminal
-      ? ` · ${doneTasks}/${tasks.length} tasks ${incompleteTasks ? "completed" : "done"}`
-      : ` · ${doneTasks}/${tasks.length} tasks`
+      ? t(incompleteTasks ? "run.implementation.tasksCompleted" : "run.implementation.tasksDone", { done: doneTasks, total: tasks.length })
+      : t("run.implementation.tasks", { done: doneTasks, total: tasks.length })
     : "";
-  if (terminal) return `${visibleBatch} batch${visibleBatch === 1 ? "" : "es"} used${taskText}`;
-  return `Implementation ${visibleBatch}/${maxBatches} batches${taskText}`;
+  if (terminal) return t(visibleBatch === 1 ? "run.implementation.batchUsed" : "run.implementation.batchesUsed", { count: visibleBatch, tasks: taskText });
+  return t("run.implementation.batchesProgress", { current: visibleBatch, total: maxBatches, tasks: taskText });
 }
 
 function workflowPanelLabel(run: Run): string {
   if (run.implementation && (run.status === "succeeded" || run.status === "failed" || run.status === "cancelled")) {
-    return "Implementation history";
+    return t("Implementation history");
   }
-  return "Current step";
+  return t("Current step");
 }
 
 function workflowTitle(run: Run, openQuestionCount = 0, runs: Run[] = []): string {
-  if (isRunErrorResolved(run, runs)) return "Error resolved";
+  if (isRunErrorResolved(run, runs)) return t("Error resolved");
   const failure = runFailureDetails(run, runs);
   if (failure) return failure.title;
-  if (run.status === "awaiting-plan-review" && openQuestionCount) return "Answer questions";
-  if (run.status === "awaiting-plan-review") return "Review the plan";
-  if (run.status === "awaiting-code-review") return run.sourceDiffArtifactIds.length ? "Review source changes" : "Missing source changes";
-  if (run.status === "needs-permission") return run.sourceReview ? "Approve source deletion" : pendingMcpToolCall(run) ? "Approve MCP tool" : `Approve ${run.phase}`;
-  if (run.status === "preparing") return "Preparing";
-  if (run.status === "planning") return "Planning";
-  if (implementationFallbackReason(run) && run.status === "succeeded") return "Completed with planning fallback";
-  if (run.status === "coding") return "Coding";
-  if (run.status === "debugging") return "Debugging";
-  if (run.status === "needs-replan") return "Needs replan";
-  if (run.status === "verifying") return "Verifying";
-  if (hasProblemNoSourceChanges(run)) return "No code changes";
-  if (run.status === "succeeded") return "Complete";
-  if (run.status === "failed") return "Failed";
-  if (run.status === "cancelled") return "Stopped";
-  return "Queued";
+  if (run.status === "awaiting-plan-review" && openQuestionCount) return t("Answer questions");
+  if (run.status === "awaiting-plan-review") return t("Review the plan");
+  if (run.status === "awaiting-code-review") return run.sourceDiffArtifactIds.length ? t("Review source changes") : t("Missing source changes");
+  if (run.status === "needs-permission") return run.sourceReview ? t("Approve source deletion") : pendingMcpToolCall(run) ? t("Approve MCP tool") : t("Approve {{phase}}", { phase: run.phase });
+  if (run.status === "preparing") return t("Preparing");
+  if (run.status === "planning") return t("Planning");
+  if (implementationFallbackReason(run) && run.status === "succeeded") return t("Completed with planning fallback");
+  if (run.status === "coding") return t("Coding");
+  if (run.status === "debugging") return t("Debugging");
+  if (run.status === "needs-replan") return t("Needs replan");
+  if (run.status === "verifying") return t("Verifying");
+  if (hasProblemNoSourceChanges(run)) return t("No code changes");
+  if (run.status === "succeeded") return t("Complete");
+  if (run.status === "failed") return t("Failed");
+  if (run.status === "cancelled") return t("Stopped");
+  return t("Queued");
 }
 
 function workflowSummary(run: Run, openQuestionCount = 0, runs: Run[] = []): string {
@@ -459,13 +461,13 @@ function workflowSummary(run: Run, openQuestionCount = 0, runs: Run[] = []): str
   if (run.status === "succeeded" && run.implementation) {
     const hasOutstandingImplementationState = run.implementation.tasks.some((task) => task.status === "todo" || task.status === "doing") || Boolean(run.implementation.needsMoreWork);
     if (hasOutstandingImplementationState) {
-      return "All required stages finished for this run. The implementation summary above is a historical batch/task snapshot, not remaining required work.";
+      return t("All required stages finished for this run. The implementation summary above is a historical batch/task snapshot, not remaining required work.");
     }
   }
-  if (run.status === "succeeded") return "All required stages finished for this run.";
-  if (run.status === "failed") return "Retry the run, or start a debug pass with the failure context.";
-  if (run.status === "cancelled") return run.runInstructions ?? "This run was stopped before completion.";
-  return "This run is waiting for its turn.";
+  if (run.status === "succeeded") return t("All required stages finished for this run.");
+  if (run.status === "failed") return t("Retry the run, or start a debug pass with the failure context.");
+  if (run.status === "cancelled") return run.runInstructions ?? t("This run was stopped before completion.");
+  return t("This run is waiting for its turn.");
 }
 
 function workflowTone(run: Run, runs: Run[] = []): RunStageTone {
@@ -529,11 +531,11 @@ function codeDiffTooltip(run: Run): string {
 }
 
 const evidenceOptions: Array<{ id: RunEvidenceKind; label: string }> = [
-  { id: "last-error", label: "Last error" },
-  { id: "trace-tail", label: "Trace tail" },
-  { id: "latest-diff", label: "Latest diff" },
-  { id: "runtime-log", label: "Runtime log" },
-  { id: "node-notes", label: "Node notes" }
+  { id: "last-error", label: t("Last error") },
+  { id: "trace-tail", label: t("Trace tail") },
+  { id: "latest-diff", label: t("Latest diff") },
+  { id: "runtime-log", label: t("Runtime log") },
+  { id: "node-notes", label: t("Node notes") }
 ];
 
 function defaultEvidenceFor(action: "retry" | "debug"): RunEvidenceKind[] {
@@ -799,26 +801,26 @@ export function RunConsole() {
     >
       <div className="run-queue">
         {runs.length === 0 ? (
-          <EmptyState title="Queue is empty">Runs will appear here with live logs.</EmptyState>
+          <EmptyState title={t("Queue is empty")}>{t("Runs will appear here with live logs.")}</EmptyState>
         ) : (
           <>
-            <div className="queue-summary" aria-label={`Queue. ${activeCount ? `${activeCount} active or waiting` : `${queueRuns.length} runs`}`}>
+            <div className="queue-summary" aria-label={t("Queue. {{value1}}", { value1: activeCount ? `${activeCount} active or waiting` : `${queueRuns.length} runs` })}>
               <div className="queue-summary-row">
-                <strong>{activeCount ? `${activeCount} active or waiting` : `${queueRuns.length} runs`}</strong>
+                <strong>{activeCount ? t("{{activeCount}} active or waiting", { activeCount: activeCount }) : t("{{length}} runs", { length: queueRuns.length })}</strong>
                 {removedCount ? (
                   <IconButton
                     className="queue-removed-toggle"
-                    title={showRemoved ? "Hide removed" : `Show ${removedCount} removed`}
+                    title={showRemoved ? t("Hide removed") : `Show ${removedCount} removed`}
                     onClick={() => setShowRemoved((current) => !current)}
                   >
                     <EyeOff size={16} />
                   </IconButton>
                 ) : null}
               </div>
-              {!showRemoved && removedCount ? <small>Removed runs are hidden from the queue.</small> : null}
+              {!showRemoved && removedCount ? <small>{t("Removed runs are hidden from the queue.")}</small> : null}
             </div>
             {queueRuns.length === 0 ? (
-              <EmptyState title="Queue is clear">Removed runs are hidden. Use the eye button to view history.</EmptyState>
+              <EmptyState title={t("Queue is clear")}>{t("Removed runs are hidden. Use the eye button to view history.")}</EmptyState>
             ) : null}
             {queueRuns.map((run) => {
               const summary = runSummary(run, runs);
@@ -849,10 +851,10 @@ export function RunConsole() {
                     </span>
                   ) : null}
                   <StatusPill tone={errorResolved ? "neutral" : failure ? runFailureTone(failure.classification) : noSourceChanges ? "danger" : planningFallback ? "warning" : statusTone(run.status)}>
-                    {errorResolved ? "resolved" : failure ? runFailureStatusLabel(failure.classification) : noSourceChanges ? "no changes" : planningFallback ? "fallback" : statusLabel(run.status)}
+                    {errorResolved ? t("resolved") : failure ? runFailureStatusLabel(failure.classification) : noSourceChanges ? t("no changes") : planningFallback ? t("fallback") : statusLabel(run.status)}
                   </StatusPill>
                   <small>{queueSummary}</small>
-                  <span className="run-queue-duration" title={isActive(run) ? "Elapsed run time" : "Final run time"}>{elapsed}</span>
+                  <span className="run-queue-duration" title={isActive(run) ? t("Elapsed run time") : t("Final run time")}>{elapsed}</span>
                 </button>
               );
             })}
@@ -864,7 +866,7 @@ export function RunConsole() {
         <div
           className="run-queue-resizer"
           role="separator"
-          aria-label="Resize queue columns"
+          aria-label={t("Resize queue columns")}
           aria-orientation="vertical"
           aria-valuemin={minQueueWidth}
           aria-valuemax={maxQueueWidth}
@@ -886,13 +888,13 @@ export function RunConsole() {
               <div className="run-detail-head-actions">
                 <Button type="button" size="sm" onClick={explainSelectedRun}>
                   <CircleHelp size={14} />
-                  <span>Explain this</span>
+                  <span>{t("Explain this")}</span>
                 </Button>
                 {selectedContextIndicator ? (
                   <ContextSizeIndicator
                     detail={selectedContextIndicator.detail}
                     estimatedTokens={selectedContextIndicator.estimatedTokens}
-                    label="Latest run context"
+                    label={t("Latest run context")}
                     maxTokens={selectedContextIndicator.maxTokens}
                     cost={selectedCostIndicator}
                   />
@@ -911,23 +913,23 @@ export function RunConsole() {
               <div className="run-workflow-actions">
                 {selected.status === "awaiting-plan-review" && selectedOpenQuestionCount ? (
                   <>
-                    <Tooltip content="Open the Questions tab to answer blockers before the plan can continue.">
-                      <Button type="button" variant="primary" title="Open the Questions tab to answer blockers before the plan can continue." onClick={openQuestionsTab}>
-                        <span>Open Questions</span>
+                    <Tooltip content={t("Open the Questions tab to answer blockers before the plan can continue.")}>
+                      <Button type="button" variant="primary" title={t("Open the Questions tab to answer blockers before the plan can continue.")} onClick={openQuestionsTab}>
+                        <span>{t("Open Questions")}</span>
                       </Button>
                     </Tooltip>
                     {selectedPendingGraphProposalCount ? (
                       <Tooltip content={graphReviewTooltip(selectedPendingGraphProposalCount)}>
                         <Button type="button" title={graphReviewTooltip(selectedPendingGraphProposalCount)} onClick={openPatchReview}>
                           <FileJson size={16} />
-                          <span>Review Graph Changes</span>
+                          <span>{t("Review Graph Changes")}</span>
                         </Button>
                       </Tooltip>
                     ) : null}
                     <Tooltip content={cancelTooltip(selected)}>
                       <Button type="button" title={cancelTooltip(selected)} onClick={() => cancelRun(selected.id)}>
                         <PauseCircle size={16} />
-                        <span>Cancel</span>
+                        <span>{t("Cancel")}</span>
                       </Button>
                     </Tooltip>
                   </>
@@ -938,7 +940,7 @@ export function RunConsole() {
                         <Tooltip content={graphReviewTooltip(selectedPendingGraphProposalCount)}>
                           <Button type="button" variant="primary" title={graphReviewTooltip(selectedPendingGraphProposalCount)} onClick={openPatchReview}>
                             <FileJson size={16} />
-                            <span>Review Graph Changes</span>
+                            <span>{t("Review Graph Changes")}</span>
                           </Button>
                         </Tooltip>
                         <Tooltip content={approvalTooltip(selected)}>
@@ -965,7 +967,7 @@ export function RunConsole() {
                     <Tooltip content={cancelTooltip(selected)}>
                       <Button type="button" title={cancelTooltip(selected)} onClick={() => cancelRun(selected.id)}>
                         <PauseCircle size={16} />
-                        <span>Cancel</span>
+                        <span>{t("Cancel")}</span>
                       </Button>
                     </Tooltip>
                     {selected.status === "needs-permission" && !pendingMcpToolCall(selected) ? (
@@ -975,7 +977,7 @@ export function RunConsole() {
                           checked={reusableApproval}
                           onChange={() => setReusableApproval((current) => !current)}
                         />
-                        <span>Remember</span>
+                        <span>{t("Remember")}</span>
                       </label>
                     ) : null}
                   </>
@@ -983,11 +985,11 @@ export function RunConsole() {
                 {isActive(selected) && !selectedNeedsAction ? (
                   <Button type="button" onClick={() => cancelRun(selected.id)}>
                     <PauseCircle size={16} />
-                    <span>Cancel</span>
+                    <span>{t("Cancel")}</span>
                   </Button>
                 ) : null}
                 {!isActive(selected) ? (
-                  <Tooltip content={selectedRunActionBlocked ? selectedRunActionBlockMessage : "Retry or resume this run."}>
+                  <Tooltip content={selectedRunActionBlocked ? selectedRunActionBlockMessage : t("Retry or resume this run.")}>
                     <span className="toolbar-tooltip-target">
                       <Button
                         type="button"
@@ -996,23 +998,23 @@ export function RunConsole() {
                         title={selectedRunActionBlocked ? selectedRunActionBlockMessage : undefined}
                       >
                         {guidanceTarget === "retry" ? <ChevronDown size={16} /> : <RefreshCw size={16} />}
-                        <span>{guidanceTarget === "retry" ? "Options" : "Retry"}</span>
+                        <span>{guidanceTarget === "retry" ? t("Options") : t("Retry")}</span>
                       </Button>
                     </span>
                   </Tooltip>
                 ) : null}
                 {selectedFailure ? (
                   <Button type="button" onClick={() => dismissRunError(selected.id)}>
-                    <span>Dismiss Error</span>
+                    <span>{t("Dismiss Error")}</span>
                   </Button>
                 ) : null}
                 {isRunErrorResolved(selected, runs) && !selected.queueRemovedAt ? (
                   <Button type="button" onClick={() => removeRunFromQueue(selected.id)}>
-                    <span>Remove from Queue</span>
+                    <span>{t("Remove from Queue")}</span>
                   </Button>
                 ) : null}
                 {selected.status === "failed" ? (
-                  <Tooltip content={selectedRunActionBlocked ? selectedRunActionBlockMessage : "Start a debug pass from this failure."}>
+                  <Tooltip content={selectedRunActionBlocked ? selectedRunActionBlockMessage : t("Start a debug pass from this failure.")}>
                     <span className="toolbar-tooltip-target">
                       <Button
                         type="button"
@@ -1022,7 +1024,7 @@ export function RunConsole() {
                         title={selectedRunActionBlocked ? selectedRunActionBlockMessage : undefined}
                       >
                         <Bug size={16} />
-                        <span>{guidanceTarget === "debug" ? "Run Debug" : "Debug"}</span>
+                        <span>{guidanceTarget === "debug" ? t("Run Debug") : t("Debug")}</span>
                       </Button>
                     </span>
                   </Tooltip>
@@ -1032,7 +1034,7 @@ export function RunConsole() {
                     type="button"
                     onClick={openPlanTab}
                   >
-                    <span>{selectedHasGeneratedPlan ? "Open Plan" : "Open Prompt"}</span>
+                    <span>{selectedHasGeneratedPlan ? t("Open Plan") : t("Open Prompt")}</span>
                   </Button>
                 ) : null}
                 {selected.sourceDiffArtifactIds.length ? (
@@ -1042,7 +1044,7 @@ export function RunConsole() {
                       title={codeDiffTooltip(selected)}
                       onClick={openCodeDiffTab}
                     >
-                      <span>Open Source Changes</span>
+                      <span>{t("Open Source Changes")}</span>
                     </Button>
                   </Tooltip>
                 ) : null}
@@ -1052,18 +1054,18 @@ export function RunConsole() {
               <div className="run-guidance-panel run-rejection-panel">
                 <div className="run-guidance-heading">
                   <div>
-                    <strong>{selected.sourceReview ? "Reject deletion" : selected.status === "awaiting-code-review" ? "Reject code" : selected.status === "awaiting-plan-review" ? "Reject plan" : pendingMcpToolCall(selected) ? "Deny MCP tool" : "Reject run"}</strong>
+                    <strong>{selected.sourceReview ? t("Reject deletion") : selected.status === "awaiting-code-review" ? t("Reject code") : selected.status === "awaiting-plan-review" ? t("Reject plan") : pendingMcpToolCall(selected) ? t("Deny MCP tool") : t("Reject run")}</strong>
                     <small>{selected.sourceReview
-                      ? "Explain why the file should be kept. The deletion is rejected and the same coding run continues."
+                      ? t("Explain why the file should be kept. The deletion is rejected and the same coding run continues.")
                       : pendingMcpToolCall(selected)
-                      ? "Add an optional denial reason. The run will continue without this tool."
-                      : "Tell the next retry what must change. Reject stops this run; cancel stops it without a review decision."}</small>
+                      ? t("Add an optional denial reason. The run will continue without this tool.")
+                      : t("Tell the next retry what must change. Reject stops this run; cancel stops it without a review decision.")}</small>
                   </div>
                   <div className="run-guidance-heading-actions">
-                    <Button type="button" size="sm" onClick={() => setRejectingRunId(null)}>Keep Reviewing</Button>
+                    <Button type="button" size="sm" onClick={() => setRejectingRunId(null)}>{t("Keep Reviewing")}</Button>
                     <Button type="button" size="sm" variant="danger" disabled={!rejectionReason.trim()} onClick={submitRejection}>
                       <XCircle size={14} />
-                      <span>{selected.sourceReview ? "Reject and Continue" : "Reject and Stop"}</span>
+                      <span>{selected.sourceReview ? t("Reject and Continue") : t("Reject and Stop")}</span>
                     </Button>
                   </div>
                 </div>
@@ -1071,10 +1073,10 @@ export function RunConsole() {
                   value={rejectionReason}
                   rows={3}
                   placeholder={selected.sourceReview
-                    ? "Why should this file be kept?"
+                    ? t("Why should this file be kept?")
                     : pendingMcpToolCall(selected)
-                      ? "Optional reason to show the provider when this tool call is denied"
-                      : "What should be changed before this can be accepted?"}
+                      ? t("Optional reason to show the provider when this tool call is denied")
+                      : t("What should be changed before this can be accepted?")}
                   onChange={(event) => setRejectionReason(event.target.value)}
                 />
               </div>
@@ -1083,13 +1085,13 @@ export function RunConsole() {
               <div className="run-guidance-panel" ref={guidancePanelRef} tabIndex={-1}>
                 <div className="run-guidance-heading">
                   <div>
-                    <strong>{guidanceTarget === "retry" ? "Retry run" : "Debug run"}</strong>
-                    <small>Add optional direction and evidence, then run.</small>
+                    <strong>{guidanceTarget === "retry" ? t("Retry run") : t("Debug run")}</strong>
+                    <small>{t("Add optional direction and evidence, then run.")}</small>
                   </div>
                   <div className="run-guidance-heading-actions">
-                    <Button type="button" size="sm" onClick={() => setGuidanceTarget(null)}>Cancel</Button>
+                    <Button type="button" size="sm" onClick={() => setGuidanceTarget(null)}>{t("Cancel")}</Button>
                     <Button type="button" size="sm" variant="primary" onClick={submitGuidance} disabled={selectedRunActionBlocked}>
-                      <span>{guidanceTarget === "retry" ? "Run Retry" : "Run Debug"}</span>
+                      <span>{guidanceTarget === "retry" ? t("Run Retry") : t("Run Debug")}</span>
                     </Button>
                   </div>
                 </div>
@@ -1097,10 +1099,10 @@ export function RunConsole() {
                 <TextArea
                   value={guidanceText}
                   rows={3}
-                  placeholder="Optional guidance for the next run"
+                  placeholder={t("Optional guidance for the next run")}
                   onChange={(event) => setGuidanceText(event.target.value)}
                 />
-                <div className="run-guidance-evidence" aria-label="Evidence to include">
+                <div className="run-guidance-evidence" aria-label={t("Evidence to include")}>
                   {evidenceOptions.map((option) => (
                     <label key={option.id} className="check-row compact-check">
                       <input
@@ -1118,21 +1120,21 @@ export function RunConsole() {
             ) : null}
             {selectedNeedsAction ? (
               <div className="run-approval-meta" aria-label={approvalTitle(bundle, selected)}>
-                <span><b className="run-label-accent">Subject</b>{selectedSubject}</span>
+                <span><b className="run-label-accent">{t("Subject")}</b>{selectedSubject}</span>
                 {pendingMcpToolCall(selected)
-                  ? <span><b className="run-label-warning">Tool</b>{`${pendingMcpToolCall(selected)?.serverLabel} / ${pendingMcpToolCall(selected)?.toolName}`}</span>
-                  : <span><b className="run-label-warning">Allow</b>{runCommand(selected)}</span>}
-                {pendingMcpToolCall(selected)?.intent ? <span><b>Intent</b>{pendingMcpToolCall(selected)?.intent}</span> : null}
-                <span><b>Sandbox</b>{providerSandbox(bundle, selected)}</span>
+                  ? <span><b className="run-label-warning">{t("Tool")}</b>{t("{{serverLabel}}/{{toolName}}", { serverLabel: pendingMcpToolCall(selected)?.serverLabel, toolName: pendingMcpToolCall(selected)?.toolName })}</span>
+                  : <span><b className="run-label-warning">{t("Allow")}</b>{runCommand(selected)}</span>}
+                {pendingMcpToolCall(selected)?.intent ? <span><b>{t("Intent")}</b>{pendingMcpToolCall(selected)?.intent}</span> : null}
+                <span><b>{t("Sandbox")}</b>{providerSandbox(bundle, selected)}</span>
               </div>
             ) : null}
             {selected.status === "awaiting-plan-review" && !selectedOpenQuestionCount ? (
-              <section className="run-review-document" aria-label="Plan awaiting approval">
-                <strong>Plan awaiting approval</strong>
+              <section className="run-review-document" aria-label={t("Plan awaiting approval")}>
+                <strong>{t("Plan awaiting approval")}</strong>
                 <p>{selectedPlanText ?? workflowSummary(selected, selectedOpenQuestionCount, runs)}</p>
               </section>
             ) : null}
-            <div className="run-stage-strip" aria-label="Run stages">
+            <div className="run-stage-strip" aria-label={t("Run stages")}>
               {stageItems.map((stage) => (
                 <div key={stage.label} className={`run-stage run-stage-${stage.tone}`}>
                   <b>{stage.label}</b>
@@ -1141,39 +1143,39 @@ export function RunConsole() {
               ))}
             </div>
             <div className="run-detail-lines">
-              <small><b>Command</b>{runCommand(selected)}</small>
-              <small><b className="run-label-accent">Subject</b>{selectedSubject}</small>
-              <small><b className="run-label-accent">Updated</b>{runLastUpdatedLabel(selected)}</small>
-              {selected.status !== "awaiting-plan-review" ? <small><b className="run-label-success">Status</b>{selectedPromptText ?? workflowSummary(selected, selectedOpenQuestionCount, runs)}</small> : null}
-              {!selected.runProfileId ? <small><b className="run-label-accent">Effort</b>{runEffortLabel(selected)}</small> : null}
-              {!selected.runProfileId ? <small><b className="run-label-accent">Cost</b>{runCostLabel(selected)}</small> : null}
+              <small><b>{t("Command")}</b>{runCommand(selected)}</small>
+              <small><b className="run-label-accent">{t("Subject")}</b>{selectedSubject}</small>
+              <small><b className="run-label-accent">{t("Updated")}</b>{runLastUpdatedLabel(selected)}</small>
+              {selected.status !== "awaiting-plan-review" ? <small><b className="run-label-success">{t("Status")}</b>{selectedPromptText ?? workflowSummary(selected, selectedOpenQuestionCount, runs)}</small> : null}
+              {!selected.runProfileId ? <small><b className="run-label-accent">{t("Effort")}</b>{runEffortLabel(selected)}</small> : null}
+              {!selected.runProfileId ? <small><b className="run-label-accent">{t("Cost")}</b>{runCostLabel(selected)}</small> : null}
               {selected.mcp ? (
-                <small><b className={selected.mcp.decision === "allowed" ? "run-label-accent" : selected.mcp.decision === "pending" ? "run-label-warning" : undefined}>MCP</b>{`${selected.mcp.decision}${selected.mcp.pendingToolCall ? ` · pending ${selected.mcp.pendingToolCall.serverLabel}/${selected.mcp.pendingToolCall.toolName}` : selected.mcp.pendingServerIds.length ? ` · pending ${selected.mcp.pendingServerIds.join(", ")}` : ""}`}</small>
+                <small><b className={selected.mcp.decision === "allowed" ? "run-label-accent" : selected.mcp.decision === "pending" ? "run-label-warning" : undefined}>{t("MCP")}</b>{t("{{decision}}{{value2}}", { decision: selected.mcp.decision, value2: selected.mcp.pendingToolCall ? ` · pending ${selected.mcp.pendingToolCall.serverLabel}/${selected.mcp.pendingToolCall.toolName}` : selected.mcp.pendingServerIds.length ? ` · pending ${selected.mcp.pendingServerIds.join(", ")}` : "" })}</small>
               ) : null}
               {selected.mcpToolCalls.length ? (
-                <small><b className="run-label-accent">Tools</b>{selected.mcpToolCalls.map((call) => `${call.serverId === "archicode-internal-tools" ? "ArchiCode" : call.serverLabel ?? "MCP"}:${call.toolName}:${call.status}`).join(", ")}</small>
+                <small><b className="run-label-accent">{t("Tools")}</b>{selected.mcpToolCalls.map((call) => `${call.serverId === "archicode-internal-tools" ? "ArchiCode" : call.serverLabel ?? "MCP"}:${call.toolName}:${call.status}`).join(", ")}</small>
               ) : null}
               {selected.filesystemScope ? (
                 <small>
-                  <b className={selected.filesystemScope.violations.length ? "run-label-danger" : undefined}>Files</b>
-                  {selected.filesystemScope.violations.length ? `Blocked: ${selected.filesystemScope.violations.join(" ")}` : selected.filesystemScope.policy}
+                  <b className={selected.filesystemScope.violations.length ? "run-label-danger" : undefined}>{t("Files")}</b>
+                  {selected.filesystemScope.violations.length ? t("Blocked: {{value1}}", { value1: selected.filesystemScope.violations.join(" ") }) : selected.filesystemScope.policy}
                 </small>
               ) : null}
             </div>
             {selectedFailure ? (
               <div className="run-error-callout" role="alert">
                 <XCircle size={16} />
-                <span>{selectedFailureDetails ? `${selectedFailureDetails.title}: ${selectedFailure}` : selectedFailure}</span>
+                <span>{selectedFailureDetails ? t("{{title}}: {{selectedFailure}}", { title: selectedFailureDetails.title, selectedFailure: selectedFailure }) : selectedFailure}</span>
               </div>
             ) : null}
             <div className="run-progress-list">
               {progressItems.length ? progressItems.map((item) => (
                 <div key={item.id} className={`run-progress-item run-progress-${item.tone}${item.detail ? "" : " no-detail"}`}>
-                  <span>{new Date(item.at).toLocaleTimeString()}</span>
+                  <span>{formatTime(new Date(item.at))}</span>
                   <strong>{item.label}</strong>
                   {item.detail ? <small>{item.detail}</small> : null}
                 </div>
-              )) : <small>Waiting for provider activity...</small>}
+              )) : <small>{t("Waiting for provider activity...")}</small>}
             </div>
           </>
         </div>

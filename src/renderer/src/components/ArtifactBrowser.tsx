@@ -1,3 +1,5 @@
+import { formatNumber } from "@renderer/i18n";
+import { t } from "@renderer/i18n";
 import { CircleHelp, FileArchive, Search } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -74,13 +76,13 @@ export function ArtifactBrowser({ embedded = false }: ArtifactBrowserProps) {
     <>
       <Button type="button" data-testid="artifact-browser-button" onClick={() => setOpen(true)}>
         <FileArchive size={16} />
-        <span>Artifacts</span>
+        <span>{t("Artifacts")}</span>
       </Button>
 
       <DialogRoot open={open} onOpenChange={setOpen}>
         <DialogContent
-          title="Artifacts"
-          description="Browse generated logs, patch proposals, summaries, screenshots, diffs, and attachments."
+          title={t("Artifacts")}
+          description={t("Browse generated logs, patch proposals, summaries, screenshots, diffs, and attachments.")}
           className="artifact-modal"
         >
           {browser}
@@ -143,10 +145,10 @@ function ArtifactSplitView({
       <div className="artifact-filters">
         <label className="search-row">
           <Search size={15} />
-          <TextInput value={query} placeholder="Search artifacts" onChange={(event) => onQueryChange(event.target.value)} />
+          <TextInput value={query} placeholder={t("Search artifacts")} onChange={(event) => onQueryChange(event.target.value)} />
         </label>
         <select className="ui-input" value={typeFilter} onChange={(event) => onTypeChange(event.target.value)}>
-          <option value="all">All types</option>
+          <option value="all">{t("All types")}</option>
           {types.map((type) => (
             <option key={type} value={type}>{type}</option>
           ))}
@@ -154,7 +156,7 @@ function ArtifactSplitView({
       </div>
       <div className="artifact-grid">
         <ScrollArea className="artifact-list">
-          {artifacts.length === 0 ? <EmptyState title="No artifacts">Run builds or agent jobs to create logs, summaries, diffs, and instructions.</EmptyState> : null}
+          {artifacts.length === 0 ? <EmptyState title={t("No artifacts")}>{t("Run builds or agent jobs to create logs, summaries, diffs, and instructions.")}</EmptyState> : null}
           {artifacts.map((artifact) => (
             <button
               key={artifact.id}
@@ -174,14 +176,14 @@ function ArtifactSplitView({
               <strong>{selected.title}</strong>
               <Button type="button" size="sm" onClick={onExplain}>
                 <CircleHelp size={14} />
-                <span>Explain this</span>
+                <span>{t("Explain this")}</span>
               </Button>
-              <span>{selected.status ?? "recorded"}</span>
+              <span>{selected.status ?? t("recorded")}</span>
               <small>{selected.path}</small>
               {(selected.type === "plan" ? (selectedPlanDisplay?.listLabel ?? planArtifactListLabel(selected)) : selected.summary) ? <p>{selected.type === "plan" ? (selectedPlanDisplay?.listLabel ?? planArtifactListLabel(selected)) : selected.summary}</p> : null}
-              {selected.sizeBytes ? <small>{selected.sizeBytes.toLocaleString()} bytes</small> : null}
-              {selected.runId ? <small>Run: {selected.runId}</small> : null}
-              {selected.nodeId ? <small>Node: {selected.nodeId}</small> : null}
+              {selected.sizeBytes ? <small>{t("{{value1}} bytes", { value1: formatNumber(selected.sizeBytes) })}</small> : null}
+              {selected.runId ? <small>{t("Run: {{runId}}", { runId: selected.runId })}</small> : null}
+              {selected.nodeId ? <small>{t("Node: {{nodeId}}", { nodeId: selected.nodeId })}</small> : null}
               {canPreview ? (
                 <ArtifactPreview
                   artifact={selected}
@@ -190,7 +192,7 @@ function ArtifactSplitView({
               ) : null}
             </>
           ) : (
-            <EmptyState icon={<FileArchive size={20} />} title="Select an artifact" />
+            <EmptyState icon={<FileArchive size={20} />} title={t("Select an artifact")} />
           )}
         </section>
       </div>
@@ -203,11 +205,11 @@ export function ArtifactPreview({ artifact, text }: { artifact: Artifact; text: 
     const formatted = formatPlanArtifactText(text);
     const showRaw = formatted.trim() !== text.trim();
     return (
-      <div className="artifact-plan-preview" role="region" aria-label="Plan preview">
+      <div className="artifact-plan-preview" role="region" aria-label={t("Plan preview")}>
         <pre className="artifact-preview">{formatted}</pre>
         {showRaw ? (
           <details className="artifact-plan-raw">
-            <summary>Raw plan artifact</summary>
+            <summary>{t("Raw plan artifact")}</summary>
             <pre className="artifact-preview">{text}</pre>
           </details>
         ) : null}
@@ -223,7 +225,7 @@ export function ArtifactPreview({ artifact, text }: { artifact: Artifact; text: 
   const files = splitDiffByFile(text);
   if (files.length > 1) {
     return (
-      <div className="artifact-preview diff-preview diff-file-preview" role="region" aria-label="Diff preview">
+      <div className="artifact-preview diff-preview diff-file-preview" role="region" aria-label={t("Diff preview")}>
         {showSummary ? <DiffSummaryBar text={text} /> : null}
         {files.map((file, fileIndex) => (
           <details key={`${fileIndex}-${file.title}`} className="diff-file-section" open>
@@ -244,7 +246,7 @@ export function ArtifactPreview({ artifact, text }: { artifact: Artifact; text: 
   }
 
   return (
-    <div className="artifact-preview diff-preview" role="region" aria-label="Diff preview">
+    <div className="artifact-preview diff-preview" role="region" aria-label={t("Diff preview")}>
       {showSummary ? <DiffSummaryBar text={text} /> : null}
       {text.split("\n").map((line, index) => {
         const tone = diffLineTone(line);
@@ -262,10 +264,10 @@ export function ArtifactPreview({ artifact, text }: { artifact: Artifact; text: 
 function DiffSummaryBar({ text }: { text: string }) {
   const stats = diffStats(text);
   return (
-    <div className="diff-summary-bar" aria-label="Diff summary">
-      <span>{stats.filesChanged} {stats.filesChanged === 1 ? "file" : "files"}</span>
-      <strong className="diff-stat-added">+{stats.added}</strong>
-      <strong className="diff-stat-removed">-{stats.removed}</strong>
+    <div className="diff-summary-bar" aria-label={t("Diff summary")}>
+      <span>{t("{{filesChanged}} {{value2}}", { filesChanged: stats.filesChanged, value2: stats.filesChanged === 1 ? "file" : "files" })}</span>
+      <strong className="diff-stat-added">{t("+ {{added}}", { added: stats.added })}</strong>
+      <strong className="diff-stat-removed">{t("- {{removed}}", { removed: stats.removed })}</strong>
     </div>
   );
 }

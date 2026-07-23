@@ -5,6 +5,7 @@ import rehypeHighlight from "rehype-highlight";
 import remarkGfm from "remark-gfm";
 import type { Element, ElementContent, Root, RootContent, Text } from "hast";
 import type { Plugin } from "unified";
+import { t } from "@renderer/i18n";
 import { MarkdownImageLink } from "./MarkdownImageLink";
 import { MermaidDiagram } from "./MermaidDiagram";
 
@@ -262,7 +263,7 @@ export const ResearchMarkdown = memo(function ResearchMarkdown({ content, highli
       return (
         <MarkdownImageLink
           href={src}
-          label={alt || projectTarget?.relativePath || "Image"}
+          label={alt || projectTarget?.relativePath || t("Image")}
           projectTarget={projectTarget}
           loadProjectImage={loadProjectImage}
           onProjectPathLink={onProjectPathLink}

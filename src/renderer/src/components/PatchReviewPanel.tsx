@@ -1,3 +1,5 @@
+import { formatNumber } from "@renderer/i18n";
+import { t } from "@renderer/i18n";
 import { CheckCircle2, FileJson, RefreshCw, ShieldAlert, XCircle } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
@@ -125,8 +127,8 @@ function OperationDetails({ operation, bundle }: { operation: LlmPatchProposal["
           <Badge tone={operation.mode === "replace" ? "warning" : "success"}>{operation.mode}</Badge>
           <code>{operation.path}</code>
         </div>
-        <p>{operation.reason ?? `${operation.mode === "replace" ? "Replace" : "Create"} project convention file.`}</p>
-        <small>{new TextEncoder().encode(operation.content).byteLength.toLocaleString()} bytes proposed</small>
+        <p>{operation.reason ?? t("{{value1}} project convention file.", { value1: operation.mode === "replace" ? "Replace" : "Create" })}</p>
+        <small>{t("{{value1}} bytes proposed", { value1: formatNumber(new TextEncoder().encode(operation.content).byteLength) })}</small>
       </div>
     );
   }
@@ -137,7 +139,7 @@ function OperationDetails({ operation, bundle }: { operation: LlmPatchProposal["
           <Badge tone={operation.mode === "replace" ? "warning" : "success"}>{operation.mode}</Badge>
           <code>{operation.profile.id}</code>
         </div>
-        <p>{operation.reason ?? "Adds a runnable target to the toolbar."}</p>
+        <p>{operation.reason ?? t("Adds a runnable target to the toolbar.")}</p>
         <small>{operation.profile.runCommand}</small>
       </div>
     );
@@ -146,11 +148,11 @@ function OperationDetails({ operation, bundle }: { operation: LlmPatchProposal["
     return (
       <div className="source-operation-detail">
         <div className="source-operation-head">
-          <Badge tone="warning">graph</Badge>
-          <code>{typeof operation.operation.kind === "string" ? operation.operation.kind : "operation"}</code>
+          <Badge tone="warning">{t("graph")}</Badge>
+          <code>{typeof operation.operation.kind === "string" ? operation.operation.kind : t("operation")}</code>
         </div>
         <details className="source-operation-code">
-          <summary>Proposed graph operation</summary>
+          <summary>{t("Proposed graph operation")}</summary>
           <pre>{JSON.stringify(operation.operation, null, 2)}</pre>
         </details>
       </div>
@@ -182,23 +184,23 @@ function SourceOperationDetails({ operation, bundle }: { operation: SourceOperat
       </div>
       <dl>
         <div>
-          <dt>Node</dt>
+          <dt>{t("Node")}</dt>
           <dd>{nodeLabel(bundle, operation.nodeId)}</dd>
         </div>
         <div>
-          <dt>Bytes</dt>
-          <dd>{bytes.toLocaleString()}</dd>
+          <dt>{t("Bytes")}</dt>
+          <dd>{formatNumber(bytes)}</dd>
         </div>
         <div>
-          <dt>Base hash</dt>
-          <dd>{operation.baseSha256 ? operation.baseSha256.slice(0, 12) : operation.action === "replace" ? "missing" : "not needed"}</dd>
+          <dt>{t("Base hash")}</dt>
+          <dd>{operation.baseSha256 ? operation.baseSha256.slice(0, 12) : operation.action === "replace" ? t("missing") : t("not needed")}</dd>
         </div>
       </dl>
       {operation.reason ? <p>{operation.reason}</p> : null}
-      {operation.testIntent ? <small>Test intent: {operation.testIntent}</small> : null}
+      {operation.testIntent ? <small>{t("Test intent: {{testIntent}}", { testIntent: operation.testIntent })}</small> : null}
       {operation.content ? (
         <details className="source-operation-code" open>
-          <summary>Proposed file content</summary>
+          <summary>{t("Proposed file content")}</summary>
           <pre>{operation.content}</pre>
         </details>
       ) : null}
@@ -303,22 +305,22 @@ export function PatchReviewPanel() {
         type="button"
         size="sm"
         className={pendingCount ? "patch-review-trigger has-pending" : "patch-review-trigger"}
-        title={pendingCount ? `${pendingCount} graph proposal${pendingCount === 1 ? "" : "s"} waiting for review` : "Review proposed graph changes"}
+        title={pendingCount ? `${pendingCount} graph proposal${pendingCount === 1 ? "" : "s"} waiting for review` : t("Review proposed graph changes")}
         onClick={() => setOpen(true)}
       >
         <FileJson size={16} />
-        <span>{pendingCount ? `Review ${pendingCount}` : "Graph Changes"}</span>
+        <span>{pendingCount ? t("Review {{pendingCount}}", { pendingCount: pendingCount }) : t("Graph Changes")}</span>
       </Button>
 
       <DialogRoot open={open} onOpenChange={setOpen}>
         <DialogContent
-          title="Proposed Graph Changes"
-          description="Review model-proposed graph edits such as node text, edges, new nodes, and subflows. Source code edits are reviewed in Source Changes."
+          title={t("Proposed Graph Changes")}
+          description={t("Review model-proposed graph edits such as node text, edges, new nodes, and subflows. Source code edits are reviewed in Source Changes.")}
           className="patch-modal"
         >
           <div className="patch-toolbar">
-            <Badge tone={pendingCount ? "warning" : "neutral"}>{pendingCount} pending</Badge>
-            <IconButton title="Refresh patch proposals" onClick={refreshPatchProposals}>
+            <Badge tone={pendingCount ? "warning" : "neutral"}>{t("{{pendingCount}} pending", { pendingCount: pendingCount })}</Badge>
+            <IconButton title={t("Refresh patch proposals")} onClick={refreshPatchProposals}>
               <RefreshCw size={16} />
             </IconButton>
           </div>
@@ -326,7 +328,7 @@ export function PatchReviewPanel() {
           <div className="patch-review-grid">
               <ScrollArea className="patch-list">
                 {graphProposals.length === 0 ? (
-                  <EmptyState icon={<FileJson size={20} />} title="No graph proposals yet" />
+                  <EmptyState icon={<FileJson size={20} />} title={t("No graph proposals yet")} />
                 ) : null}
                 {graphProposals.map((item) => (
                   <button
@@ -336,14 +338,14 @@ export function PatchReviewPanel() {
                     onClick={() => setActiveId(item.artifact.id)}
                   >
                     <span>{item.artifact.title}</span>
-                    <small>{item.artifact.status ?? "pending-review"}</small>
+                    <small>{item.artifact.status ?? t("pending-review")}</small>
                   </button>
                 ))}
               </ScrollArea>
 
               <section className="patch-detail">
                 {!active ? (
-                  <EmptyState icon={<FileJson size={20} />} title="Select a patch proposal" />
+                  <EmptyState icon={<FileJson size={20} />} title={t("Select a patch proposal")} />
                 ) : null}
 
                 {active && active.validationErrors.length > 0 ? (
@@ -357,7 +359,7 @@ export function PatchReviewPanel() {
                   <>
                     <div className="patch-summary">
                       <strong>{proposal.summary}</strong>
-                      <small>{reviewOperations.length} proposed graph change{reviewOperations.length === 1 ? "" : "s"} from run {proposal.runId}. Check the rows you want to apply; unchecked rows will be rejected.</small>
+                      <small>{t("{{length}} proposed graph change {{value2}} from run {{runId}}. Check the rows you want to apply; unchecked rows will be rejected.", { length: reviewOperations.length, value2: reviewOperations.length === 1 ? "" : "s", runId: proposal.runId })}</small>
                     </div>
 
                     <div className="operation-list">
@@ -383,17 +385,15 @@ export function PatchReviewPanel() {
 
                     {active.review ? (
                       <div className="review-results">
-                        <strong>Last review</strong>
+                        <strong>{t("Last review")}</strong>
                         {active.review.results.map((result) => (
-                          <small key={result.operationIndex}>
-                            #{result.operationIndex + 1} {proposal.operations[result.operationIndex]?.kind ?? "operation"} {result.status}: {result.message}
-                          </small>
+                          <small key={result.operationIndex}>{t("# {{value1}} {{value2}} {{status}}: {{message}}", { value1: result.operationIndex + 1, value2: proposal.operations[result.operationIndex]?.kind ?? "operation", status: result.status, message: result.message })}</small>
                         ))}
                       </div>
                     ) : null}
 
                     <div className="patch-decision-bar">
-                      <span>{acceptedCount} of {reviewOperations.length} selected to apply</span>
+                      <span>{t("{{acceptedCount}} of {{length}} selected to apply", { acceptedCount: acceptedCount, length: reviewOperations.length })}</span>
                       <div className="action-row end">
                         <Button
                           type="button"
@@ -405,7 +405,7 @@ export function PatchReviewPanel() {
                           }}
                         >
                           <CheckCircle2 size={16} />
-                          <span>Select All</span>
+                          <span>{t("Select All")}</span>
                         </Button>
                         <Button
                           type="button"
@@ -415,7 +415,7 @@ export function PatchReviewPanel() {
                           }}
                         >
                           <XCircle size={16} />
-                          <span>Reject All</span>
+                          <span>{t("Reject All")}</span>
                         </Button>
                         <Button
                           variant="primary"
@@ -427,7 +427,7 @@ export function PatchReviewPanel() {
                           }}
                         >
                           <CheckCircle2 size={16} />
-                          <span>Apply Selected</span>
+                          <span>{t("Apply Selected")}</span>
                         </Button>
                       </div>
                     </div>

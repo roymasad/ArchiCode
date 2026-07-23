@@ -1,3 +1,4 @@
+import { t } from "@renderer/i18n";
 import { Activity, Copy, Eye, EyeOff, Loader2, Plus, Settings, Trash2 } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ProjectSettings } from "@shared/schema";
@@ -403,7 +404,7 @@ export function GlobalProviderSetup() {
       label: modelOptionLabel(provider, model)
     }));
     return (
-      <Field label="Model" hint={modelHint(provider)}>
+      <Field label={t("Model")} hint={modelHint(provider)}>
         <ModelCombobox
           value={currentModel}
           placeholder={placeholder}
@@ -421,10 +422,10 @@ export function GlobalProviderSetup() {
     const isCodexLocal = provider.kind === "codex-local";
     return (
       <Field
-        label="Output verbosity"
+        label={t("Output verbosity")}
         hint={isCodexLocal
-          ? "Overrides Codex model_verbosity for each ArchiCode invocation without changing Codex files."
-          : "Sent as text.verbosity for GPT-5.6 Responses API requests. Other models and Chat Completions are unchanged."}
+          ? t("Overrides Codex model_verbosity for each ArchiCode invocation without changing Codex files.")
+          : t("Sent as text.verbosity for GPT-5.6 Responses API requests. Other models and Chat Completions are unchanged.")}
       >
         <Select
           value={provider.outputVerbosity ?? "default"}
@@ -441,10 +442,10 @@ export function GlobalProviderSetup() {
 
   const renderContextWindowField = (provider: ProjectSettings["providers"][number]) => (
     <Field
-      label="Context window"
+      label={t("Context window")}
       hint={provider.detectedContextWindowTokens
         ? `Auto detected: ${formatTokenCount(provider.detectedContextWindowTokens)} tokens. Enter a value only to override.`
-        : "Auto uses detected model metadata or conservative known-model defaults. Suggestions are editable because provider catalogs change."}
+        : t("Auto uses detected model metadata or conservative known-model defaults. Suggestions are editable because provider catalogs change.")}
     >
       <TextInput
         type="number"
@@ -485,22 +486,22 @@ export function GlobalProviderSetup() {
     <>
       <Button type="button" onClick={openDialog}>
         <Settings size={16} />
-        <span>Set up LLM provider</span>
+        <span>{t("Set up LLM provider")}</span>
       </Button>
       <DialogRoot open={open} onOpenChange={setOpen}>
         <DialogContent
-          title="LLM Provider Setup"
-          description="Codebase mapping requires a working LLM provider. These provider settings are saved globally and reused when projects are opened."
+          title={t("LLM Provider Setup")}
+          description={t("Codebase mapping requires a working LLM provider. These provider settings are saved globally and reused when projects are opened.")}
           className="global-provider-dialog"
         >
           {notice ? <div className="settings-note">{notice}</div> : null}
           {showMacKeychainNote ? (
-            <p className="settings-note settings-keychain-note">On macOS, API keys are stored in Keychain. Saving or using a saved key may ask you to allow ArchiCode to access it.</p>
+            <p className="settings-note settings-keychain-note">{t("On macOS, API keys are stored in Keychain. Saving or using a saved key may ask you to allow ArchiCode to access it.")}</p>
           ) : null}
           <div className="provider-profile-toolbar">
             <Button type="button" size="sm" onClick={addProviderProfile}>
               <Plus size={14} />
-              <span>New Provider</span>
+              <span>{t("New Provider")}</span>
             </Button>
           </div>
           <div className="provider-editor-list compact">
@@ -532,30 +533,30 @@ export function GlobalProviderSetup() {
                           onClick={() => void checkProvider(provider.id)}
                         >
                           <Activity size={14} />
-                          <span>{checkingProviderIds.has(provider.id) ? "Checking..." : "Check"}</span>
+                          <span>{checkingProviderIds.has(provider.id) ? t("Checking...") : t("Check")}</span>
                         </Button>
                       </span>
                     </Tooltip>
-                    <IconButton type="button" title="Duplicate provider profile" onClick={() => duplicateProvider(provider.id)}>
+                    <IconButton type="button" title={t("Duplicate provider profile")} onClick={() => duplicateProvider(provider.id)}>
                       <Copy size={16} />
                     </IconButton>
                     <IconButton
                       type="button"
-                      title="Delete provider profile"
+                      title={t("Delete provider profile")}
                       onClick={() => removeProvider(provider.id)}
                     >
                       <Trash2 size={16} />
                     </IconButton>
                   </div>
                 </div>
-                <Field label="Profile name">
+                <Field label={t("Profile name")}>
                   <TextInput
                     data-provider-name-input={provider.id}
                     value={provider.label}
                     onChange={(event) => updateProvider(provider.id, { label: event.target.value })}
                   />
                 </Field>
-                <Field label="LLM Provider Source">
+                <Field label={t("LLM Provider Source")}>
                   <Select
                     value={provider.kind}
                     onValueChange={(value) => changeProviderKind(provider.id, value as ProviderKind)}
@@ -564,30 +565,28 @@ export function GlobalProviderSetup() {
                 </Field>
                 <small>{providerDescription(provider.kind)}</small>
                 {providerHealth[provider.id] ? (
-                  <small className={providerHealth[provider.id].ok ? "health-ok" : "health-bad"}>
-                    {providerHealth[provider.id].status}: {providerHealth[provider.id].message}
-                  </small>
+                  <small className={providerHealth[provider.id].ok ? "health-ok" : "health-bad"}>{t("{{status}}: {{message}}", { status: providerHealth[provider.id].status, message: providerHealth[provider.id].message })}</small>
                 ) : null}
                 {provider.kind === "codex-local" || provider.kind === "claude-local" || provider.kind === "opencode-local" || provider.kind === "antigravity-local" || provider.kind === "grok-local" || provider.kind === "kimi-local" ? (
                   <>
                     {renderProviderModelField(provider, provider.kind === "codex-local" ? "configured Codex default" : provider.kind === "claude-local" ? "configured Claude default" : provider.kind === "opencode-local" ? "provider/model" : provider.kind === "antigravity-local" ? "configured agy default" : provider.kind === "kimi-local" ? "configured Kimi default" : "configured Grok Build default")}
                     {provider.kind === "codex-local" ? renderOutputVerbosityField(provider) : null}
                     {renderContextWindowField(provider)}
-                    <Field label="Local command">
+                    <Field label={t("Local command")}>
                       <TextInput
                         value={provider.localCommand ?? (provider.kind === "codex-local" ? "codex" : provider.kind === "claude-local" ? "claude" : provider.kind === "opencode-local" ? "opencode" : provider.kind === "antigravity-local" ? "agy" : provider.kind === "kimi-local" ? "kimi" : "grok")}
                         placeholder={provider.kind === "codex-local" ? "codex" : provider.kind === "claude-local" ? "claude" : provider.kind === "opencode-local" ? "opencode" : provider.kind === "antigravity-local" ? "agy" : provider.kind === "kimi-local" ? "kimi" : "grok"}
                         onChange={(event) => updateProvider(provider.id, { localCommand: event.target.value || undefined })}
                       />
                     </Field>
-                    {provider.kind === "kimi-local" ? null : <Field label={provider.kind === "opencode-local" || provider.kind === "antigravity-local" || provider.kind === "grok-local" ? "Agent" : provider.kind === "codex-local" ? "Profile" : "Settings override"}>
+                    {provider.kind === "kimi-local" ? null : <Field label={provider.kind === "opencode-local" || provider.kind === "antigravity-local" || provider.kind === "grok-local" ? t("Agent") : provider.kind === "codex-local" ? t("Profile") : t("Settings override")}>
                       <TextInput
                         value={provider.localProfile ?? ""}
-                        placeholder={provider.kind === "codex-local" ? "optional Codex profile" : provider.kind === "claude-local" ? "optional Claude settings profile" : provider.kind === "opencode-local" ? "optional OpenCode agent" : provider.kind === "antigravity-local" ? "optional Antigravity agent" : "optional Grok Build agent"}
+                        placeholder={provider.kind === "codex-local" ? t("optional Codex profile") : provider.kind === "claude-local" ? t("optional Claude settings profile") : provider.kind === "opencode-local" ? t("optional OpenCode agent") : provider.kind === "antigravity-local" ? t("optional Antigravity agent") : t("optional Grok Build agent")}
                         onChange={(event) => updateProvider(provider.id, { localProfile: event.target.value || undefined })}
                       />
                     </Field>}
-                    <Field label={`${provider.kind === "codex-local" ? "Codex" : provider.kind === "claude-local" ? "Claude" : provider.kind === "opencode-local" ? "OpenCode" : provider.kind === "antigravity-local" ? "Antigravity" : provider.kind === "kimi-local" ? "Kimi Code" : "Grok Build"} command access`}>
+                    <Field label={t("{{value1}} command access", { value1: provider.kind === "codex-local" ? "Codex" : provider.kind === "claude-local" ? "Claude" : provider.kind === "opencode-local" ? "OpenCode" : provider.kind === "antigravity-local" ? "Antigravity" : provider.kind === "kimi-local" ? "Kimi Code" : "Grok Build" })}>
                       <Select
                         value={provider.localSandbox ?? "read-only"}
                         onValueChange={(value) => updateProvider(provider.id, {
@@ -599,41 +598,41 @@ export function GlobalProviderSetup() {
                     <small>{provider.kind === "codex-local"
                       ? codexLocalCommandAccessHint
                       : provider.kind === "claude-local"
-                        ? "Claude Code uses permission modes instead of a true filesystem sandbox. ArchiCode maps these access levels to read-only planning, auto-accepted workspace edits, or full bypass mode."
+                        ? t("Claude Code uses permission modes instead of a true filesystem sandbox. ArchiCode maps these access levels to read-only planning, auto-accepted workspace edits, or full bypass mode.")
                         : provider.kind === "opencode-local"
-                          ? "OpenCode runs once per request. Read-only phases receive explicit edit, shell, and external-directory denies; write-capable build phases use --auto."
+                          ? t("OpenCode runs once per request. Read-only phases receive explicit edit, shell, and external-directory denies; write-capable build phases use --auto.")
                           : provider.kind === "antigravity-local"
-                            ? "Antigravity uses plan+sandbox for read-only phases, accept-edits+sandbox for workspace writes, and bypasses permissions only in full-access mode."
+                            ? t("Antigravity uses plan+sandbox for read-only phases, accept-edits+sandbox for workspace writes, and bypasses permissions only in full-access mode.")
                             : provider.kind === "kimi-local"
-                              ? "Kimi print mode is autonomous, so ArchiCode injects first-match static deny rules in an isolated Kimi home. Read-only blocks edits and shell tools; workspace write allows project Write/Edit but leaves shell, delegated agents, and MCP denied. Full access falls back to the user's Kimi rules."
-                            : "Grok Build uses dontAsk plus its read-only sandbox for review phases, and bypassPermissions inside the selected workspace/off sandbox only for write-capable phases."}</small>
+                              ? t("Kimi print mode is autonomous, so ArchiCode injects first-match static deny rules in an isolated Kimi home. Read-only blocks edits and shell tools; workspace write allows project Write/Edit but leaves shell, delegated agents, and MCP denied. Full access falls back to the user's Kimi rules.")
+                            : t("Grok Build uses dontAsk plus its read-only sandbox for review phases, and bypassPermissions inside the selected workspace/off sandbox only for write-capable phases.")}</small>
                     {provider.kind === "antigravity-local" || provider.kind === "kimi-local" ? (
-                      <small>{provider.kind === "kimi-local" ? <>Kimi receives a fresh one-shot <code>kimi --prompt</code> call in a temporary Kimi home. The temporary session is removed afterward; the signed-in credential store remains shared.</> : <>Antigravity always runs through one-shot <code>agy --print</code> calls; ArchiCode owns conversation continuity.</>}</small>
+                      <small>{provider.kind === "kimi-local" ? <>{t("Kimi receives a fresh one-shot")}{" "}<code>{t("kimi --prompt")}</code> {" "}{t("call in a temporary Kimi home. The temporary session is removed afterward; the signed-in credential store remains shared.")}</> : <>{t("Antigravity always runs through one-shot")}{" "}<code>{t("agy --print")}</code> {" "}{t("calls; ArchiCode owns conversation continuity.")}</>}</small>
                     ) : (
                       <>
                         <Switch
                           checked={Boolean(provider.ephemeral)}
                           onCheckedChange={(checked) => updateProvider(provider.id, { ephemeral: checked })}
-                          label={provider.kind === "codex-local" ? "Use throwaway Codex sessions" : provider.kind === "claude-local" ? "Disable Claude session persistence" : provider.kind === "opencode-local" ? "Delete OpenCode sessions after each call" : "Delete Grok Build sessions after each call"}
+                          label={provider.kind === "codex-local" ? t("Use throwaway Codex sessions") : provider.kind === "claude-local" ? t("Disable Claude session persistence") : provider.kind === "opencode-local" ? t("Delete OpenCode sessions after each call") : t("Delete Grok Build sessions after each call")}
                         />
                         <small>{provider.kind === "codex-local"
-                          ? <>Adds <code>--ephemeral</code> for local Codex runs. ArchiCode still saves runs and artifacts, but Codex should not reuse or save its own CLI session state.</>
+                          ? <>{t("Adds")}{" "}<code>{t("--ephemeral")}</code> {" "}{t("for local Codex runs. ArchiCode still saves runs and artifacts, but Codex should not reuse or save its own CLI session state.")}</>
                           : provider.kind === "claude-local"
-                            ? <>Adds <code>--no-session-persistence</code> for local Claude runs. ArchiCode still saves runs and artifacts, but Claude should not reuse or save its own CLI session state.</>
+                            ? <>{t("Adds")}{" "}<code>{t("--no-session-persistence")}</code> {" "}{t("for local Claude runs. ArchiCode still saves runs and artifacts, but Claude should not reuse or save its own CLI session state.")}</>
                             : provider.kind === "opencode-local"
-                              ? <>Runs <code>opencode session delete</code> after the one-shot response. ArchiCode still saves its own runs and artifacts.</>
-                              : <>Adds <code>--no-memory</code> and runs <code>grok sessions delete</code> after the one-shot response. ArchiCode still saves its own runs and artifacts.</>}</small>
+                              ? <>{t("Runs")}{" "}<code>{t("opencode session delete")}</code> {" "}{t("after the one-shot response. ArchiCode still saves its own runs and artifacts.")}</>
+                              : <>{t("Adds")}{" "}<code>{t("--no-memory")}</code> {" "}{t("and runs")}{" "}<code>{t("grok sessions delete")}</code> {" "}{t("after the one-shot response. ArchiCode still saves its own runs and artifacts.")}</>}</small>
                       </>
                     )}
                   </>
                 ) : provider.kind === "offline-manual" ? (
-                  <small>This is a non-AI offline mode for using ArchiCode as a living diagram, run ledger, artifact browser, and permissioned command shell. It cannot plan or code with an LLM until another provider is selected.</small>
+                  <small>{t("This is a non-AI offline mode for using ArchiCode as a living diagram, run ledger, artifact browser, and permissioned command shell. It cannot plan or code with an LLM until another provider is selected.")}</small>
                 ) : (
                   <>
                     {renderProviderModelField(provider, provider.kind === "anthropic-compatible" ? "claude-sonnet-4-6" : "gpt-5.5")}
                     {provider.kind === "openai-compatible" ? renderOutputVerbosityField(provider) : null}
                     {renderContextWindowField(provider)}
-                    <Field label="Base URL">
+                    <Field label={t("Base URL")}>
                       <TextInput
                         value={provider.baseUrl ?? ""}
                         placeholder={provider.kind === "anthropic-compatible" ? "https://api.anthropic.com" : "https://api.openai.com/v1"}
@@ -641,7 +640,7 @@ export function GlobalProviderSetup() {
                       />
                     </Field>
                     {provider.kind === "openai-compatible" ? (
-                      <Field label="Endpoint" hint={openAiEndpointHint(provider)}>
+                      <Field label={t("Endpoint")} hint={openAiEndpointHint(provider)}>
                         <Select
                           value={provider.openAiEndpointMode ?? "auto"}
                           onValueChange={(value) => updateProvider(provider.id, {
@@ -655,20 +654,20 @@ export function GlobalProviderSetup() {
                                 ? `Auto (${openAiEndpointLabel(provider.detectedOpenAiEndpointMode)})`
                                 : "Auto (recommended)"
                             },
-                            { value: "responses", label: "Responses API" },
-                            { value: "chat-completions", label: "Chat Completions" }
+                            { value: "responses", label: t("Responses API") },
+                            { value: "chat-completions", label: t("Chat Completions") }
                           ]}
                         />
                       </Field>
                     ) : null}
-                    <Field label="API key" hint="Saved locally on this computer and hidden from project JSON.">
+                    <Field label={t("API key")} hint={t("Saved locally on this computer and hidden from project JSON.")}>
                       <div className="secret-input-row">
                         <TextInput
                           type={visibleApiKeyIds.has(provider.id) ? "text" : "password"}
                           value={providerApiKeyValue(provider)}
                           placeholder={savedApiKeyIds.has(provider.id)
-                            ? "Saved API key (hidden)"
-                            : provider.kind === "anthropic-compatible" ? "Paste Anthropic API key" : "Paste OpenAI API key"}
+                            ? t("Saved API key (hidden)")
+                            : provider.kind === "anthropic-compatible" ? t("Paste Anthropic API key") : t("Paste OpenAI API key")}
                           autoComplete="off"
                           spellCheck={false}
                           onPaste={() => setPendingModelCheckIds((current) => new Set(current).add(provider.id))}
@@ -679,7 +678,7 @@ export function GlobalProviderSetup() {
                         />
                         <IconButton
                           type="button"
-                          title={visibleApiKeyIds.has(provider.id) ? "Hide API key" : "Show API key"}
+                          title={visibleApiKeyIds.has(provider.id) ? t("Hide API key") : t("Show API key")}
                           onClick={() => setVisibleApiKeyIds((current) => {
                             const next = new Set(current);
                             if (next.has(provider.id)) next.delete(provider.id);
@@ -691,7 +690,7 @@ export function GlobalProviderSetup() {
                         </IconButton>
                       </div>
                       {savedApiKeyIds.has(provider.id) && !providerApiKeyValue(provider) ? (
-                        <small>Saved key will be used. Paste a new key here to replace it.</small>
+                        <small>{t("Saved key will be used. Paste a new key here to replace it.")}</small>
                       ) : null}
                     </Field>
                   </>
@@ -700,10 +699,10 @@ export function GlobalProviderSetup() {
             ))}
           </div>
           <div className="dialog-actions">
-            <Button type="button" onClick={() => setOpen(false)}>Close</Button>
+            <Button type="button" onClick={() => setOpen(false)}>{t("Close")}</Button>
             <Button type="button" variant="primary" onClick={() => void save()} disabled={saveBusy}>
               {saveBusy ? <Loader2 size={16} className="is-spinning" /> : null}
-              <span>{saveBusy ? "Saving..." : "Save provider setup"}</span>
+              <span>{saveBusy ? t("Saving...") : t("Save provider setup")}</span>
             </Button>
           </div>
         </DialogContent>

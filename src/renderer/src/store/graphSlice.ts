@@ -1,3 +1,4 @@
+import { t } from "@renderer/i18n";
 import { create } from "zustand";
 import type {
   ArchicodeNode,
@@ -459,8 +460,8 @@ export const createGraphSlice = (set: StoreSet, get: StoreGet): Pick<ArchicodeSt
     const node: ArchicodeNode = {
       id: uid("node"),
       type: nodeType,
-      title: `New ${nodeType}`,
-      description: "Describe the intent, behavior, constraints, and success criteria for this node.",
+      title: t("New {{nodeType}}", { nodeType: nodeType }),
+      description: t("Describe the intent, behavior, constraints, and success criteria for this node."),
       stage: "planned" satisfies NodeStage,
       ignored: false,
       flags: ["changed"],

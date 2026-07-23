@@ -1,3 +1,5 @@
+import { formatNumber } from "@renderer/i18n";
+import { t } from "@renderer/i18n";
 import { useEffect, useId, useState } from "react";
 
 const MAX_MERMAID_SOURCE_LENGTH = 20_000;
@@ -55,7 +57,7 @@ export function MermaidDiagram({ source }: { source: string }) {
   useEffect(() => {
     let cancelled = false;
     if (source.length > MAX_MERMAID_SOURCE_LENGTH) {
-      setResult({ source, error: `Diagram source exceeds ${MAX_MERMAID_SOURCE_LENGTH.toLocaleString()} characters.` });
+      setResult({ source, error: `Diagram source exceeds ${formatNumber(MAX_MERMAID_SOURCE_LENGTH)} characters.` });
       return;
     }
 
@@ -81,7 +83,7 @@ export function MermaidDiagram({ source }: { source: string }) {
     return (
       <div
         className="research-mermaid"
-        aria-label="Mermaid diagram"
+        aria-label={t("Mermaid diagram")}
         dangerouslySetInnerHTML={{ __html: result.svg }}
       />
     );
@@ -90,12 +92,12 @@ export function MermaidDiagram({ source }: { source: string }) {
   if (result.source === source && result.error) {
     return (
       <div className="research-mermaid-error" role="alert">
-        <strong>Unable to render Mermaid diagram.</strong>
+        <strong>{t("Unable to render Mermaid diagram.")}</strong>
         <span>{result.error}</span>
         <pre><code className="language-mermaid">{source}</code></pre>
       </div>
     );
   }
 
-  return <div className="research-mermaid-loading" role="status">Rendering diagram…</div>;
+  return <div className="research-mermaid-loading" role="status">{t("Rendering diagram…")}</div>;
 }

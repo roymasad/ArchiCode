@@ -1,3 +1,4 @@
+import { formatDateTime } from "@renderer/i18n";
 import { AlertCircle, Archive, Brain, Check, CheckCircle2, ChevronDown, ChevronUp, Circle, Copy, Download, FileJson, FileText, History, ListTodo, Loader2, MessageSquare, Mic, Paperclip, Play, Plus, RefreshCw, Send, ShieldCheck, Sparkles, Split, Square, Volume2, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
@@ -100,8 +101,8 @@ export function formatResearchChatMarkdown(session: ResearchChatSession, bundle:
     "",
     `- Project: ${bundle.project.name}`,
     `- Scope: ${scopeName}`,
-    `- Created: ${new Date(session.createdAt).toLocaleString()}`,
-    `- Updated: ${new Date(session.updatedAt).toLocaleString()}`,
+    `- Created: ${formatDateTime(new Date(session.createdAt))}`,
+    `- Updated: ${formatDateTime(new Date(session.updatedAt))}`,
     `- Messages: ${session.messages.length}`,
     ""
   ];
@@ -131,7 +132,7 @@ export function formatResearchChatMarkdown(session: ResearchChatSession, bundle:
   }
 
   for (const message of session.messages) {
-    lines.push(`## ${roleLabel(message.role)} - ${new Date(message.createdAt).toLocaleString()}`, "");
+    lines.push(`## ${roleLabel(message.role)} - ${formatDateTime(new Date(message.createdAt))}`, "");
     lines.push(visibleResearchContent(message.content) || "_No content_", "");
     if (message.attachmentIds.length) lines.push(`Attachments: ${message.attachmentIds.join(", ")}`, "");
     if (message.mcpToolCalls?.length) {

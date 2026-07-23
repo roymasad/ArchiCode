@@ -7,7 +7,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { LlmPhase, McpServer, PhaseModelPolicy } from "../../shared/schema";
 import { gaiaAgent, pandoraAgent } from "../../shared/agentIdentities";
-import { type Provider, type ProviderCallOptions, type ProviderHealthResult, type ProviderProgressEvent, type ProviderTokenKind, type ResearchProviderOptions, codingSourceHandoffInstructions, emitUnavailableUsage, extractContextWindowFromModels, extractLocalResearchTurn, extractModelIdsFromModels, extractionSystemPrompt, formatLocalResearchTranscript, imageAttachmentText, inferModelCapabilityProfile, localAskModeMcpRequestInstructions, localResearchToolLoopInstructions, localResearchTranscriptFromContinuation, localResearchTurnValidationFeedback, orchestratorSystemPrompt, phasePolicyText, planningPatchJsonContract, planningQuestionGateInstructions, researchSystemInstructions, researchUserPromptText, resolvePhaseModelPolicy, sourceProposalBatchingInstructions, textAttachmentText } from "../providers";
+import { type Provider, type ProviderCallOptions, type ProviderHealthResult, type ProviderProgressEvent, type ProviderTokenKind, type ResearchProviderOptions, codingSourceHandoffInstructions, emitUnavailableUsage, extractContextWindowFromModels, extractLocalResearchTurn, extractModelIdsFromModels, extractionSystemPrompt, formatLocalResearchTranscript, imageAttachmentText, inferModelCapabilityProfile, localAskModeMcpRequestInstructions, localResearchToolLoopInstructions, localResearchTranscriptFromContinuation, localResearchTurnValidationFeedback, orchestratorSystemInstructions, phasePolicyText, planningPatchJsonContract, planningQuestionGateInstructions, researchSystemInstructions, researchUserPromptText, resolvePhaseModelPolicy, sourceProposalBatchingInstructions, textAttachmentText } from "../providers";
 import { attachProviderContinuation } from "./anthropic";
 import { runAgentLoop, type AgentToolResult } from "../agentRuntime";
 
@@ -111,7 +111,7 @@ export async function callCodexLocal(provider: Provider, contextText: string, pr
   const prompt = options.bareExtraction
     ? [extractionSystemPrompt, "", contextText].join("\n")
     : [
-    orchestratorSystemPrompt,
+    orchestratorSystemInstructions(),
     "",
     "You are being called as ArchiCode's local Codex provider through the user's installed Codex app/CLI.",
     localAskModeMcpRequestInstructions,
@@ -438,7 +438,7 @@ export async function callClaudeLocal(provider: Provider, contextText: string, p
   const prompt = options.bareExtraction
     ? [extractionSystemPrompt, "", contextText].join("\n")
     : [
-    orchestratorSystemPrompt,
+    orchestratorSystemInstructions(),
     "",
     "You are being called as ArchiCode's local Claude Code provider through the user's installed Claude Code CLI.",
     localAskModeMcpRequestInstructions,
@@ -582,7 +582,7 @@ export async function callOpenCodeLocal(provider: Provider, contextText: string,
   const prompt = options.bareExtraction
     ? [extractionSystemPrompt, "", contextText].join("\n")
     : [
-        orchestratorSystemPrompt,
+        orchestratorSystemInstructions(),
         "",
         "You are being called as ArchiCode's local OpenCode provider through a one-shot OpenCode CLI process.",
         ...localCodingPhaseInstructions(provider, phase, "OpenCode"),
@@ -671,7 +671,7 @@ export async function callAntigravityLocal(provider: Provider, contextText: stri
   const prompt = options.bareExtraction
     ? [extractionSystemPrompt, "", contextText].join("\n")
     : [
-        orchestratorSystemPrompt,
+        orchestratorSystemInstructions(),
         "",
         "You are being called as ArchiCode's local Google Antigravity provider through a one-shot agy --print process.",
         ...localCodingPhaseInstructions(provider, phase, "Antigravity"),
@@ -887,7 +887,7 @@ export async function callKimiLocal(provider: Provider, contextText: string, pro
   const prompt = options.bareExtraction
     ? [extractionSystemPrompt, "", contextText].join("\n")
     : [
-        orchestratorSystemPrompt,
+        orchestratorSystemInstructions(),
         "",
         "You are being called as ArchiCode's local Kimi Code provider through a fresh one-shot kimi --prompt process.",
         ...localCodingPhaseInstructions(provider, phase, "Kimi Code"),
@@ -1101,7 +1101,7 @@ export async function callGrokLocal(provider: Provider, contextText: string, pro
   const prompt = options.bareExtraction
     ? [extractionSystemPrompt, "", contextText].join("\n")
     : [
-        orchestratorSystemPrompt,
+        orchestratorSystemInstructions(),
         "",
         "You are being called as ArchiCode's local Grok Build provider through a one-shot grok process.",
         ...localCodingPhaseInstructions(provider, phase, "Grok Build"),

@@ -1,3 +1,4 @@
+import { t } from "@renderer/i18n";
 import { Component, type ErrorInfo, type ReactNode } from "react";
 
 type ErrorBoundaryState = {
@@ -23,7 +24,7 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBound
     return (
       <main className="fatal-screen">
         <section>
-          <h1>ArchiCode hit a renderer error</h1>
+          <h1>{t("ArchiCode hit a renderer error")}</h1>
           <p>{this.state.error.message}</p>
           <pre>{this.state.error.stack}</pre>
         </section>

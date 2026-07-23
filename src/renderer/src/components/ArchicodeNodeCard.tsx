@@ -1,3 +1,4 @@
+import { t } from "@renderer/i18n";
 import { Handle, NodeResizer, useViewport, type NodeProps } from "@xyflow/react";
 import { AlertTriangle, Boxes, CheckCircle2, ChevronRight, EyeOff, FileCode2, Layers3, Loader2, Lock, MessageSquare, Paperclip, Pin, Wrench } from "lucide-react";
 import { useState, type CSSProperties, type ReactNode } from "react";
@@ -40,58 +41,65 @@ function NodeContextTooltip({ node, signals }: { node: ArchicodeNode; signals?: 
   const pinnedNotes = signals?.pinnedNotes ?? 0;
   const badges: Array<{ id: string; label: string; tone: "neutral" | "accent" | "warning" | "danger" | "success"; icon: ReactNode }> = [];
   if (signals?.openQuestions || node.flags.includes("llm-question")) badges.push({ id: "questions", label: signals?.openQuestions ? `${signals.openQuestions} open question${signals.openQuestions === 1 ? "" : "s"}` : "Agent question", tone: "accent", icon: <MessageSquare size={11} aria-hidden="true" /> });
-  if (signals?.policyViolations) badges.push({ id: "policy-violations", label: `${signals.policyViolations} architecture violation${signals.policyViolations === 1 ? "" : "s"}`, tone: "danger", icon: <AlertTriangle size={11} aria-hidden="true" /> });
-  if (node.flags.includes("needs-attention")) badges.push({ id: "attention", label: "Needs attention", tone: "danger", icon: <AlertTriangle size={11} aria-hidden="true" /> });
-  if (node.flags.includes("modified-not-built")) badges.push({ id: "unverified", label: "Build not verified", tone: "warning", icon: <Wrench size={11} aria-hidden="true" /> });
-  if (node.flags.includes("changed")) badges.push({ id: "changed", label: "Change pending", tone: "warning", icon: <AlertTriangle size={11} aria-hidden="true" /> });
-  if (node.flags.includes("has-diff")) badges.push({ id: "diff", label: "Source diff linked", tone: "neutral", icon: <FileCode2 size={11} aria-hidden="true" /> });
-  if (node.flags.includes("user-approved")) badges.push({ id: "approved", label: "User approved", tone: "success", icon: <CheckCircle2 size={11} aria-hidden="true" /> });
-  if (node.locked) badges.push({ id: "locked", label: "Locked", tone: "neutral", icon: <Lock size={11} aria-hidden="true" /> });
-  if (node.ignored) badges.push({ id: "ignored", label: "Ignored by agents", tone: "neutral", icon: <EyeOff size={11} aria-hidden="true" /> });
-  if (signals?.notes) badges.push({ id: "notes", label: `${signals.notes} note${signals.notes === 1 ? "" : "s"}`, tone: "neutral", icon: <MessageSquare size={11} aria-hidden="true" /> });
+  if (signals?.policyViolations) badges.push({ id: "policy-violations", label: t("{{policyViolations}} architecture violation {{value2}}", { policyViolations: signals.policyViolations, value2: signals.policyViolations === 1 ? "" : "s" }), tone: "danger", icon: <AlertTriangle size={11} aria-hidden="true" /> });
+  if (node.flags.includes("needs-attention")) badges.push({ id: "attention", label: t("Needs attention"), tone: "danger", icon: <AlertTriangle size={11} aria-hidden="true" /> });
+  if (node.flags.includes("modified-not-built")) badges.push({ id: "unverified", label: t("Build not verified"), tone: "warning", icon: <Wrench size={11} aria-hidden="true" /> });
+  if (node.flags.includes("changed")) badges.push({ id: "changed", label: t("Change pending"), tone: "warning", icon: <AlertTriangle size={11} aria-hidden="true" /> });
+  if (node.flags.includes("has-diff")) badges.push({ id: "diff", label: t("Source diff linked"), tone: "neutral", icon: <FileCode2 size={11} aria-hidden="true" /> });
+  if (node.flags.includes("user-approved")) badges.push({ id: "approved", label: t("User approved"), tone: "success", icon: <CheckCircle2 size={11} aria-hidden="true" /> });
+  if (node.locked) badges.push({ id: "locked", label: t("Locked"), tone: "neutral", icon: <Lock size={11} aria-hidden="true" /> });
+  if (node.ignored) badges.push({ id: "ignored", label: t("Ignored by agents"), tone: "neutral", icon: <EyeOff size={11} aria-hidden="true" /> });
+  if (signals?.notes) badges.push({ id: "notes", label: t("{{notes}} note {{value2}}", { notes: signals.notes, value2: signals.notes === 1 ? "" : "s" }), tone: "neutral", icon: <MessageSquare size={11} aria-hidden="true" /> });
   if (signals?.attachments || node.flags.includes("has-attachments")) badges.push({ id: "attachments", label: signals?.attachments ? `${signals.attachments} attachment${signals.attachments === 1 ? "" : "s"}` : "Has attachments", tone: "neutral", icon: <Paperclip size={11} aria-hidden="true" /> });
   return (
     <span className="semantic-lens-tooltip node-context-tooltip">
       <span className="semantic-lens-tooltip-heading">
-        <span><Boxes size={13} aria-hidden="true" /><strong>Node context</strong></span>
+        <span><Boxes size={13} aria-hidden="true" /><strong>{t("Node context")}</strong></span>
         <small>{node.type}</small>
       </span>
       <span className="node-context-related-section">
         <button type="button" className="node-context-section-toggle nodrag nopan" aria-expanded={implementationExpanded} onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); setImplementationExpanded((current) => !current); }}>
           <span>
-            <b>Related implementation</b>
-            <small>{targets.length ? `${targets.length} top match${targets.length === 1 ? "" : "es"}` : "No recorded matches"}</small>
+            <b>{t("Related implementation")}</b>
+            <small>{targets.length ? t("{{length}} top match {{value2}}", { length: targets.length, value2: targets.length === 1 ? "" : "es" }) : t("No recorded matches")}</small>
           </span>
           <ChevronRight size={14} aria-hidden="true" />
         </button>
         {implementationExpanded ? <span className="node-context-related-items">
-          <small>Top files, classes, or symbols</small>
+          <small>{t("Top files, classes, or symbols")}</small>
           {targets.length ? targets.map((target) => (
             <span className="node-context-target" key={`${target.kind}:${target.path}:${target.label}`}>
               <span className="node-context-target-icon"><FileCode2 size={14} aria-hidden="true" /></span>
               <span>
                 <b>{target.label}</b>
-                <small>{target.kind} · {target.path}</small>
+                <small>{t("{{kind}} · {{path}}", { kind: target.kind, path: target.path })}</small>
               </span>
             </span>
-          )) : <span className="node-context-empty">No related implementation has been recorded for this node.</span>}
+          )) : <span className="node-context-empty">{t("No related implementation has been recorded for this node.")}</span>}
         </span> : null}
       </span>
       <span className="node-context-meta-section">
         <span className="semantic-lens-section-title">
-          <b>Tech stack</b>
-          <small>{node.techStack.length ? `${node.techStack.length} tagged` : "No tags"}</small>
+          <b>{t("Tech stack")}</b>
+          <small>{node.techStack.length ? t("{{length}} tagged", { length: node.techStack.length }) : t("No tags")}</small>
         </span>
-        {stack.length ? <span className="node-context-stack"><Layers3 size={13} aria-hidden="true" />{stack.map((item) => <span key={item}>{item}</span>)}{node.techStack.length > stack.length ? <em>+{node.techStack.length - stack.length}</em> : null}</span> : <span className="node-context-empty">No technologies tagged.</span>}
+        {stack.length ? <span className="node-context-stack"><Layers3 size={13} aria-hidden="true" />{stack.map((item) => <span key={item}>{item}</span>)}{node.techStack.length > stack.length ? <em>{t("+ {{length}}", { length: node.techStack.length - stack.length })}</em> : null}</span> : <span className="node-context-empty">{t("No technologies tagged.")}</span>}
       </span>
       {badges.length ? <span className="node-context-meta-section node-context-notifications">
         <span className="semantic-lens-section-title">
-          <b>Badges & notifications</b>
-          <small>{badges.length} active</small>
+          <b>{t("Badges & notifications")}</b>
+          <small>{t("{{length}} active", { length: badges.length })}</small>
         </span>
-        <span className="node-context-badges">{badges.map((badge) => <span className={`node-context-badge tone-${badge.tone}`} key={badge.id}>{badge.icon}{badge.label}</span>)}</span>
+        <span className="node-context-badges">
+          {badges.map((badge) => (
+            <span className={`node-context-badge tone-${badge.tone}`} key={badge.id}>
+              {badge.icon}
+              {badge.label}
+            </span>
+          ))}
+        </span>
       </span> : null}
-      <span className="node-context-pinned"><Pin size={13} aria-hidden="true" /><b>{pinnedNotes}</b> pinned note{pinnedNotes === 1 ? "" : "s"}</span>
+      <span className="node-context-pinned"><Pin size={13} aria-hidden="true" /><b>{pinnedNotes}</b> {" "}{t("pinned note")}{pinnedNotes === 1 ? "" : t("s")}</span>
     </span>
   );
 }
@@ -106,7 +114,7 @@ function primaryNodeSignal(flags: Set<ArchicodeNode["flags"][number]>, signals?:
   if (flags.has("llm-question") || Boolean(signals?.openQuestions)) {
     return {
       kind: "question",
-      label: "The agent has a question that needs an answer. Check Notes.",
+      label: t("The agent has a question that needs an answer. Check Notes."),
       icon: <MessageSquare size={13} aria-hidden="true" />
     };
   }
@@ -114,7 +122,7 @@ function primaryNodeSignal(flags: Set<ArchicodeNode["flags"][number]>, signals?:
   if (flags.has("needs-attention")) {
     return {
       kind: "warning",
-      label: "Open Activity > Errors or the latest run details for this node.",
+      label: t("Open Activity > Errors or the latest run details for this node."),
       icon: <AlertTriangle size={13} aria-hidden="true" />
     };
   }
@@ -122,7 +130,7 @@ function primaryNodeSignal(flags: Set<ArchicodeNode["flags"][number]>, signals?:
   if (flags.has("modified-not-built")) {
     return {
       kind: "verify",
-      label: "This node has source changes that have not passed a build/test/check command yet. Use AI Run > Build.",
+      label: t("This node has source changes that have not passed a build/test/check command yet. Use AI Run > Build."),
       icon: <Wrench size={13} aria-hidden="true" />
     };
   }
@@ -130,7 +138,7 @@ function primaryNodeSignal(flags: Set<ArchicodeNode["flags"][number]>, signals?:
   if (flags.has("changed")) {
     return {
       kind: "warning",
-      label: "This node has changed planning state. Requires implementation.",
+      label: t("This node has changed planning state. Requires implementation."),
       icon: <AlertTriangle size={13} aria-hidden="true" />
     };
   }
@@ -171,7 +179,7 @@ export function ArchicodeNodeCard({ data, selected, dragging }: NodeProps) {
       style={nodeStyle}
     >
       {isBusyTests ? (
-        <NodeSignalTip label="Generating acceptance tests… An AI agent is writing test files for this node's criteria. This can take a minute.">
+        <NodeSignalTip label={t("Generating acceptance tests… An AI agent is writing test files for this node's criteria. This can take a minute.")}>
           <div className="node-authoring-badge">
             <Loader2 size={18} className="is-spinning" />
           </div>
@@ -200,7 +208,7 @@ export function ArchicodeNodeCard({ data, selected, dragging }: NodeProps) {
           type="source"
           position={handle.position}
           className={`node-connection-handle handle-${handle.id}`}
-          aria-label={`${handle.id} connection handle`}
+          aria-label={t("{{id}} connection handle", { id: handle.id })}
         />
       ))}
       {nodeHandleSides.map((handle) => (
@@ -219,7 +227,7 @@ export function ArchicodeNodeCard({ data, selected, dragging }: NodeProps) {
           <div className="node-title-row">
             <strong>{node.title}</strong>
             {node.locked ? (
-              <NodeSignalTip label="Locked node">
+              <NodeSignalTip label={t("Locked node")}>
                 <Lock size={15} aria-hidden="true" />
               </NodeSignalTip>
             ) : null}
@@ -232,18 +240,18 @@ export function ArchicodeNodeCard({ data, selected, dragging }: NodeProps) {
               </NodeSignalTip>
             ) : null}
             {node.ignored ? (
-              <NodeSignalTip label="Ignored by agents">
+              <NodeSignalTip label={t("Ignored by agents")}>
                 <EyeOff size={16} aria-hidden="true" />
               </NodeSignalTip>
             ) : null}
             {signals?.notes ? (
-              <NodeSignalTip label={`${signals.notes} note${signals.notes === 1 ? "" : "s"}`}>
-                <span className="node-count-badge">C{signals.notes}</span>
+              <NodeSignalTip label={t("{{notes}} note {{value2}}", { notes: signals.notes, value2: signals.notes === 1 ? "" : "s" })}>
+                <span className="node-count-badge">{t("C {{notes}}", { notes: signals.notes })}</span>
               </NodeSignalTip>
             ) : null}
             {signals?.attachments ? (
-              <NodeSignalTip label={`${signals.attachments} attachment${signals.attachments === 1 ? "" : "s"}`}>
-                <span className="node-count-badge">A{signals.attachments}</span>
+              <NodeSignalTip label={t("{{attachments}} attachment {{value2}}", { attachments: signals.attachments, value2: signals.attachments === 1 ? "" : "s" })}>
+                <span className="node-count-badge">{t("A {{attachments}}", { attachments: signals.attachments })}</span>
               </NodeSignalTip>
             ) : null}
             {signals?.policyViolations ? (
@@ -251,15 +259,13 @@ export function ArchicodeNodeCard({ data, selected, dragging }: NodeProps) {
                 <button
                   type="button"
                   className="node-count-badge danger is-action nodrag nopan"
-                  aria-label={`Explain ${signals.policyViolations} architecture violation${signals.policyViolations === 1 ? "" : "s"} and suggest resolution`}
+                  aria-label={t("Explain {{policyViolations}} architecture violation {{value2}} and suggest resolution", { policyViolations: signals.policyViolations, value2: signals.policyViolations === 1 ? "" : "s" })}
                   onPointerDown={(event) => event.stopPropagation()}
                   onClick={(event) => {
                     event.stopPropagation();
                     onExplainPolicyViolations?.();
                   }}
-                >
-                  P{signals.policyViolations}
-                </button>
+                >{t("P {{policyViolations}}", { policyViolations: signals.policyViolations })}</button>
               </NodeSignalTip>
             ) : null}
           </div>
@@ -282,14 +288,14 @@ export function ArchicodeNodeCard({ data, selected, dragging }: NodeProps) {
                 </NodeSignalTip>
               ) : null}
               {node.locked ? (
-                <NodeSignalTip label="Locked node">
+                <NodeSignalTip label={t("Locked node")}>
                   <span className="node-zoom-icon">
                     <Lock size={13} aria-hidden="true" />
                   </span>
                 </NodeSignalTip>
               ) : null}
               {node.ignored ? (
-                <NodeSignalTip label="Ignored by agents">
+                <NodeSignalTip label={t("Ignored by agents")}>
                   <span className="node-zoom-icon">
                     <EyeOff size={13} aria-hidden="true" />
                   </span>

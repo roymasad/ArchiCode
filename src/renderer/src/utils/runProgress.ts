@@ -1,3 +1,5 @@
+import { formatTime } from "@renderer/i18n";
+import { t } from "@renderer/i18n";
 import type { Artifact, Run } from "@shared/schema";
 
 export type RunProgressItem = {
@@ -278,11 +280,11 @@ function labelForLog(log: Run["logs"][number]): Omit<RunProgressItem, "id"> | nu
 
   const text = compactText(log.text);
   if (!text) return null;
-  if (log.stream === "stderr") return { at: log.at, tone: "danger", label: "Error", detail: text };
+  if (log.stream === "stderr") return { at: log.at, tone: "danger", label: t("Error"), detail: text };
   if (/started|queued|waiting/i.test(text)) return { at: log.at, tone: "accent", label: text };
   if (/completed|succeeded|artifact|diff/i.test(text)) return { at: log.at, tone: "success", label: text };
   if (/failed|blocked|denied/i.test(text)) return { at: log.at, tone: "danger", label: text };
-  if (log.stream === "stdout") return { at: log.at, tone: "neutral", label: "Provider output", detail: text };
+  if (log.stream === "stdout") return { at: log.at, tone: "neutral", label: t("Provider output"), detail: text };
   return { at: log.at, tone: "neutral", label: text };
 }
 
@@ -584,6 +586,6 @@ export function rawRunLog(run: Run, limit = 200): string {
   return run.logs
     .slice(-limit)
     .reverse()
-    .map((line) => `[${new Date(line.at).toLocaleTimeString()}] ${line.stream}: ${line.text}`)
+    .map((line) => `[${formatTime(new Date(line.at))}] ${line.stream}: ${line.text}`)
     .join("\n");
 }

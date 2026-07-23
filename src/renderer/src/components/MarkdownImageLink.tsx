@@ -1,3 +1,4 @@
+import { t } from "@renderer/i18n";
 import { useEffect, useState } from "react";
 import type { MouseEvent, ReactNode } from "react";
 import type { ArchicodeProjectPathLink } from "./ResearchMarkdown";
@@ -59,19 +60,19 @@ export function MarkdownImageLink({ href, label, projectTarget, loadProjectImage
         target={projectTarget ? undefined : "_blank"}
         rel={projectTarget ? undefined : "noreferrer"}
         onClick={handleClick}
-        aria-label="Open image"
+        aria-label={t("Open image")}
       >
         {previewSrc && !previewFailed ? (
           <img
             src={previewSrc}
-            alt={typeof label === "string" ? label : "Image preview"}
+            alt={typeof label === "string" ? label : t("Image preview")}
             loading="lazy"
             referrerPolicy="no-referrer"
             onError={() => setFailedPreviewHref(previewSrc)}
           />
         ) : (
           <span className="research-image-thumbnail-placeholder">
-            {previewFailed ? "Preview unavailable" : "Loading image preview…"}
+            {previewFailed ? t("Preview unavailable") : t("Loading image preview…")}
           </span>
         )}
       </a>

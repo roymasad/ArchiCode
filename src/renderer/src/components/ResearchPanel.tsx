@@ -1,3 +1,5 @@
+import { formatDateTime, formatTime } from "@renderer/i18n";
+import { t } from "@renderer/i18n";
 import { AlertCircle, AlertTriangle, Archive, Box, Brain, Check, CheckCircle2, ChevronDown, ChevronUp, Circle, Clock3, Copy, Download, ExternalLink, Eye, EyeOff, FileJson, FileText, FolderKanban, History, Layers3, ListTodo, Loader2, Maximize2, MessageSquare, Mic, MicOff, Minimize2, PanelLeftClose, PanelLeftOpen, Paperclip, Play, Plus, RefreshCw, Send, ShieldCheck, Sparkles, Split, Square, Volume2, Workflow, X } from "lucide-react";
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ComponentProps, ReactNode } from "react";
@@ -67,6 +69,10 @@ import { providerImageInputSupportStatus, type ProviderImageInputSupportStatus }
 import { isRunBlockingNewChange } from "../utils/runStatus";
 import { isTimeoutFailureMessage } from "@shared/failureSemantics";
 import { classifyCommandRisk, type ShellCommandRisk } from "@shared/execution";
+import {
+  localizeChangeSetResultDetails,
+  localizeChangeSetResultNarrative
+} from "../utils/researchResultLocalization";
 import {
   chatModelDisplayName,
   configuredResearchModelId,
@@ -168,18 +174,15 @@ function DelphiObservationGallery(props: {
     <div ref={galleryRef} className="research-delphi-observations">
       <div className="research-delphi-observations-head">
         <Eye size={13} />
-        <span>Captured evidence</span>
-        <small>
-          {props.artifacts.length} capture{props.artifacts.length === 1 ? "" : "s"}
-          {` · ${inspectionSummary}`}
-        </small>
+        <span>{t("Captured evidence")}</span>
+        <small>{t("{{length}} capture {{value2}} {{value3}}", { length: props.artifacts.length, value2: props.artifacts.length === 1 ? "" : "s", value3: ` · ${inspectionSummary}` })}</small>
       </div>
       <div className={`research-delphi-observation-grid${visibleArtifacts.length === 1 ? " is-single" : ""}`}>
         {visibleArtifacts.map((artifact) => (
           <button
             type="button"
             key={artifact.id}
-            title={`${artifact.label} — ${inspectedArtifactIds.has(artifact.id) ? "model-inspected" : pendingInspection ? "inspection pending" : "not model-inspected"}; open evidence`}
+            title={t("{{label}}—{{value2}}; open evidence", { label: artifact.label, value2: inspectedArtifactIds.has(artifact.id) ? "model-inspected" : pendingInspection ? "inspection pending" : "not model-inspected" })}
             onClick={() => void window.archicode?.openProjectFile(props.projectRoot, artifact.path)}
           >
             {previews[artifact.id] ? <img src={previews[artifact.id]} alt={artifact.label} loading="lazy" decoding="async" /> : <Loader2 size={16} className="is-spinning" />}
@@ -194,7 +197,7 @@ function DelphiObservationGallery(props: {
           aria-expanded={expanded}
           onClick={() => setExpanded((current) => !current)}
         >
-          {expanded ? "Show less" : `Show all ${imageArtifacts.length}`}
+          {expanded ? t("Show less") : t("Show all {{length}}", { length: imageArtifacts.length })}
         </button>
       ) : null}
     </div>
@@ -242,7 +245,7 @@ function ResearchMessageImageAttachments(props: { projectRoot: string; artifacts
 
   if (!props.artifacts.length) return null;
   return (
-    <div ref={containerRef} className="research-message-image-grid" aria-label="Image attachments">
+    <div ref={containerRef} className="research-message-image-grid" aria-label={t("Image attachments")}>
       {props.artifacts.map((artifact) => (
         <button
           key={artifact.id}
@@ -333,25 +336,23 @@ function ResearchToolTrace(props: {
       </summary>
       {expanded ? <div className="research-tool-trace-details">
         <div className="research-tool-trace-meta">
-          <span>{props.call.serverLabel?.trim() || props.call.serverId} · {props.call.toolName}</span>
+          <span>{t("{{serverId}} · {{toolName}}", { serverId: props.call.serverLabel?.trim() || props.call.serverId, toolName: props.call.toolName })}</span>
           <Badge tone={statusTone}>{props.call.status}</Badge>
         </div>
         {command ? (
           <>
             <div className="research-command-approval-heading">
-              <strong>Exact command</strong>
+              <strong>{t("Exact command")}</strong>
               <Badge
                 className="research-command-risk-badge"
                 tone={command.risk === "low" ? "success" : command.risk === "medium" ? "warning" : "danger"}
-              >
-                {command.risk[0].toUpperCase() + command.risk.slice(1)} risk
-              </Badge>
+              >{t("{{value1}} risk", { value1: command.risk[0].toUpperCase() + command.risk.slice(1) })}</Badge>
             </div>
             <div className="research-command-approval-code">
               <IconButton
                 className="research-command-copy-button"
-                title={props.copiedCommandKey === props.copyKey ? "Copied" : "Copy exact command"}
-                aria-label={props.copiedCommandKey === props.copyKey ? "Command copied" : "Copy exact command"}
+                title={props.copiedCommandKey === props.copyKey ? t("Copied") : t("Copy exact command")}
+                aria-label={props.copiedCommandKey === props.copyKey ? t("Command copied") : t("Copy exact command")}
                 onClick={() => props.onCopyCommand(props.copyKey, command.command)}
               >
                 {props.copiedCommandKey === props.copyKey ? <Check size={12} /> : <Copy size={12} />}
@@ -359,21 +360,21 @@ function ResearchToolTrace(props: {
               <ResearchMarkdown content={shellCommandMarkdown(command.command)} />
             </div>
             <small className="research-command-risk-hint">{commandRiskHint(command.risk, command.command)}</small>
-            <small>Working directory: {command.cwd}</small>
+            <small>{t("Working directory: {{cwd}}", { cwd: command.cwd })}</small>
           </>
         ) : argumentsDisplay && argumentsDisplay !== "{}" ? (
           <>
-            <strong>Arguments</strong>
+            <strong>{t("Arguments")}</strong>
             <pre>{argumentsDisplay}</pre>
           </>
         ) : null}
         {result ? (
           <>
-            <strong>{props.call.status === "failed" ? "Error" : "Result"}</strong>
+            <strong>{props.call.status === "failed" ? t("Error") : t("Result")}</strong>
             <pre className={props.call.status === "failed" ? "is-error" : ""}>{result}</pre>
           </>
         ) : null}
-        <time dateTime={props.call.createdAt}>{new Date(props.call.createdAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time>
+        <time dateTime={props.call.createdAt}>{formatTime(new Date(props.call.createdAt), { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</time>
       </div> : null}
     </details>
   );
@@ -562,27 +563,31 @@ function reviewStatusPresentation(summary: ResearchChangeSetReviewSummary | null
 } | null {
   if (!summary) return null;
   const queueSubmission = category === "queue";
-  const summaryLabel = `${summary.applied} ${queueSubmission ? "queued" : "applied"}, ${summary.rejected} rejected, ${summary.failed} failed`;
+  const summaryLabel = t(queueSubmission ? "research.reviewSummaryQueued" : "research.reviewSummaryApplied", {
+    applied: summary.applied,
+    rejected: summary.rejected,
+    failed: summary.failed
+  });
   if (summary.failed > 0 && summary.applied === 0) {
     return {
       badgeTone: "danger",
-      badgeLabel: queueSubmission ? "Queue failed" : "Failed",
-      actionLabel: queueSubmission ? "Queue failed" : "Apply Failed",
+      badgeLabel: t(queueSubmission ? "Queue failed" : "Failed"),
+      actionLabel: t(queueSubmission ? "Queue failed" : "Apply Failed"),
       summaryLabel
     };
   }
   if (summary.failed > 0 || summary.rejected > 0) {
     return {
       badgeTone: "warning",
-      badgeLabel: queueSubmission ? "Partially queued" : "Partial",
-      actionLabel: queueSubmission ? "Partially queued" : "Partially Applied",
+      badgeLabel: t(queueSubmission ? "Partially queued" : "Partial"),
+      actionLabel: t(queueSubmission ? "Partially queued" : "Partially Applied"),
       summaryLabel
     };
   }
   return {
     badgeTone: "success",
-    badgeLabel: queueSubmission ? "Queued" : summary.autoApproved ? "Auto-applied" : "Applied",
-    actionLabel: queueSubmission ? "Queued" : summary.autoApproved ? "Auto-applied" : "Applied",
+    badgeLabel: t(queueSubmission ? "Queued" : summary.autoApproved ? "Auto-applied" : "Applied"),
+    actionLabel: t(queueSubmission ? "Queued" : summary.autoApproved ? "Auto-applied" : "Applied"),
     summaryLabel
   };
 }
@@ -605,7 +610,7 @@ function nodeTitleMap(bundle: ReturnType<typeof useArchicodeStore.getState>["bun
 }
 
 function nodeTitleLabel(nodeId: string | undefined, titles: Map<string, string>): string {
-  if (!nodeId) return "unscoped";
+  if (!nodeId) return t("unscoped");
   return titles.get(nodeId) ?? nodeId;
 }
 
@@ -641,7 +646,7 @@ function subflowTitleMap(bundle: ReturnType<typeof useArchicodeStore.getState>["
 }
 
 function subflowTitleLabel(subflowId: string | undefined, titles: Map<string, string>): string {
-  if (!subflowId) return "root flow";
+  if (!subflowId) return t("root flow");
   return titles.get(subflowId) ?? subflowId;
 }
 
@@ -651,58 +656,58 @@ function operationLabel(
   subflowTitles: Map<string, string> = new Map(),
   flowTitles: Map<string, string> = new Map()
 ): string {
-  if (operation.kind === "update-project") return "Update project metadata";
-  if (operation.kind === "create-flow") return `Create flow "${operation.flow.name}"`;
-  if (operation.kind === "update-flow") return `Update flow "${flowTitleLabel(operation.flowId, flowTitles)}"`;
-  if (operation.kind === "update-node") return `Update node ${nodeTitleLabel(operation.patch.id, titles)}`;
-  if (operation.kind === "update-edge") return `Update edge ${operation.edgeId}`;
-  if (operation.kind === "add-note") return `Add note on ${nodeTitleLabel(operation.note.nodeId, titles)}`;
-  if (operation.kind === "resolve-note") return `${operation.resolved ? "Resolve" : "Reopen"} note ${operation.noteId}`;
-  if (operation.kind === "delete-note") return `Delete note ${operation.noteId}`;
+  if (operation.kind === "update-project") return t("Update project metadata");
+  if (operation.kind === "create-flow") return t("Create flow \"{{name}}\"", { name: operation.flow.name });
+  if (operation.kind === "update-flow") return t("Update flow \"{{name}}\"", { name: flowTitleLabel(operation.flowId, flowTitles) });
+  if (operation.kind === "update-node") return t("Update node {{name}}", { name: nodeTitleLabel(operation.patch.id, titles) });
+  if (operation.kind === "update-edge") return t("Update edge {{id}}", { id: operation.edgeId });
+  if (operation.kind === "add-note") return t("Add note on {{name}}", { name: nodeTitleLabel(operation.note.nodeId, titles) });
+  if (operation.kind === "resolve-note") return t(operation.resolved ? "Resolve note {{id}}" : "Reopen note {{id}}", { id: operation.noteId });
+  if (operation.kind === "delete-note") return t("Delete note {{id}}", { id: operation.noteId });
   if (operation.kind === "create-node") {
     return operation.node.subflowId
-      ? `Create node "${operation.node.title}" in subflow "${subflowTitleLabel(operation.node.subflowId, subflowTitles)}"`
-      : `Create node "${operation.node.title}" on root flow`;
+      ? t("Create node \"{{name}}\" in subflow \"{{subflow}}\"", { name: operation.node.title, subflow: subflowTitleLabel(operation.node.subflowId, subflowTitles) })
+      : t("Create node \"{{name}}\" on root flow", { name: operation.node.title });
   }
   if (operation.kind === "create-edge") {
-    return `Create edge ${nodeTitleLabel(operation.edge.source, titles)} -> ${nodeTitleLabel(operation.edge.target, titles)}`;
+    return t("Create edge {{source}} -> {{target}}", { source: nodeTitleLabel(operation.edge.source, titles), target: nodeTitleLabel(operation.edge.target, titles) });
   }
-  if (operation.kind === "create-subflow") return `Create subflow "${operation.subflow.name}"`;
-  if (operation.kind === "update-subflow") return `Update detail flow ${subflowTitleLabel(operation.subflowId, subflowTitles)}`;
+  if (operation.kind === "create-subflow") return t("Create subflow \"{{name}}\"", { name: operation.subflow.name });
+  if (operation.kind === "update-subflow") return t("Update detail flow {{name}}", { name: subflowTitleLabel(operation.subflowId, subflowTitles) });
   if (operation.kind === "link-node-subflow") return operation.subflowId
-    ? `Set detail flow for ${nodeTitleLabel(operation.nodeId, titles)} to "${subflowTitleLabel(operation.subflowId, subflowTitles)}"`
-    : `Clear detail flow for ${nodeTitleLabel(operation.nodeId, titles)}`;
-  if (operation.kind === "propose-run-profile") return `${operation.mode === "replace" ? "Replace" : "Create"} run target "${operation.profile.label}"`;
+    ? t("Set detail flow for {{node}} to \"{{subflow}}\"", { node: nodeTitleLabel(operation.nodeId, titles), subflow: subflowTitleLabel(operation.subflowId, subflowTitles) })
+    : t("Clear detail flow for {{node}}", { node: nodeTitleLabel(operation.nodeId, titles) });
+  if (operation.kind === "propose-run-profile") return t(operation.mode === "replace" ? "Replace run target \"{{name}}\"" : "Create run target \"{{name}}\"", { name: operation.profile.label });
   if (operation.kind === "start-agent-run") {
-    const effort = operation.effort === "fast" ? "Fast" : "High";
+    const effort = operation.effort === "fast" ? t("Fast") : t("High");
     return operation.nodeId
-      ? `Queue ${gaiaAgent.name} for ${nodeTitleLabel(operation.nodeId, titles)} · ${effort} effort`
-      : `Queue ${gaiaAgent.name} for "${flowTitleLabel(operation.flowId, flowTitles)}" · ${effort} effort`;
+      ? t("Queue {{agent}} for {{node}} · {{effort}} effort", { agent: gaiaAgent.name, node: nodeTitleLabel(operation.nodeId, titles), effort })
+      : t("Queue {{agent}} for \"{{flow}}\" · {{effort}} effort", { agent: gaiaAgent.name, flow: flowTitleLabel(operation.flowId, flowTitles), effort });
   }
-  if (operation.kind === "start-run-profile") return `Queue run target ${operation.profileId}`;
-  if (operation.kind === "stop-runtime-service") return `Stop runtime service ${operation.serviceId}`;
-  if (operation.kind === "restart-runtime-service") return `Restart runtime service ${operation.serviceId}`;
-  if (operation.kind === "retry-run") return `Queue retry for ${operation.runId}`;
-  if (operation.kind === "start-debugging-run") return `Queue ${pandoraAgent.name} for ${operation.runId}`;
+  if (operation.kind === "start-run-profile") return t("Queue run target {{id}}", { id: operation.profileId });
+  if (operation.kind === "stop-runtime-service") return t("Stop runtime service {{id}}", { id: operation.serviceId });
+  if (operation.kind === "restart-runtime-service") return t("Restart runtime service {{id}}", { id: operation.serviceId });
+  if (operation.kind === "retry-run") return t("Queue retry for {{id}}", { id: operation.runId });
+  if (operation.kind === "start-debugging-run") return t("Queue {{agent}} for {{id}}", { agent: pandoraAgent.name, id: operation.runId });
   if (operation.kind === "author-acceptance-tests") {
     return operation.nodeId
-      ? `Regenerate acceptance tests for ${nodeTitleLabel(operation.nodeId, titles)}`
-      : `Regenerate acceptance tests for flow "${flowTitleLabel(operation.flowId, flowTitles)}"`;
+      ? t("Regenerate acceptance tests for {{node}}", { node: nodeTitleLabel(operation.nodeId, titles) })
+      : t("Regenerate acceptance tests for flow \"{{flow}}\"", { flow: flowTitleLabel(operation.flowId, flowTitles) });
   }
-  if (operation.kind === "run-acceptance-checks") return `Run acceptance checks for ${nodeTitleLabel(operation.nodeId, titles)}`;
-  if (operation.kind === "start-runtime-debug-run") return `Queue ${pandoraAgent.name} for runtime ${operation.serviceId}`;
-  if (operation.kind === "start-incident-debug-run") return `Queue ${pandoraAgent.name} for reported incidents`;
-  if (operation.kind === "delete-node") return `Delete node ${nodeTitleLabel(operation.nodeId, titles)}`;
-  if (operation.kind === "delete-edge") return `Delete edge ${operation.edgeId}`;
-  if (operation.kind === "create-group") return `Create group "${operation.group.name}"`;
-  if (operation.kind === "update-group") return `Update group ${operation.groupId}`;
-  if (operation.kind === "delete-group") return `Delete group ${operation.groupId}`;
-  return `Delete subflow ${subflowTitleLabel(operation.subflowId, subflowTitles)}`;
+  if (operation.kind === "run-acceptance-checks") return t("Run acceptance checks for {{node}}", { node: nodeTitleLabel(operation.nodeId, titles) });
+  if (operation.kind === "start-runtime-debug-run") return t("Queue {{agent}} for runtime {{id}}", { agent: pandoraAgent.name, id: operation.serviceId });
+  if (operation.kind === "start-incident-debug-run") return t("Queue {{agent}} for reported incidents", { agent: pandoraAgent.name });
+  if (operation.kind === "delete-node") return t("Delete node {{node}}", { node: nodeTitleLabel(operation.nodeId, titles) });
+  if (operation.kind === "delete-edge") return t("Delete edge {{id}}", { id: operation.edgeId });
+  if (operation.kind === "create-group") return t("Create group \"{{name}}\"", { name: operation.group.name });
+  if (operation.kind === "update-group") return t("Update group {{id}}", { id: operation.groupId });
+  if (operation.kind === "delete-group") return t("Delete group {{id}}", { id: operation.groupId });
+  return t("Delete subflow {{name}}", { name: subflowTitleLabel(operation.subflowId, subflowTitles) });
 }
 
 function operationFields(operation: ResearchOperationView): string {
   if (operation.kind === "update-project") return Object.keys(operation.patch).join(", ");
-  if (operation.kind === "create-flow") return `${operation.flow.nodes.length} nodes · ${operation.flow.edges.length} edges`;
+  if (operation.kind === "create-flow") return t("{{nodes}} nodes · {{edges}} edges", { nodes: operation.flow.nodes.length, edges: operation.flow.edges.length });
   if (operation.kind === "update-flow") return Object.keys(operation.patch).join(", ");
   if (operation.kind === "update-node") return Object.keys(operation.patch).filter((key) => key !== "id").join(", ");
   if (operation.kind === "update-edge") return Object.keys(operation.patch).join(", ");
@@ -736,7 +741,7 @@ function formatResearchTaskElapsed(elapsedMs: number): string {
 function formatRealtimeTaskTimestamp(value: string): string {
   const timestamp = new Date(value);
   if (Number.isNaN(timestamp.getTime())) return "Unknown time";
-  return timestamp.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  return formatTime(timestamp, { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
 function realtimeTaskDeliverableLabel(deliverable: RealtimeResearchTaskEvent["deliverable"]): string {
@@ -772,7 +777,7 @@ function ResearchBackgroundStatus({ tasks }: { tasks: RealtimeResearchTaskEvent[
     <Tooltip content={(
       <div className="research-background-tooltip">
         <div className="research-background-tooltip-heading">
-          <strong>Background tasks</strong>
+          <strong>{t("Background tasks")}</strong>
           <span>{countLabel}</span>
         </div>
         <div className="research-background-tooltip-list">
@@ -785,7 +790,7 @@ function ResearchBackgroundStatus({ tasks }: { tasks: RealtimeResearchTaskEvent[
               <div className="research-background-tooltip-item" key={task.taskId}>
                 <div className="research-background-tooltip-item-heading">
                   <span className={`research-background-task-state${isRunning ? " is-running" : ""}`}>
-                    {isRunning ? "Active" : `Queued #${queuedPosition}`}
+                    {isRunning ? t("Active") : t("Queued #{{queuedPosition}}", { queuedPosition: queuedPosition })}
                   </span>
                   <span>{realtimeTaskDeliverableLabel(task.deliverable)}</span>
                 </div>
@@ -793,8 +798,8 @@ function ResearchBackgroundStatus({ tasks }: { tasks: RealtimeResearchTaskEvent[
                 {task.activity ? <span className="research-background-tooltip-activity">{task.activity}</span> : null}
                 <span className="research-background-tooltip-time">
                   {isRunning
-                    ? `Queued ${formatRealtimeTaskTimestamp(task.createdAt)} · Started ${formatRealtimeTaskTimestamp(taskStartedAt)} · Active ${elapsed}`
-                    : `Queued ${formatRealtimeTaskTimestamp(task.createdAt)} · Waiting ${elapsed}`}
+                    ? t("Queued {{value1}}· Started {{value2}}· Active {{elapsed}}", { value1: formatRealtimeTaskTimestamp(task.createdAt), value2: formatRealtimeTaskTimestamp(taskStartedAt), elapsed: elapsed })
+                    : t("Queued {{value1}}· Waiting {{elapsed}}", { value1: formatRealtimeTaskTimestamp(task.createdAt), elapsed: elapsed })}
                 </span>
               </div>
             );
@@ -806,12 +811,12 @@ function ResearchBackgroundStatus({ tasks }: { tasks: RealtimeResearchTaskEvent[
         className="research-background-status"
         role="status"
         aria-live="polite"
-        aria-label={`Archi background work: ${countLabel}`}
+        aria-label={t("Archi background work: {{countLabel}}", { countLabel: countLabel })}
         tabIndex={0}
       >
         <Brain size={15} />
-        <strong>Archi working</strong>
-        <span>{latestActivity ?? `${tasks.length} background Research task${tasks.length === 1 ? "" : "s"} running.`}</span>
+        <strong>{t("Archi working")}</strong>
+        <span>{latestActivity ?? t("{{length}} background Research task {{value2}} running.", { length: tasks.length, value2: tasks.length === 1 ? "" : "s" })}</span>
         {tasks.length > 1 ? <Badge tone="accent">{tasks.length}</Badge> : null}
       </div>
     </Tooltip>
@@ -884,7 +889,7 @@ function ResearchTaskTimer({ startedAtMs, completedAtMs }: { startedAtMs: number
   return (
     <Tooltip content={completed
       ? `Completed in ${elapsed}. This duration remains until the next user request.`
-      : "Elapsed time for the current user request, including parent continuations and subagent work."}>
+      : t("Elapsed time for the current user request, including parent continuations and subagent work.")}>
       <span className={`ui-badge research-task-timer${completed ? " is-complete" : ""}`} aria-label={completed
         ? `Last task completed in ${elapsed}`
         : `Current task active for ${elapsed}`}>
@@ -908,8 +913,8 @@ function ResearchLiveCountdown({ expiresAtMs }: { expiresAtMs: number }) {
   return (
     <span
       className={`research-live-countdown${urgency}`}
-      title="Time remaining before Archi Live reconnects this chat"
-      aria-label={`${remaining} remaining before Live reconnects`}
+      title={t("Time remaining before Archi Live reconnects this chat")}
+      aria-label={t("{{remaining}} remaining before Live reconnects", { remaining: remaining })}
     >
       {remaining}
     </span>
@@ -3302,14 +3307,14 @@ export const ResearchPanel = memo(function ResearchPanel({
 
   const scopeOptions = useMemo(() => {
     if (!bundle) return [];
-    const options = [{ value: `project:${bundle.project.id}`, label: `Project: ${bundle.project.name}` }];
+    const options = [{ value: `project:${bundle.project.id}`, label: t("Project: {{name}}", { name: bundle.project.name }) }];
     for (const item of bundle.flows) {
-      options.push({ value: `flow:${item.id}`, label: `Flow: ${item.name}` });
+      options.push({ value: `flow:${item.id}`, label: t("Flow: {{name}}", { name: item.name }) });
       for (const subflow of item.subflows) {
-        options.push({ value: `subflow:${item.id}:${subflow.id}`, label: `Subflow: ${subflow.name}` });
+        options.push({ value: `subflow:${item.id}:${subflow.id}`, label: t("Subflow: {{name}}", { name: subflow.name }) });
       }
       for (const node of item.nodes) {
-        options.push({ value: `node:${item.id}:${node.id}`, label: `Node: ${node.title}` });
+        options.push({ value: `node:${item.id}:${node.id}`, label: t("Node: {{title}}", { title: node.title }) });
       }
     }
     return options;
@@ -3719,7 +3724,7 @@ export const ResearchPanel = memo(function ResearchPanel({
   }, [selected]);
   const researchPrimaryIndicator = researchContextEstimate && latestContextUsage?.estimatedContextTokens !== undefined
     ? {
-        label: "Latest sent context",
+        label: t("Latest sent context"),
         estimatedTokens: latestContextUsage.estimatedContextTokens,
         maxTokens: researchContextEstimate.maxTokens,
         detail: [
@@ -3742,8 +3747,8 @@ export const ResearchPanel = memo(function ResearchPanel({
 
   if (!bundle || !scope) {
     return (
-      <aside className="research-panel" aria-label="Research">
-        <EmptyState icon={<MessageSquare size={24} />} title="No project open">Open a project to start scoped research.</EmptyState>
+      <aside className="research-panel" aria-label={t("Research")}>
+        <EmptyState icon={<MessageSquare size={24} />} title={t("No project open")}>{t("Open a project to start scoped research.")}</EmptyState>
       </aside>
     );
   }
@@ -3798,13 +3803,13 @@ export const ResearchPanel = memo(function ResearchPanel({
   };
   const historyContent = (
     <>
-      <div className="research-history-filter" role="group" aria-label="Chat history filter">
+      <div className="research-history-filter" role="group" aria-label={t("Chat history filter")}>
         <button
           type="button"
           aria-pressed={historyFilter === "all"}
           onClick={() => setHistoryFilter("all")}
         >
-          <span>All</span>
+          <span>{t("All")}</span>
           <small>{sortedResearchSessions.length}</small>
         </button>
         <button
@@ -3812,7 +3817,7 @@ export const ResearchPanel = memo(function ResearchPanel({
           aria-pressed={historyFilter === "scope"}
           onClick={() => setHistoryFilter("scope")}
         >
-          <span>{focusMode ? "Scope" : "This scope"}</span>
+          <span>{focusMode ? t("Scope") : t("This scope")}</span>
           <small>{currentScopeChats.length}</small>
         </button>
       </div>
@@ -3825,26 +3830,26 @@ export const ResearchPanel = memo(function ResearchPanel({
           onRename={requestResearchChatRename}
         />
       ) : (
-        <EmptyState icon={<History size={24} />} title={historyFilter === "scope" ? "No chats for this scope" : "No chat history"}>
-          {historyFilter === "scope" ? "Switch to All to browse recent chats from the project." : "Start a scoped chat and it will appear here."}
+        <EmptyState icon={<History size={24} />} title={historyFilter === "scope" ? t("No chats for this scope") : t("No chat history")}>
+          {historyFilter === "scope" ? t("Switch to All to browse recent chats from the project.") : t("Start a scoped chat and it will appear here.")}
         </EmptyState>
       )}
     </>
   );
 
   return (
-    <aside className={focusMode ? `research-panel is-focus-mode${focusHistoryOpen ? " has-focus-history" : ""}` : "research-panel"} aria-label="Research">
+    <aside className={focusMode ? `research-panel is-focus-mode${focusHistoryOpen ? " has-focus-history" : ""}` : "research-panel"} aria-label={t("Research")}>
       {focusMode && focusHistoryOpen ? (
-        <aside className="research-focus-history" aria-label="Chat history">
+        <aside className="research-focus-history" aria-label={t("Chat history")}>
           <div className="research-focus-history-head">
             <div>
               <MessageSquare size={16} aria-hidden="true" />
-              <strong>Chats</strong>
+              <strong>{t("Chats")}</strong>
             </div>
           </div>
           <Button type="button" size="sm" className="research-focus-new-chat" onClick={beginNewChat}>
             <Plus size={14} />
-            <span>New chat</span>
+            <span>{t("New chat")}</span>
           </Button>
           {historyContent}
         </aside>
@@ -3855,7 +3860,7 @@ export const ResearchPanel = memo(function ResearchPanel({
         </div>
         <div className="research-header-actions">
           <IconButton
-            title={historyVisible ? "Hide chat history" : "Show chat history"}
+            title={historyVisible ? t("Hide chat history") : t("Show chat history")}
             aria-pressed={historyVisible}
             className={historyVisible ? "research-history-toggle is-active" : "research-history-toggle"}
             onClick={() => focusMode ? setFocusHistoryOpen((current) => !current) : setShowHistory((current) => !current)}
@@ -3863,15 +3868,15 @@ export const ResearchPanel = memo(function ResearchPanel({
             {focusMode ? (focusHistoryOpen ? <PanelLeftClose size={15} /> : <PanelLeftOpen size={15} />) : <History size={15} />}
           </IconButton>
           <IconButton
-            title="New research chat"
+            title={t("New research chat")}
             onClick={beginNewChat}
           >
             <Plus size={15} />
           </IconButton>
           {onToggleFocusMode ? (
             <IconButton
-              title={focusMode ? "Exit chat focus mode" : "Enter chat focus mode"}
-              aria-label={focusMode ? "Exit chat focus mode" : "Enter chat focus mode"}
+              title={focusMode ? t("Exit chat focus mode") : t("Enter chat focus mode")}
+              aria-label={focusMode ? t("Exit chat focus mode") : t("Enter chat focus mode")}
               aria-pressed={focusMode}
               className={focusMode ? "research-focus-toggle is-active" : "research-focus-toggle"}
               onClick={onToggleFocusMode}
@@ -3902,11 +3907,11 @@ export const ResearchPanel = memo(function ResearchPanel({
         {selected ? (
           <div className="research-status-row">
             <div className="research-status-cluster">
-              <Tooltip content={`Scope : ${currentScopeLabel}`}>
+              <Tooltip content={t("Scope: {{currentScopeLabel}}", { currentScopeLabel: currentScopeLabel })}>
                 <span
                   className="ui-badge research-scope-badge"
                   tabIndex={0}
-                  aria-label={`Current chat scope: ${currentScopeLabel}`}
+                  aria-label={t("Current chat scope: {{currentScopeLabel}}", { currentScopeLabel: currentScopeLabel })}
                 >
                   <ResearchScopeIcon scope={scope} />
                 </span>
@@ -3931,8 +3936,8 @@ export const ResearchPanel = memo(function ResearchPanel({
                 <Switch
                   checked={researchAutoApproveGraphChanges.enabled}
                   onCheckedChange={setAutoApproveGraphChanges}
-                  label="Auto-approve"
-                  tooltip="Automatically applies non-destructive graph changes and safety-classified medium-risk Chat commands across this project. High-risk actions, project-code edits, deletes, and run actions still require review or their dedicated workflow."
+                  label={t("Auto-approve")}
+                  tooltip={t("Automatically applies non-destructive graph changes and safety-classified medium-risk Chat commands across this project. High-risk actions, project-code edits, deletes, and run actions still require review or their dedicated workflow.")}
                 />
               </div>
             </div>
@@ -3951,16 +3956,15 @@ export const ResearchPanel = memo(function ResearchPanel({
             {!selected ? (
               <div className="research-welcome-empty">
                 <div className="research-welcome-copy">
-                  <h2>What should we shape next?</h2>
+                  <h2>{t("What should we shape next?")}</h2>
                   <p>
-                    Brainstorm ideas, research, or request a change.
-                    <span>Archi will help turn it into a clear next step.</span>
+                    {t("Brainstorm ideas, research, or request a change.")}{" "}<span>{t("Archi will help turn it into a clear next step.")}</span>
                   </p>
                 </div>
                 <img
                   className="research-welcome-illustration"
                   src={archiChatEmptyIllustration}
-                  alt="Archi arranging a connected software graph"
+                  alt={t("Archi arranging a connected software graph")}
                   draggable={false}
                 />
               </div>
@@ -4024,16 +4028,16 @@ export const ResearchPanel = memo(function ResearchPanel({
                       <div className="research-message-meta">
                         {message.role === "assistant" && delivery === "realtime" ? <Mic size={13} aria-hidden="true" /> : null}
                         <strong>{message.role === "assistant"
-                          ? delivery === "realtime" ? "Realtime" : "AI Assistant"
-                          : message.role === "user" ? "You" : "System"}</strong>
-                        {message.role === "assistant" && delivery === "background-research" ? <Badge tone="neutral">Research</Badge> : null}
-                        {isThinkingDraft ? <Badge tone="neutral">Thinking</Badge> : null}
-                        {message.error ? <Badge tone="danger">Error</Badge> : null}
-                        {messageAttachmentCount ? <Badge tone="accent">{messageAttachmentCount} attachment{messageAttachmentCount === 1 ? "" : "s"}</Badge> : null}
+                          ? delivery === "realtime" ? t("Realtime") : t("AI Assistant")
+                          : message.role === "user" ? t("You") : t("System")}</strong>
+                        {message.role === "assistant" && delivery === "background-research" ? <Badge tone="neutral">{t("Research")}</Badge> : null}
+                        {isThinkingDraft ? <Badge tone="neutral">{t("Thinking")}</Badge> : null}
+                        {message.error ? <Badge tone="danger">{t("Error")}</Badge> : null}
+                        {messageAttachmentCount ? <Badge tone="accent">{t("{{messageAttachmentCount}} attachment {{value2}}", { messageAttachmentCount: messageAttachmentCount, value2: messageAttachmentCount === 1 ? "" : "s" })}</Badge> : null}
                         {message.mcpToolCalls?.length ? (
                           <Tooltip content={mcpToolUsageTooltip(message.mcpToolCalls)}>
-                            <span tabIndex={0} aria-label={`${message.mcpToolCalls.length} MCP tool call${message.mcpToolCalls.length === 1 ? "" : "s"}`}>
-                              <Badge tone="accent">{message.mcpToolCalls.length} MCP</Badge>
+                            <span tabIndex={0} aria-label={t("{{length}} MCP tool call {{value2}}", { length: message.mcpToolCalls.length, value2: message.mcpToolCalls.length === 1 ? "" : "s" })}>
+                              <Badge tone="accent">{t("{{length}} MCP", { length: message.mcpToolCalls.length })}</Badge>
                             </span>
                           </Tooltip>
                         ) : null}
@@ -4042,7 +4046,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                         {localTtsEnabled && message.role === "assistant" ? (
                           <IconButton
                             className={speakingMessageId === message.id ? "research-copy-button is-speaking" : "research-copy-button"}
-                            title={isThinkingDraft ? "Waiting for final answer text" : speakingMessageId === message.id ? "Stop playback" : selectedTtsModel?.downloaded ? "Read message aloud" : "Open voice output settings"}
+                            title={isThinkingDraft ? t("Waiting for final answer text") : speakingMessageId === message.id ? t("Stop playback") : selectedTtsModel?.downloaded ? t("Read message aloud") : t("Open voice output settings")}
                             disabled={isThinkingDraft || Boolean(ttsBusyMessageId && ttsBusyMessageId !== message.id)}
                             onClick={() => void playMessageSpeech(message.id, message.content)}
                           >
@@ -4058,7 +4062,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                         {message.role === "assistant" ? (
                           <IconButton
                             className="research-fork-button"
-                            title="Fork chat from here"
+                            title={t("Fork chat from here")}
                             disabled={isThinkingDraft}
                             onClick={() => void forkResearchMessage(message.id)}
                           >
@@ -4067,7 +4071,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                         ) : null}
                         <IconButton
                           className="research-copy-button"
-                          title={copiedMessageId === message.id ? "Copied" : "Copy message"}
+                          title={copiedMessageId === message.id ? t("Copied") : t("Copy message")}
                           onClick={() => void copyMessage(message.id, message.content)}
                         >
                           {copiedMessageId === message.id ? <Check size={13} /> : <Copy size={13} />}
@@ -4081,7 +4085,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                       />
                     ) : null}
                     {messageTextAttachments.length || pendingTextAttachmentNames.length ? (
-                      <div className="research-message-file-list" aria-label="Text document attachments">
+                      <div className="research-message-file-list" aria-label={t("Text document attachments")}>
                         {messageTextAttachments.map((artifact) => (
                           <button
                             key={artifact.id}
@@ -4111,7 +4115,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                       </div>
                     ) : null}
                     {visibleToolCalls.length ? (
-                      <div className="research-tool-traces" aria-label="Agent tool activity in chronological order">
+                      <div className="research-tool-traces" aria-label={t("Agent tool activity in chronological order")}>
                         {visibleToolCalls.map((call, callIndex) => {
                           const copyKey = `${message.id}:tool:${callIndex}`;
                           return (
@@ -4131,7 +4135,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                         <div className="research-change-set-result-message">
                           {changeSetResultReport.narrative ? (
                             <ResearchMarkdown
-                              content={changeSetResultReport.narrative}
+                              content={localizeChangeSetResultNarrative(changeSetResultReport.narrative)}
                               loadProjectImage={loadProjectImage}
                               onGraphLink={navigateGraphLink}
                               onProjectPathLink={openProjectPathLink}
@@ -4139,17 +4143,21 @@ export const ResearchPanel = memo(function ResearchPanel({
                           ) : null}
                           <div className={`research-change-set-result is-${changeSetResultReport.tone}`}>
                             <div className="research-change-set-result-summary">
-                              <strong>{changeSetResultReport.title}</strong>
-                              <span>{changeSetResultReport.summary}</span>
+                              <strong>{t(changeSetResultReport.title)}</strong>
+                              <span>{t(changeSetResultReport.category === "queue" ? "research.reviewSummaryQueued" : "research.reviewSummaryApplied", {
+                                applied: changeSetResultReport.applied,
+                                rejected: changeSetResultReport.rejected,
+                                failed: changeSetResultReport.failed
+                              })}</span>
                             </div>
                             <details>
                               <summary>
-                                <span>Operation details</span>
+                                <span>{t("Operation details")}</span>
                                 <small>{changeSetResultReport.operationCount}</small>
                               </summary>
                               <div className="research-change-set-result-details">
                                 <ResearchMarkdown
-                                  content={changeSetResultReport.details}
+                                  content={localizeChangeSetResultDetails(changeSetResultReport.details)}
                                   loadProjectImage={loadProjectImage}
                                   onGraphLink={navigateGraphLink}
                                   onProjectPathLink={openProjectPathLink}
@@ -4170,11 +4178,11 @@ export const ResearchPanel = memo(function ResearchPanel({
                       {isToolContinuation ? (
                         <span className="research-tool-continuation" role="status">
                           <Workflow size={12} aria-hidden="true" />
-                          <span>Used a tool — continuing…</span>
+                          <span>{t("Used a tool — continuing…")}</span>
                         </span>
                       ) : null}
                       {isStreamingMessage ? (
-                        <span className="research-thinking" aria-label={isThinkingDraft ? "Research is thinking" : "Research is writing"}>
+                        <span className="research-thinking" aria-label={isThinkingDraft ? t("Research is thinking") : t("Research is writing")}>
                           <span />
                           <span />
                           <span />
@@ -4193,7 +4201,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                               onClick={() => void retryFailedMessage(message.id)}
                             >
                               {retryingMessageId === message.id ? <Loader2 size={13} className="is-spinning" /> : <RefreshCw size={13} />}
-                              <span>{retryingMessageId === message.id ? "Retrying" : "Retry"}</span>
+                              <span>{retryingMessageId === message.id ? t("Retrying") : t("Retry")}</span>
                             </Button>
                           ) : null}
                         </div>
@@ -4204,8 +4212,8 @@ export const ResearchPanel = memo(function ResearchPanel({
                         <div>
                           <ShieldCheck size={16} />
                           <span>
-                            <strong>{ruleApproval ? "Rule change requires approval" : "MCP tool use requires approval"}</strong>
-                            <small>{message.mcpApprovalRequest.serverLabels.join(", ")} · {message.mcpApprovalRequest.toolName}</small>
+                            <strong>{ruleApproval ? t("Rule change requires approval") : t("MCP tool use requires approval")}</strong>
+                            <small>{t("{{value1}} · {{toolName}}", { value1: message.mcpApprovalRequest.serverLabels.join(", "), toolName: message.mcpApprovalRequest.toolName })}</small>
                           </span>
                         </div>
                         {ruleApproval ? (
@@ -4213,29 +4221,27 @@ export const ResearchPanel = memo(function ResearchPanel({
                             <strong>{ruleApproval.summary}</strong>
                             <p>{ruleApproval.implication}</p>
                             <details>
-                              <summary>Review exact proposed change</summary>
+                              <summary>{t("Review exact proposed change")}</summary>
                               <pre>{ruleApproval.exactJson}</pre>
                             </details>
-                            <small>This approval applies only to this exact change. It cannot be remembered for later rule edits.</small>
+                            <small>{t("This approval applies only to this exact change. It cannot be remembered for later rule edits.")}</small>
                           </div>
                         ) : (
                           <>
                             {commandApproval ? (
                               <div className="research-command-approval-proposal">
                                 <div className="research-command-approval-heading">
-                                  <strong>Command to run</strong>
+                                  <strong>{t("Command to run")}</strong>
                                   <Badge
                                     className="research-command-risk-badge"
                                     tone={commandApproval.risk === "low" ? "success" : commandApproval.risk === "medium" ? "warning" : "danger"}
-                                  >
-                                    {commandApproval.risk[0].toUpperCase() + commandApproval.risk.slice(1)} risk
-                                  </Badge>
+                                  >{t("{{value1}} risk", { value1: commandApproval.risk[0].toUpperCase() + commandApproval.risk.slice(1) })}</Badge>
                                 </div>
                                 <div className="research-command-approval-code">
                                   <IconButton
                                     className="research-command-copy-button"
-                                    title={copiedCommandMessageId === message.id ? "Copied" : "Copy exact command"}
-                                    aria-label={copiedCommandMessageId === message.id ? "Command copied" : "Copy exact command"}
+                                    title={copiedCommandMessageId === message.id ? t("Copied") : t("Copy exact command")}
+                                    aria-label={copiedCommandMessageId === message.id ? t("Command copied") : t("Copy exact command")}
                                     onClick={() => void copyApprovalCommand(message.id, commandApproval.command)}
                                   >
                                     {copiedCommandMessageId === message.id ? <Check size={12} /> : <Copy size={12} />}
@@ -4243,13 +4249,13 @@ export const ResearchPanel = memo(function ResearchPanel({
                                   <ResearchMarkdown content={shellCommandMarkdown(commandApproval.command)} />
                                 </div>
                                 <small className="research-command-risk-hint">{commandRiskHint(commandApproval.risk, commandApproval.command)}</small>
-                                <small>Working directory: {commandApproval.cwd}</small>
+                                <small>{t("Working directory: {{cwd}}", { cwd: commandApproval.cwd })}</small>
                               </div>
                             ) : null}
                             <p>
                               {commandApproval
-                                ? "Review this exact command, then approve or reject it."
-                                : "The assistant tried to use this Ask-mode MCP tool. Approve or reject this tool use."}
+                                ? t("Review this exact command, then approve or reject it.")
+                                : t("The assistant tried to use this Ask-mode MCP tool. Approve or reject this tool use.")}
                             </p>
                             <label className="research-mcp-remember">
                               <input
@@ -4258,7 +4264,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                                 disabled={researchBusy}
                                 onChange={(event) => setRememberMcpByMessage((current) => ({ ...current, [message.id]: event.target.checked }))}
                               />
-                              <span>Remember for this chat</span>
+                              <span>{t("Remember for this chat")}</span>
                             </label>
                           </>
                         )}
@@ -4271,7 +4277,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                             onClick={() => void respondToMcpApproval(message, "approved")}
                           >
                             <Check size={15} />
-                            <span>{ruleApproval ? "Approve change" : "Approve"}</span>
+                            <span>{ruleApproval ? t("Approve change") : t("Approve")}</span>
                           </Button>
                           <Button
                             type="button"
@@ -4279,7 +4285,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                             disabled={researchBusy}
                             onClick={() => void respondToMcpApproval(message, "rejected")}
                           >
-                            <span>Reject</span>
+                            <span>{t("Reject")}</span>
                           </Button>
                         </div>
                       </div>
@@ -4430,11 +4436,9 @@ export const ResearchPanel = memo(function ResearchPanel({
                                 {successfulBatchCount ? (
                                   <span
                                     className="research-subagent-batch-count"
-                                    title={`${successfulBatchCount} validated graph ${successfulBatchCount === 1 ? "batch" : "batches"} submitted to the parent chat`}
-                                    aria-label={`${successfulBatchCount} validated graph ${successfulBatchCount === 1 ? "batch" : "batches"} submitted`}
-                                  >
-                                    B{successfulBatchCount}
-                                  </span>
+                                    title={t("{{successfulBatchCount}} validated graph {{value2}} submitted to the parent chat", { successfulBatchCount: successfulBatchCount, value2: successfulBatchCount === 1 ? "batch" : "batches" })}
+                                    aria-label={t("{{successfulBatchCount}} validated graph {{value2}} submitted", { successfulBatchCount: successfulBatchCount, value2: successfulBatchCount === 1 ? "batch" : "batches" })}
+                                  >{t("B {{successfulBatchCount}}", { successfulBatchCount: successfulBatchCount })}</span>
                                 ) : null}
                                 <Badge tone={statusTone}>{statusLabel}</Badge>
                               </div>
@@ -4451,19 +4455,19 @@ export const ResearchPanel = memo(function ResearchPanel({
                                       return next;
                                     })}
                                   >
-                                    {summaryExpanded ? "Show less" : "Show more"}
+                                    {summaryExpanded ? t("Show less") : t("Show more")}
                                   </button>
                                 ) : null}
                               </div>
                               {run.kind === "delphi-testing" ? (
                                 <div className="research-delphi-observation-status">
                                   <Eye size={13} />
-                                  <span>{delphiArgs.observation?.mode === "headless" ? "Headless audit" : "Visible observation"}</span>
-                                  {delphiArgs.target?.deviceId ? <small>Target {delphiArgs.target.deviceId}</small> : null}
+                                  <span>{delphiArgs.observation?.mode === "headless" ? t("Headless audit") : t("Visible observation")}</span>
+                                  {delphiArgs.target?.deviceId ? <small>{t("Target {{deviceId}}", { deviceId: delphiArgs.target.deviceId })}</small> : null}
                                   {delphiTargetUrl ? (
                                     <Button type="button" size="sm" onClick={() => void window.archicode?.openExternalUrl(delphiTargetUrl)}>
                                       <ExternalLink size={13} />
-                                      <span>Open target</span>
+                                      <span>{t("Open target")}</span>
                                     </Button>
                                   ) : null}
                                 </div>
@@ -4472,24 +4476,24 @@ export const ResearchPanel = memo(function ResearchPanel({
                                 <div className="research-subagent-approval">
                                   {run.kind === "merge-resolution" ? (
                                     <label className="research-subagent-strategy-label">
-                                      <span>Resolution strategy (optional — edit before approving)</span>
+                                      <span>{t("Resolution strategy (optional — edit before approving)")}</span>
                                       <TextArea
                                         rows={2}
                                         disabled={researchBusy}
                                         value={subagentStrategyDrafts[run.id] ?? run.proposedResolutionStrategy ?? ""}
                                         onChange={(event) => setSubagentStrategyDrafts((current) => ({ ...current, [run.id]: event.target.value }))}
-                                        placeholder="e.g. prefer main branch, merge both sides, keep the feature-branch version..."
+                                        placeholder={t("e.g. prefer main branch, merge both sides, keep the feature-branch version...")}
                                       />
                                     </label>
                                   ) : (
                                     <>
                                       <div className="research-subagent-reason">
-                                        <span>{isDelphiSetup ? "What will be installed?" : run.kind === "delphi-testing" ? "What will Delphi do?" : "Why reconcile?"}</span>
+                                        <span>{isDelphiSetup ? t("What will be installed?") : run.kind === "delphi-testing" ? t("What will Delphi do?") : t("Why reconcile?")}</span>
                                         <p>{run.reviewReason ?? (run.kind === "delphi-testing" ? "Delphi will inspect and run the approved finite project checks." : "ArchiCode detected possible graph drift after the merge.")}</p>
                                       </div>
                                       {targetSelectionRequired ? (
                                         <fieldset className="research-delphi-target-picker">
-                                          <legend>Choose every target Delphi should run and test</legend>
+                                          <legend>{t("Choose every target Delphi should run and test")}</legend>
                                           {runtimeTargetOptions.map((option) => (
                                             <label key={option.profileId}>
                                               <input
@@ -4506,7 +4510,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                                               <span>{option.label}<small>{option.kind}</small></span>
                                             </label>
                                           ))}
-                                          <small>Select one target or combine several, such as a backend and frontend in a monorepo.</small>
+                                          <small>{t("Select one target or combine several, such as a backend and frontend in a monorepo.")}</small>
                                         </fieldset>
                                       ) : null}
                                     </>
@@ -4523,7 +4527,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                                       }}
                                     >
                                       {isResponding ? <Loader2 size={15} className="is-spinning" /> : <Check size={15} />}
-                                      <span>{run.kind === "merge-resolution" ? "Approve" : isDelphiSetup ? "Install" : "Run"}</span>
+                                      <span>{run.kind === "merge-resolution" ? t("Approve") : isDelphiSetup ? t("Install") : t("Run")}</span>
                                     </Button>
                                     <Button
                                       type="button"
@@ -4534,7 +4538,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                                         if (run0) void respondToSubagent(message, run0, "rejected");
                                       }}
                                     >
-                                      <span>{run.kind === "merge-resolution" ? "Cancel" : "Skip"}</span>
+                                      <span>{run.kind === "merge-resolution" ? t("Cancel") : t("Skip")}</span>
                                     </Button>
                                   </div>
                                 </div>
@@ -4543,7 +4547,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                                 <div className="research-subagent-progress">
                                   <IconButton
                                     className="research-subagent-copy-button"
-                                    title={copiedSubagentRunId === run.id ? "Copied" : "Copy full subagent log"}
+                                    title={copiedSubagentRunId === run.id ? t("Copied") : t("Copy full subagent log")}
                                     onClick={() => void copySubagentProgress(run.id, run.progressLines)}
                                   >
                                     {copiedSubagentRunId === run.id ? <Check size={12} /> : <Copy size={12} />}
@@ -4577,9 +4581,9 @@ export const ResearchPanel = memo(function ResearchPanel({
                           {liveParentActivity?.status === "failed" ? <AlertCircle size={14} />
                             : isParentActivityRunning ? <Loader2 size={14} className="is-spinning" />
                             : <CheckCircle2 size={14} />}
-                          <strong>Archi — Parent investigation</strong>
+                          <strong>{t("Archi — Parent investigation")}</strong>
                           <Badge tone={liveParentActivity?.status === "failed" ? "danger" : isParentActivityRunning ? "accent" : "success"}>
-                            {liveParentActivity?.status === "failed" ? "Blocked" : isParentActivityRunning ? "Working" : "Complete"}
+                            {liveParentActivity?.status === "failed" ? t("Blocked") : isParentActivityRunning ? t("Working") : t("Complete")}
                           </Badge>
                         </div>
                         <div className="research-parent-activity-lines">
@@ -4625,10 +4629,10 @@ export const ResearchPanel = memo(function ResearchPanel({
                               type="button"
                               className={previewingThisChangeSet ? "is-active" : ""}
                               title={supersededOnly
-                                ? "Superseded by a newer proposal — preview unavailable"
+                                ? t("Superseded by a newer proposal — preview unavailable")
                                 : reviewed
-                                  ? "Nothing to preview — this card was already reviewed"
-                                  : previewingThisChangeSet ? "Hide canvas preview" : "Preview on canvas"}
+                                  ? t("Nothing to preview — this card was already reviewed")
+                                  : previewingThisChangeSet ? t("Hide canvas preview") : t("Preview on canvas")}
                               aria-pressed={previewingThisChangeSet}
                               disabled={reviewed || superseded}
                               onClick={() => previewingThisChangeSet
@@ -4638,13 +4642,13 @@ export const ResearchPanel = memo(function ResearchPanel({
                               {previewingThisChangeSet ? <EyeOff size={14} /> : <Eye size={14} />}
                             </IconButton>
                             {superseded && !reviewSummary
-                              ? <Badge tone="neutral">Superseded</Badge>
+                              ? <Badge tone="neutral">{t("Superseded")}</Badge>
                               : reviewPresentation
                                 ? <Badge tone={reviewPresentation.badgeTone}>{reviewPresentation.badgeLabel}</Badge>
                                 : reviewed
-                                  ? <Badge tone="success">{queueSubmission ? "Queued" : "Reviewed"}</Badge>
+                                  ? <Badge tone="success">{queueSubmission ? t("Queued") : t("Reviewed")}</Badge>
                                   : waitingForRun
-                                    ? <Badge tone="warning">Waiting for run</Badge>
+                                    ? <Badge tone="warning">{t("Waiting for run")}</Badge>
                                   : null}
                           </div>
                           {reviewPresentation ? <small>{reviewPresentation.summaryLabel}</small> : null}
@@ -4652,7 +4656,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                             <div className="research-change-run-lock" role="status">
                               <AlertTriangle size={15} />
                               <span>
-                                {queueSubmission ? "Queueing" : "Applying"} unlocks after run <strong>{activeGraphLockRun.id}</strong> ({activeGraphLockRun.status}) finishes or is cancelled. You can review the proposed operations or reject this card now; {queueSubmission ? "nothing has been queued" : "no changes have been applied"}.
+                                {queueSubmission ? t("Queueing") : t("Applying")} {" "}{t("unlocks after run")}{" "}<strong>{activeGraphLockRun.id}</strong> ({activeGraphLockRun.status}{t(") finishes or is cancelled. You can review the proposed operations or reject this card now;")}{" "}{queueSubmission ? t("nothing has been queued") : t("no changes have been applied")}.
                               </span>
                             </div>
                           ) : null}
@@ -4685,7 +4689,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                                     {operationLabel(operation, operationTitles, operationSubflowTitles, operationFlowTitles)}
                                     {fields ? <small>{fields}</small> : null}
                                   </span>
-                                  {isDestructiveOperation(operation) ? <Badge tone="danger">destructive</Badge> : null}
+                                  {isDestructiveOperation(operation) ? <Badge tone="danger">{t("destructive")}</Badge> : null}
                                 </label>
                               );
                             });
@@ -4716,7 +4720,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                               }}
                             >
                               <CheckCircle2 size={15} />
-                              <span>{primaryActionLabel}</span>
+                              <span>{t(primaryActionLabel)}</span>
                             </Button>
                             <Button
                               type="button"
@@ -4733,14 +4737,14 @@ export const ResearchPanel = memo(function ResearchPanel({
                               }}
                             >
                               <X size={15} />
-                              <span>{reviewPending ? (queueSubmission ? "Queueing" : "Applying") : supersededOnly ? "Superseded" : reviewed ? "Reviewed" : "Reject"}</span>
+                              <span>{reviewPending ? t(queueSubmission ? "Queueing" : "Applying") : supersededOnly ? t("Superseded") : reviewed ? t("Reviewed") : t("Reject")}</span>
                             </Button>
                           </div>
                         </div>
                       );
                     })() : null}
                     {isLastMessage && !isStreamingMessage ? (
-                      <small className="research-message-timestamp">Last updated {new Date(selected.updatedAt).toLocaleString()}</small>
+                      <small className="research-message-timestamp">{t("Last updated {{value1}}", { value1: formatDateTime(new Date(selected.updatedAt)) })}</small>
                     ) : null}
                   </div>
                   );
@@ -4757,32 +4761,32 @@ export const ResearchPanel = memo(function ResearchPanel({
               onClick={scrollResearchToBottom}
             >
               <ChevronDown size={14} />
-              <span>More</span>
+              <span>{t("More")}</span>
             </Button>
           ) : null}
           {selected && queuedMessages.length ? (
-            <div className="research-queued-messages" aria-label="Queued messages">
+            <div className="research-queued-messages" aria-label={t("Queued messages")}>
               {queuedMessages.map((queuedMessage, index) => (
                 <div key={queuedMessage.id} className="research-queued-message">
                   <span className="research-queued-message-index">{index + 1}</span>
                   <span className="research-queued-message-content">{queuedMessage.content}</span>
                   <div className="research-queued-message-actions">
                     <IconButton
-                      title="Move up"
+                      title={t("Move up")}
                       disabled={index === 0}
                       onClick={() => reorderQueuedResearchMessage(selected.id, queuedMessage.id, "up")}
                     >
                       <ChevronUp size={13} />
                     </IconButton>
                     <IconButton
-                      title="Move down"
+                      title={t("Move down")}
                       disabled={index === queuedMessages.length - 1}
                       onClick={() => reorderQueuedResearchMessage(selected.id, queuedMessage.id, "down")}
                     >
                       <ChevronDown size={13} />
                     </IconButton>
                     <IconButton
-                      title="Remove from queue"
+                      title={t("Remove from queue")}
                       onClick={() => dequeueResearchMessage(selected.id, queuedMessage.id)}
                     >
                       <X size={13} />
@@ -4794,13 +4798,13 @@ export const ResearchPanel = memo(function ResearchPanel({
           ) : null}
           <div ref={speechMeterRef} className="research-composer">
             <ChatComposer
-              placeholder={mcpApprovalPending ? "Approve or reject first" : "Ask anything"}
+              placeholder={mcpApprovalPending ? t("Approve or reject first") : t("Ask anything")}
               disabled={mcpApprovalPending}
               onPasteImages={handlePastedImages}
               onSubmit={() => void submit()}
             />
             {attachmentPaths.length ? (
-              <div className="research-composer-attachments" aria-label="Staged attachments">
+              <div className="research-composer-attachments" aria-label={t("Staged attachments")}>
                 {attachmentPaths.map((filePath) => {
                   const previewUrl = attachmentPreviewUrls[filePath];
                   const fileName = attachmentFileName(filePath);
@@ -4809,8 +4813,8 @@ export const ResearchPanel = memo(function ResearchPanel({
                       <img src={previewUrl} alt={fileName} />
                       <button
                         type="button"
-                        aria-label={`Remove ${fileName}`}
-                        title="Remove attachment"
+                        aria-label={t("Remove {{fileName}}", { fileName: fileName })}
+                        title={t("Remove attachment")}
                         disabled={mcpApprovalPending}
                         onClick={() => removeAttachmentPath(filePath)}
                       >
@@ -4822,7 +4826,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                       key={filePath}
                       type="button"
                       className="research-composer-file-attachment"
-                      title={`Remove ${fileName}`}
+                      title={t("Remove {{fileName}}", { fileName: fileName })}
                       disabled={mcpApprovalPending}
                       onClick={() => removeAttachmentPath(filePath)}
                     >
@@ -4839,11 +4843,10 @@ export const ResearchPanel = memo(function ResearchPanel({
               <div className="research-model-switch-warning" role="status" aria-live="polite">
                 <AlertTriangle size={15} aria-hidden="true" />
                 <span>
-                  <strong>{modelSwitchWarning.from} → {modelSwitchWarning.to}</strong> may not be fully compatible with this existing chat.
-                </span>
+                  <strong>{t("{{from}} → {{to}}", { from: modelSwitchWarning.from, to: modelSwitchWarning.to })}</strong> {" "}{t("may not be fully compatible with this existing chat.")}{" "}</span>
                 <IconButton
-                  title="Dismiss model compatibility warning"
-                  aria-label="Dismiss model compatibility warning"
+                  title={t("Dismiss model compatibility warning")}
+                  aria-label={t("Dismiss model compatibility warning")}
                   onClick={() => setModelSwitchWarning(null)}
                 >
                   <X size={13} />
@@ -4858,7 +4861,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                 {codexRealtimeSession.status === "preparing" || codexRealtimeSession.status === "starting" || codexRealtimeSession.status === "reconnecting"
                   ? <Loader2 size={15} className="is-spinning" />
                   : codexRealtimeSession.muted ? <MicOff size={15} /> : <Mic size={15} />}
-                <strong>Archi live</strong>
+                <strong>{t("Archi live")}</strong>
                 <span>{codexRealtimeSession.error ?? (codexRealtimeSession.muted
                   ? "muted"
                   : codexRealtimeSession.status === "preparing" ? "preparing context" : codexRealtimeSession.status)}</span>
@@ -4866,7 +4869,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                   <ResearchLiveCountdown expiresAtMs={codexRealtimeSession.expiresAtMs} />
                 ) : null}
                 {(codexRealtimeSession.status === "hearing" || codexRealtimeSession.status === "listening") && !codexRealtimeSession.muted ? (
-                  <span className="research-live-meter" aria-label="Microphone input level">
+                  <span className="research-live-meter" aria-label={t("Microphone input level")}>
                     {[0.04, 0.12, 0.24, 0.42].map((threshold) => (
                       <span key={threshold} className={codexRealtimeSession.inputLevel >= threshold ? "is-active" : ""} />
                     ))}
@@ -4879,7 +4882,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                 {codexRealtimeMode ? (
                   <>
                     <Tooltip
-                      content={codexRealtimeDisabledReason ?? (codexRealtimeCallActive ? "End OpenAI live audio" : "Start OpenAI live audio")}
+                      content={codexRealtimeDisabledReason ?? (codexRealtimeCallActive ? t("End OpenAI live audio") : t("Start OpenAI live audio"))}
                       disabled={!codexRealtimeDisabledReason}
                     >
                       <span className="research-live-button-anchor">
@@ -4893,14 +4896,14 @@ export const ResearchPanel = memo(function ResearchPanel({
                           }}
                         >
                           {codexRealtimeCallActive ? <Square size={15} /> : <Mic size={15} />}
-                          <span>{codexRealtimeCallActive ? "End live" : "Live"}</span>
+                          <span>{codexRealtimeCallActive ? t("End live") : t("Live")}</span>
                         </Button>
                       </span>
                     </Tooltip>
                     {codexRealtimeCallActive ? (
                       <IconButton
                         className={codexRealtimeSession?.muted ? "research-live-mute is-muted" : "research-live-mute"}
-                        title={codexRealtimeSession?.muted ? "Unmute microphone" : "Mute microphone"}
+                        title={codexRealtimeSession?.muted ? t("Unmute microphone") : t("Mute microphone")}
                         aria-pressed={Boolean(codexRealtimeSession?.muted)}
                         onClick={toggleCodexRealtimeMute}
                       >
@@ -4918,7 +4921,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                     onClick={() => void stopSpeechRecording("send")}
                   >
                     <Play size={15} />
-                    <span>Send</span>
+                    <span>{t("Send")}</span>
                   </Button>
                 ) : (
                   <ResearchSubmitButton
@@ -4933,8 +4936,8 @@ export const ResearchPanel = memo(function ResearchPanel({
                     type="button"
                     variant="danger"
                     className="research-recording-done research-recording-stop"
-                    aria-label="Done"
-                    title="Done"
+                    aria-label={t("Done")}
+                    title={t("Done")}
                     disabled={composerPrimaryDisabled}
                     onClick={() => void runSpeechAction()}
                   >
@@ -4952,7 +4955,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                   </IconButton>
                 ) : null}
                 <IconButton
-                  title={attachmentPaths.length ? `${attachmentPaths.length} attachment${attachmentPaths.length === 1 ? "" : "s"} selected` : "Add attachments"}
+                  title={attachmentPaths.length ? `${attachmentPaths.length} attachment${attachmentPaths.length === 1 ? "" : "s"} selected` : t("Add attachments")}
                   className="research-attachment-button"
                   disabled={mcpApprovalPending}
                   onClick={async () => {
@@ -4971,7 +4974,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                 </IconButton>
                 {attachmentPaths.length ? (
                   <IconButton
-                    title="Clear attachments"
+                    title={t("Clear attachments")}
                     disabled={mcpApprovalPending}
                     onClick={clearStagedAttachments}
                   >
@@ -4982,7 +4985,7 @@ export const ResearchPanel = memo(function ResearchPanel({
               <div className="research-composer-secondary-actions">
                 {researchBusy && selected ? (
                   <IconButton
-                    title="Stop response"
+                    title={t("Stop response")}
                     className="research-stop-button"
                     onClick={() => void stopResearchMessage(selected.id)}
                   >
@@ -4994,7 +4997,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                     bundle={bundle}
                     baseContextCharacters={researchContextBaseCharacters}
                     detail={researchContextEstimate.detail}
-                    label="Recent messages"
+                    label={t("Recent messages")}
                     maxTokens={researchContextEstimate.maxTokens}
                     cost={researchSessionCost}
                     primary={researchPrimaryIndicator}
@@ -5003,38 +5006,33 @@ export const ResearchPanel = memo(function ResearchPanel({
                 ) : null}
                 <MenuRoot>
                   <MenuTrigger asChild>
-                    <IconButton title="Export chat" disabled={!selected}>
+                    <IconButton title={t("Export chat")} disabled={!selected}>
                       <Download size={15} />
                     </IconButton>
                   </MenuTrigger>
                   <MenuContent>
-                    <MenuLabel>Download</MenuLabel>
+                    <MenuLabel>{t("Download")}</MenuLabel>
                     <MenuItem disabled={!selected} onSelect={() => exportChat("markdown")}>
-                      <FileText size={15} /> Markdown
-                    </MenuItem>
+                      <FileText size={15} /> {" "}{t("Markdown")}{" "}</MenuItem>
                     <MenuItem disabled={!selected} onSelect={() => exportChat("json")}>
-                      <FileJson size={15} /> JSON
-                    </MenuItem>
+                      <FileJson size={15} /> {" "}{t("JSON")}{" "}</MenuItem>
                     <MenuSeparator />
-                    <MenuLabel>Clipboard</MenuLabel>
+                    <MenuLabel>{t("Clipboard")}</MenuLabel>
                     <MenuItem disabled={!selected} onSelect={() => void copyChat("markdown")}>
-                      <Copy size={15} /> Copy Markdown
-                    </MenuItem>
+                      <Copy size={15} /> {" "}{t("Copy Markdown")}{" "}</MenuItem>
                     <MenuItem disabled={!selected} onSelect={() => void copyChat("json")}>
-                      <Copy size={15} /> Copy JSON
-                    </MenuItem>
+                      <Copy size={15} /> {" "}{t("Copy JSON")}{" "}</MenuItem>
                     <MenuSeparator />
-                    <MenuLabel>AI</MenuLabel>
+                    <MenuLabel>{t("AI")}</MenuLabel>
                     <MenuItem disabled={!selected || researchBusy} onSelect={() => void summarizeChat()}>
-                      <Sparkles size={15} /> Summarize chat
-                    </MenuItem>
+                      <Sparkles size={15} /> {" "}{t("Summarize chat")}{" "}</MenuItem>
                   </MenuContent>
                 </MenuRoot>
                 {codexRealtimeCallActive && codexRealtimeSession ? (
                   <div
                     className="research-live-model-indicator"
-                    title={`Realtime model: ${codexRealtimeSession.model}`}
-                    aria-label={`Realtime model: ${codexRealtimeSession.model}`}
+                    title={t("Realtime model: {{model}}", { model: codexRealtimeSession.model })}
+                    aria-label={t("Realtime model: {{model}}", { model: codexRealtimeSession.model })}
                   >
                     <Mic size={13} aria-hidden="true" />
                     <span>{codexRealtimeSession.model}</span>
@@ -5079,15 +5077,15 @@ export const ResearchPanel = memo(function ResearchPanel({
       }}>
         {archiveConfirmationSession ? (
           <DialogContent
-            title="Archive this chat?"
-            description="Archive this chat and remove it from the active chat history."
+            title={t("Archive this chat?")}
+            description={t("Archive this chat and remove it from the active chat history.")}
           >
             <div className="confirm-summary">
               <div className="confirm-summary-grid">
-                <span><b>Chat</b>{archiveConfirmationSession.title}</span>
-                <span><b>Effect</b>The chat will no longer appear in All or Scope history.</span>
+                <span><b>{t("Chat")}</b>{archiveConfirmationSession.title}</span>
+                <span><b>{t("Effect")}</b>{t("The chat will no longer appear in All or Scope history.")}</span>
               </div>
-              <p className="confirm-note">The archived chat remains stored with the project and is not permanently deleted.</p>
+              <p className="confirm-note">{t("The archived chat remains stored with the project and is not permanently deleted.")}</p>
             </div>
             <div className="dialog-actions">
               <Button
@@ -5097,9 +5095,9 @@ export const ResearchPanel = memo(function ResearchPanel({
                 onClick={() => void confirmResearchChatArchive()}
               >
                 {archiveBusy ? <Loader2 size={15} className="is-spinning" /> : <Archive size={15} />}
-                <span>Archive chat</span>
+                <span>{t("Archive chat")}</span>
               </Button>
-              <Button type="button" disabled={archiveBusy} onClick={() => setArchiveConfirmationSessionId(null)}>Cancel</Button>
+              <Button type="button" disabled={archiveBusy} onClick={() => setArchiveConfirmationSessionId(null)}>{t("Cancel")}</Button>
             </div>
           </DialogContent>
         ) : null}
@@ -5109,14 +5107,14 @@ export const ResearchPanel = memo(function ResearchPanel({
       }}>
         {renameSession ? (
           <DialogContent
-            title="Rename chat"
-            description="Give this chat a clearer title."
+            title={t("Rename chat")}
+            description={t("Give this chat a clearer title.")}
           >
             <TextInput
               autoFocus
               value={renameDraft}
               maxLength={200}
-              placeholder="Chat title"
+              placeholder={t("Chat title")}
               onChange={(event) => setRenameDraft(event.target.value)}
               onKeyDown={(event) => {
                 if (event.key === "Enter" && renameDraft.trim() && !renameBusy) {
@@ -5133,9 +5131,9 @@ export const ResearchPanel = memo(function ResearchPanel({
                 onClick={() => void confirmResearchChatRename()}
               >
                 {renameBusy ? <Loader2 size={15} className="is-spinning" /> : <Check size={15} />}
-                <span>Save</span>
+                <span>{t("Save")}</span>
               </Button>
-              <Button type="button" disabled={renameBusy} onClick={() => setRenameSessionId(null)}>Cancel</Button>
+              <Button type="button" disabled={renameBusy} onClick={() => setRenameSessionId(null)}>{t("Cancel")}</Button>
             </div>
           </DialogContent>
         ) : null}

@@ -1,3 +1,4 @@
+import { t } from "@renderer/i18n";
 import type { CanvasCaptureDestination, CanvasCaptureResult } from "../../../preload";
 
 export type CanvasCaptureStatus = { tone: "success" | "error"; message: string };
@@ -56,18 +57,18 @@ export async function captureVisibleCanvasViewport(suggestedName: string, target
   if (result.canceled) return null;
   if (result.destination === "clipboard") {
     void window.archicode.showSystemNotification?.({
-      title: "Canvas capture copied",
+      title: t("Canvas capture copied"),
       body: "The visible canvas capture is on the clipboard."
     });
-    return { tone: "success", message: "Copied to clipboard" };
+    return { tone: "success", message: t("Copied to clipboard") };
   }
   if (result.destination === "data") {
-    return { tone: "success", message: "Canvas capture returned" };
+    return { tone: "success", message: t("Canvas capture returned") };
   }
   const place = result.destination === "custom" ? "selected folder" : "Downloads";
   void window.archicode.showSystemNotification?.({
-    title: "Canvas capture saved",
+    title: t("Canvas capture saved"),
     body: `Saved ${result.fileName} to ${place}.`
   });
-  return { tone: "success", message: `Saved to ${place} · ${result.fileName}` };
+  return { tone: "success", message: t("Saved to {{place}} · {{fileName}}", { place: place, fileName: result.fileName }) };
 }

@@ -16,6 +16,7 @@ export type { AgentTurnDiagnostics } from "./agentRuntime";
 import { heuristicImageInputSupportStatus, providerModelOutputTokenLimit, providerSupportsImageInput } from "../shared/providerCapabilities";
 import type { GlobalResearchVerbosity } from "../shared/researchPersonality";
 import { extractTextDocument } from "./documentText";
+import { llmOutputLanguageDirective } from "./i18n";
 import type { ProviderMcpTool } from "./mcp";
 import {
   callClaudeLocal,
@@ -505,14 +506,14 @@ export function researchResponseStyleDirective(verbosity: GlobalResearchVerbosit
 
 export function researchSystemInstructions(options: ResearchProviderOptions): string {
   const override = options.systemInstructionsOverride?.trim();
-  if (override) return override;
-  return [
+  const roleInstructions = override || [
     researchSystemPrompt,
     researchResponseStyleDirective(options.researchVerbosity) || "Keep the visible answer conversational and concise.",
     researchSubagentDirective(options),
     options.researchStructuredToolsEnabled ? researchToolDeliveryDirective : "",
     options.researchPersonalityPrompt?.trim() ? options.researchPersonalityPrompt.trim() : ""
   ].filter(Boolean).join("\n\n");
+  return [roleInstructions, llmOutputLanguageDirective()].join("\n\n");
 }
 
 export async function researchUserPromptText(userMessage: string, options: ResearchProviderOptions): Promise<string> {
@@ -974,6 +975,10 @@ const codingPatchJsonContract = [
   "  }",
   "}"
 ].join("\n");
+
+export function orchestratorSystemInstructions(): string {
+  return [orchestratorSystemPrompt, llmOutputLanguageDirective()].join("\n\n");
+}
 
 export const codingSourceHandoffInstructions = [
   codingPatchJsonContract,

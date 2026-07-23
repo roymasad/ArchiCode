@@ -1,4 +1,8 @@
 export type ChangeSetResultReportPresentation = {
+  category: "graph" | "queue" | "change";
+  applied: number;
+  rejected: number;
+  failed: number;
   title: string;
   summary: string;
   narrative: string;
@@ -34,6 +38,10 @@ export function changeSetResultReportPresentation(content: string): ChangeSetRes
       ? "warning"
       : "success";
   return {
+    category,
+    applied,
+    rejected,
+    failed,
     title: category === "queue" ? "Queue submission complete" : category === "graph" ? "Graph review complete" : "Change review complete",
     summary: `${applied} ${category === "queue" ? "queued" : "applied"}, ${rejected} rejected, ${failed} failed.`,
     narrative,
