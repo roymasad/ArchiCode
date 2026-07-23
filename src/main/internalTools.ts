@@ -878,7 +878,10 @@ export async function createArchicodeInternalMcpServer(projectRoot: string, sett
     transport: "stdio",
     command: process.execPath,
     args: [scriptPath],
-    env: braveApiKey ? [{ name: BRAVE_WEB_SEARCH_API_KEY_ENV, value: braveApiKey }] : [],
+    env: [
+      { name: "ELECTRON_RUN_AS_NODE", value: "1" },
+      ...(braveApiKey ? [{ name: BRAVE_WEB_SEARCH_API_KEY_ENV, value: braveApiKey }] : [])
+    ],
     headers: [],
     enabled: true,
     trusted: true,

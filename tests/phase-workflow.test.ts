@@ -42,13 +42,14 @@ async function waitForBundle(root: string, predicate: (bundle: ProjectBundle) =>
   throw new Error(`Timed out waiting for project state. Runs: ${bundle.runs.map((run) => `${run.id}:${run.status}`).join(", ")}`);
 }
 
-async function createFakeCodex(root: string, options: { failedVerification?: boolean; planningMessage?: string } = {}): Promise<string> {
+async function createFakeCodex(root: string, options: { failedVerification?: boolean; planningMessage?: string; codingMessage?: string } = {}): Promise<string> {
   const commandPath = path.join(root, "fake-codex.cjs");
   await writeFile(commandPath, `#!/usr/bin/env node
 const fs = require("fs");
 const path = require("path");
 const failedVerification = ${JSON.stringify(Boolean(options.failedVerification))};
 const planningMessage = ${JSON.stringify(options.planningMessage ?? "Planning complete. Files: app.txt. Tests: npm test.")};
+const codingMessage = ${JSON.stringify(options.codingMessage ?? "Coding changed app.txt")};
 let stdin = "";
 process.stdin.on("data", (chunk) => { stdin += chunk; });
 process.stdin.on("end", () => {
@@ -73,7 +74,7 @@ process.stdin.on("end", () => {
       }));
     }
   }
-  const message = coding ? "Coding changed app.txt" : planningMessage;
+  const message = coding ? codingMessage : planningMessage;
   if (outputPath) fs.writeFileSync(outputPath, message, "utf8");
   process.exit(0);
 });
@@ -165,6 +166,53 @@ describe("phase workflow", () => {
     expect(retry?.guidance?.text).toBe("Focus only on the settings panel.");
     expect(retry?.guidance?.evidence).toContain("node-notes");
     expect(retry?.contextSummary?.items.some((item) => item.label === "detailed nodes")).toBe(true);
+  });
+
+  it("persists per-file node attribution from a project-wide direct-write run", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "archicode-direct-attribution-"));
+    const providerCommand = await createFakeCodex(root, {
+      codingMessage: JSON.stringify({
+        archicodePatch: {
+          schemaVersion: 1,
+          summary: "Created app.txt.",
+          runSummary: {
+            implementationStatus: "complete"
+          },
+          sourceAttribution: [
+            { path: "app.txt", nodeIds: ["node-orchestrator"] }
+          ],
+          operations: []
+        }
+      })
+    });
+    const bundle = await ensureFixtureProject(root);
+    await updateProjectSettings(root, {
+      ...bundle.project.settings,
+      providers: bundle.project.settings.providers.map((provider) => provider.id === "codex-local"
+        ? { ...provider, enabled: true, localCommand: providerCommand, localSandbox: "workspace-write" }
+        : { ...provider, enabled: false }),
+      stopOnUnansweredQuestions: false
+    });
+
+    const { runId } = await startAgentRun({
+      projectRoot: root,
+      flowId: "flow-main",
+      providerId: "codex-local",
+      promptSummary: "Create app.txt for the orchestrator",
+      scope: { kind: "project", flowId: "flow-main", nodeIds: [], label: "Project" }
+    });
+    const { bundle: completed } = await waitForRun(root, runId, (run) => run.status === "succeeded");
+    const orchestrator = completed.flows[0]!.nodes.find((node) => node.id === "node-orchestrator");
+
+    expect(orchestrator?.implementationScope).toMatchObject({
+      source: "implementation-agent",
+      updatedByRunId: runId,
+      checkedAt: expect.any(String),
+      claims: [{ relation: "own", kind: "file", path: "app.txt" }]
+    });
+    expect(completed.flows[0]!.nodes.find((node) => node.type === "project")?.implementationScope).toMatchObject({
+      claims: [{ relation: "cover", kind: "directory", path: "." }]
+    });
   });
 
   it("blocks retry and debug actions while another run is active", async () => {

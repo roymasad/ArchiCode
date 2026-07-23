@@ -65,6 +65,7 @@ export type PersistedPatchProposal = {
   needsReplan?: boolean;
   replanReason?: string;
   suggestedQuestions?: string[];
+  sourceAttribution?: Array<{ path: string; nodeIds: string[] }>;
   implementationEffort?: Exclude<RunEffort, "auto">;
   implementationTasks?: Array<{ id?: string; title: string; summary?: string; verificationCommand?: string; lightVerificationCommand?: string; batchBudget?: number }>;
   warnings?: string[];

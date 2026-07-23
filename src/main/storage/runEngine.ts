@@ -226,6 +226,7 @@ import {
   ensureProjectGitignoreDefaults,
   hydrateProviderForUse,
   loadProject,
+  normalizeImplementationFilePath,
   persistImplementationFileMappings,
   touchProject,
   writeProjectFiles
@@ -2045,6 +2046,35 @@ async function implementationMappingsFromDiffArtifact(projectRoot: string, artif
       /(^|\/)readme(?:\.[^/]+)?$/i.test(filePath) ||
       isGeneratedLockfilePath(filePath)
     ) return [];
+    const start = match.index ?? 0;
+    const end = matches[index + 1]?.index ?? diff.length;
+    const chunk = diff.slice(start, end);
+    const action: ImplementationFileMapping["action"] = /^\+\+\+ \/dev\/null$/m.test(chunk) ? "delete" : "replace";
+    return nodeIds.map((nodeId) => ({ nodeId, path: filePath, action }));
+  });
+}
+
+async function implementationMappingsFromDirectAttribution(
+  projectRoot: string,
+  artifact: Artifact,
+  attribution: Array<{ path: string; nodeIds: string[] }>
+): Promise<ImplementationFileMapping[]> {
+  if (!attribution.length) return [];
+  const value = await readJson<Record<string, unknown> | null>(path.join(projectRoot, artifact.path), null);
+  const diff = typeof value?.diff === "string" ? value.diff : "";
+  if (!diff) return [];
+  const attributedNodeIdsByPath = new Map<string, string[]>();
+  for (const item of attribution) {
+    const normalizedPath = normalizeImplementationFilePath(item.path);
+    if (!normalizedPath) continue;
+    attributedNodeIdsByPath.set(normalizedPath, uniqueIds(item.nodeIds));
+  }
+  const matches = [...diff.matchAll(/^diff --git a\/(.+?) b\/(.+)$/gm)];
+  return matches.flatMap((match, index) => {
+    const filePath = normalizeImplementationFilePath(match[2]);
+    if (!filePath) return [];
+    const nodeIds = attributedNodeIdsByPath.get(filePath) ?? [];
+    if (!nodeIds.length) return [];
     const start = match.index ?? 0;
     const end = matches[index + 1]?.index ?? diff.length;
     const chunk = diff.slice(start, end);
@@ -6967,8 +6997,16 @@ async function completeCodingRun(projectRoot: string, run: Run, contextText?: st
       });
       if (diffArtifact) {
         batchDiffArtifacts.push(diffArtifact);
+        const directAttribution = patchProposal?.sourceAttribution ?? [];
+        if (directAttribution.length) {
+          await persistImplementationFileMappings(
+            projectRoot,
+            run.id,
+            await implementationMappingsFromDirectAttribution(projectRoot, diffArtifact, directAttribution)
+          );
+        }
         await markRunNodesWithDiff(projectRoot, run, diffArtifact, {
-          inferImplementationScopeFromDiff: !patchProposal?.hasSourceFileOperations
+          inferImplementationScopeFromDiff: !patchProposal?.hasSourceFileOperations && !directAttribution.length
         });
       }
       const continuationRequested = implementationContinuationRequested(providerPhase, patchProposal, diffArtifact);
@@ -8104,6 +8142,9 @@ export async function persistAndMaybeApplyPatchProposal(
       needsReplan: proposal.runSummary?.needsReplan,
       replanReason: proposal.runSummary?.replanReason,
       suggestedQuestions: proposal.runSummary?.suggestedQuestions,
+      sourceAttribution: proposal.runSummary?.sourceAttribution?.length
+        ? proposal.runSummary.sourceAttribution
+        : proposal.sourceAttribution,
       implementationEffort: proposal.runSummary?.implementationEffort,
       implementationTasks: proposal.runSummary?.implementationTasks,
       warnings: extraction.warnings,
@@ -8168,6 +8209,9 @@ export async function persistAndMaybeApplyPatchProposal(
       needsReplan: proposal.runSummary?.needsReplan,
       replanReason: proposal.runSummary?.replanReason,
       suggestedQuestions: proposal.runSummary?.suggestedQuestions,
+      sourceAttribution: proposal.runSummary?.sourceAttribution?.length
+        ? proposal.runSummary.sourceAttribution
+        : proposal.sourceAttribution,
       implementationEffort: proposal.runSummary?.implementationEffort,
       implementationTasks: proposal.runSummary?.implementationTasks,
       warnings: extraction.warnings,

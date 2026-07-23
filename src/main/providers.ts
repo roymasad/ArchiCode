@@ -991,6 +991,13 @@ export const codingSourceHandoffInstructions = [
   "If information is still missing, fail with a clear run-level reason instead of asking questions; planning owns questions."
 ].join(" ");
 
+export const directWriteSourceAttributionInstructions = [
+  "After editing files directly, return exactly one archicodePatch JSON object with schemaVersion 1, the current runId, a concise summary, runSummary.implementationStatus set to complete, runSummary.sourceAttribution, and an empty operations array.",
+  "sourceAttribution must contain one entry for every file you changed: { path: project-relative string, nodeIds: string[] }.",
+  "Use only IDs from sourceAttribution.allowedNodes in the supplied run context. Include multiple node IDs when a shared file directly supports multiple nodes.",
+  "Do not include file contents, source-file proposals, graph operations, or attribution for unchanged files."
+].join(" ");
+
 export function phaseHandoffInstructions(phase: LlmPhase, structuredSourceHandoff = false): string {
   if (phase === "coding") {
     if (structuredSourceHandoff) {

@@ -7,7 +7,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import type { LlmPhase, McpServer, PhaseModelPolicy } from "../../shared/schema";
 import { gaiaAgent, pandoraAgent } from "../../shared/agentIdentities";
-import { type Provider, type ProviderCallOptions, type ProviderHealthResult, type ProviderProgressEvent, type ProviderTokenKind, type ResearchProviderOptions, codingSourceHandoffInstructions, emitUnavailableUsage, extractContextWindowFromModels, extractLocalResearchTurn, extractModelIdsFromModels, extractionSystemPrompt, formatLocalResearchTranscript, imageAttachmentText, inferModelCapabilityProfile, localAskModeMcpRequestInstructions, localResearchToolLoopInstructions, localResearchTranscriptFromContinuation, localResearchTurnValidationFeedback, orchestratorSystemInstructions, phasePolicyText, planningPatchJsonContract, planningQuestionGateInstructions, researchSystemInstructions, researchUserPromptText, resolvePhaseModelPolicy, sourceProposalBatchingInstructions, textAttachmentText } from "../providers";
+import { type Provider, type ProviderCallOptions, type ProviderHealthResult, type ProviderProgressEvent, type ProviderTokenKind, type ResearchProviderOptions, codingSourceHandoffInstructions, directWriteSourceAttributionInstructions, emitUnavailableUsage, extractContextWindowFromModels, extractLocalResearchTurn, extractModelIdsFromModels, extractionSystemPrompt, formatLocalResearchTranscript, imageAttachmentText, inferModelCapabilityProfile, localAskModeMcpRequestInstructions, localResearchToolLoopInstructions, localResearchTranscriptFromContinuation, localResearchTurnValidationFeedback, orchestratorSystemInstructions, phasePolicyText, planningPatchJsonContract, planningQuestionGateInstructions, researchSystemInstructions, researchUserPromptText, resolvePhaseModelPolicy, sourceProposalBatchingInstructions, textAttachmentText } from "../providers";
 import { attachProviderContinuation } from "./anthropic";
 import { runAgentLoop, type AgentToolResult } from "../agentRuntime";
 
@@ -79,10 +79,10 @@ export async function callCodexLocal(provider: Provider, contextText: string, pr
         "Do not run the app, dev server, preview server, simulator, emulator, or watch process. Runtime launch belongs to the Run App button and run profiles.",
         "When adding a new scaffold or runnable module, note missing local browser, desktop, mobile, Docker, or module-specific run targets in the run summary; do not return run-profile operations during coding.",
         writeCapable
-          ? "Do not return graph metadata operations, questions, node updates, graph proposals, run profiles, propose-project-file, or source-file proposal JSON during direct-write coding."
+          ? directWriteSourceAttributionInstructions
           : codingSourceHandoffInstructions,
         writeCapable
-          ? "Return a concise summary of files changed, tests run, and any follow-up notes; do not return graph metadata operations during coding."
+          ? "The sidecar summary may mention finite checks run and follow-up notes."
           : "Return complete propose-source-file operations with path, action, content, nodeId when known, reason, and testIntent; do not summarize code in prose instead of providing file contents.",
         writeCapable ? "" : sourceProposalBatchingInstructions
       ]
@@ -93,9 +93,9 @@ export async function callCodexLocal(provider: Provider, contextText: string, pr
           "Prioritize failure logs, recent diffs, changed files, and affected nodes before broad context.",
           "Repair code so the implementation still matches the latest graph/node source of truth, not just the immediate error log.",
           writeCapable
-            ? "Make the smallest repair, update tests if needed, and return concise finite verification guidance. Do not launch the app/runtime; use logs and source evidence instead. Do not return graph metadata operations or source-file proposal JSON during direct-write debugging."
+            ? "Make the smallest repair and update tests if needed. Do not launch the app/runtime; use logs and source evidence instead."
             : "The configured Codex Local sandbox is read-only, so return the smallest repair as complete propose-source-file operations instead of attempting filesystem edits.",
-          writeCapable ? "" : codingSourceHandoffInstructions,
+          writeCapable ? directWriteSourceAttributionInstructions : codingSourceHandoffInstructions,
           writeCapable ? "" : sourceProposalBatchingInstructions
         ]
     : [
@@ -124,7 +124,7 @@ export async function callCodexLocal(provider: Provider, contextText: string, pr
       ? "Web search is enabled for this run. Use it only when current external information is needed, and cite sources in your final response."
       : "Web search is disabled for this run. Use only the provided project context and local knowledge.",
     writeCapable && (phase === "coding" || phase === "debugging")
-      ? "Return concise guidance. Do not include archicodePatch JSON unless explicitly asked for non-source metadata in a non-coding phase."
+      ? "Return the required direct-write attribution sidecar and no additional JSON objects."
       : "Return concise guidance and, when useful, an archicodePatch JSON object.",
     "",
     `Prompt summary: ${promptSummary}`,
@@ -406,10 +406,10 @@ export async function callClaudeLocal(provider: Provider, contextText: string, p
         "Do not run the app, dev server, preview server, simulator, emulator, or watch process. Runtime launch belongs to the Run App button and run profiles.",
         "When adding a new scaffold or runnable module, note missing local browser, desktop, mobile, Docker, or module-specific run targets in the run summary; do not return run-profile operations during coding.",
         writeCapable
-          ? "Do not return graph metadata operations, questions, node updates, graph proposals, run profiles, propose-project-file, or source-file proposal JSON during direct-write coding."
+          ? directWriteSourceAttributionInstructions
           : codingSourceHandoffInstructions,
         writeCapable
-          ? "Return a concise summary of files changed, tests run, and any follow-up notes; do not return graph metadata operations during coding."
+          ? "The sidecar summary may mention finite checks run and follow-up notes."
           : "Return complete propose-source-file operations with path, action, content, nodeId when known, reason, and testIntent; do not summarize code in prose instead of providing file contents.",
         writeCapable ? "" : sourceProposalBatchingInstructions
       ]
@@ -420,9 +420,9 @@ export async function callClaudeLocal(provider: Provider, contextText: string, p
           "Prioritize failure logs, recent diffs, changed files, and affected nodes before broad context.",
           "Repair code so the implementation still matches the latest graph/node source of truth, not just the immediate error log.",
           writeCapable
-            ? "Make the smallest repair, update tests if needed, and return concise finite verification guidance. Do not launch the app/runtime; use logs and source evidence instead. Do not return graph metadata operations or source-file proposal JSON during direct-write debugging."
+            ? "Make the smallest repair and update tests if needed. Do not launch the app/runtime; use logs and source evidence instead."
             : "The configured Claude Code access mode is read-only here, so return the smallest repair as complete propose-source-file operations instead of attempting filesystem edits.",
-          writeCapable ? "" : codingSourceHandoffInstructions,
+          writeCapable ? directWriteSourceAttributionInstructions : codingSourceHandoffInstructions,
           writeCapable ? "" : sourceProposalBatchingInstructions
         ]
       : [
@@ -451,7 +451,7 @@ export async function callClaudeLocal(provider: Provider, contextText: string, p
       ? "Web search is enabled for this run. Use the mounted ArchiCode web tools when available; otherwise use Claude's web tools only when current external information is needed, and cite sources in your final response."
       : "Web search is disabled for this run. Use only the provided project context, mounted tools, and local knowledge.",
     writeCapable && (phase === "coding" || phase === "debugging")
-      ? "Return concise guidance. Do not include archicodePatch JSON unless explicitly asked for non-source metadata in a non-coding phase."
+      ? "Return the required direct-write attribution sidecar and no additional JSON objects."
       : "Return concise guidance and, when useful, an archicodePatch JSON object.",
     "",
     `Prompt summary: ${promptSummary}`,
@@ -556,7 +556,7 @@ function localCodingPhaseInstructions(provider: Provider, phase: LlmPhase, provi
     writeCapable
       ? "Implement the requested change directly in the project. Keep edits bounded to the project and do not start a server, watcher, simulator, or other long-running process."
       : `${providerName} is configured read-only. Do not edit files; return complete source changes using ArchiCode's propose-source-file operations.`,
-    writeCapable ? "Return a concise summary of changed files and finite checks run." : codingSourceHandoffInstructions,
+    writeCapable ? directWriteSourceAttributionInstructions : codingSourceHandoffInstructions,
     writeCapable ? "" : sourceProposalBatchingInstructions
   ];
   if (phase === "debugging") return [
@@ -564,7 +564,8 @@ function localCodingPhaseInstructions(provider: Provider, phase: LlmPhase, provi
     "Use the supplied failures and project evidence to make the smallest correct repair.",
     writeCapable
       ? "Edit the project directly and run only finite checks needed to validate the repair."
-      : "Do not edit files; return complete repairs using ArchiCode's propose-source-file operations."
+      : "Do not edit files; return complete repairs using ArchiCode's propose-source-file operations.",
+    writeCapable ? directWriteSourceAttributionInstructions : ""
   ];
   return [
     `You are ${gaiaAgent.title}, ArchiCode's implementation agent.`,

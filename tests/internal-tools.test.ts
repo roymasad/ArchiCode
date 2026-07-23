@@ -594,6 +594,7 @@ describe("ArchiCode internal provider tools", () => {
     const mcpServer = await createArchicodeInternalMcpServer(projectRoot, bundle.project.settings, outputDir);
     const client = new Client({ name: "archicode-test", version: "0.1.1" }, { capabilities: {} });
 
+    expect(mcpServer.env).toContainEqual({ name: "ELECTRON_RUN_AS_NODE", value: "1" });
     await client.connect(new StdioClientTransport({
       command: mcpServer.command!,
       args: mcpServer.args,
@@ -658,6 +659,7 @@ describe("ArchiCode internal provider tools", () => {
       }
     }, outputDir);
 
+    expect(server.env).toContainEqual({ name: "ELECTRON_RUN_AS_NODE", value: "1" });
     expect(server.env).toContainEqual({ name: "ARCHICODE_BRAVE_SEARCH_API_KEY", value: "brave-secret" });
   });
 

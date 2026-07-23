@@ -1778,6 +1778,11 @@ export const projectBundleSchema = z.object({
   validationErrors: z.array(z.string()).default([])
 });
 
+const implementationSourceAttributionSchema = z.array(z.object({
+  path: z.string().trim().min(1),
+  nodeIds: z.array(z.string().trim().min(1)).min(1)
+})).default([]);
+
 export const llmPatchProposalSchema = z.object({
   schemaVersion: z.literal(1),
   runId: z.string(),
@@ -1796,6 +1801,7 @@ export const llmPatchProposalSchema = z.object({
     replanReason: z.string().optional(),
     implementationEffort: implementationEffortSelectionSchema.optional(),
     suggestedQuestions: z.array(z.string()).default([]),
+    sourceAttribution: implementationSourceAttributionSchema,
     implementationTasks: z.array(z.object({
       id: z.string().optional(),
       title: z.string(),
@@ -1805,6 +1811,7 @@ export const llmPatchProposalSchema = z.object({
       batchBudget: z.number().int().positive().optional()
     })).default([])
   }).optional(),
+  sourceAttribution: implementationSourceAttributionSchema,
   operations: z.array(z.discriminatedUnion("kind", [
     z.object({
       kind: z.literal("update-node"),
