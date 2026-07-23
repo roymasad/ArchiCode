@@ -11,7 +11,7 @@ import {
 
 export type ReadmeShowcaseScenario = "overview" | "knowledge" | "chat";
 
-export const readmeShowcaseTimestamp = "2026-07-12T09:30:00.000Z";
+export const readmeShowcaseTimestamp = "2026-07-23T09:30:00.000Z";
 
 type ShowcaseNodeOptions = Partial<Pick<
   ArchicodeNode,
@@ -106,9 +106,9 @@ function architectureFlow(): Flow {
       flags: ["user-approved"],
       visual: { backgroundColor: "#665494" }
     }),
-    node("show-research", "Scoped Research Chat", {
+    node("show-research", "Realtime Research Chat", {
       type: "feature",
-      description: "Project, flow, subflow, and node conversations share the exact graph context and return reviewable proposals.",
+      description: "Scoped text or voice conversations share graph context, delegate background research, and return reviewable proposals.",
       position: { x: 790, y: 80 },
       groupId: "show-group-agents",
       flags: ["changed"],
@@ -413,7 +413,7 @@ export function createReadmeShowcaseResearchSessions(rootPath = "/readme-showcas
     projectRoot: rootPath,
     scope: { type: "flow", flowId: "flow-showcase" },
     title: "Connect code evidence to architecture decisions",
-    summary: "Use source-backed communities to guide architecture exploration and reviewed implementation work.",
+    summary: "Use realtime conversation and source-backed communities to guide architecture exploration and reviewed implementation work.",
     memory: {
       summary: "The architecture map stays grounded in code evidence; proposed graph changes require review before implementation.",
       decisions: [{
@@ -459,13 +459,15 @@ export function createReadmeShowcaseResearchSessions(rootPath = "/readme-showcas
       {
         id: "showcase-user",
         role: "user",
-        content: "How should the code knowledge map, 3D architecture view, and implementation agents work together without losing source truth?",
+        content: "How should the knowledge map, 3D view, and implementation agents work together without losing source truth?",
+        delivery: "realtime",
         createdAt: readmeShowcaseTimestamp
       },
       {
         id: "showcase-assistant",
         role: "assistant",
-        content: "Treat them as one evidence-to-action loop:\n\n1. **Explore** relationship communities in the knowledge map.\n2. **Understand** boundaries across nested architecture layers in 3D.\n3. **Decide** in this scoped chat with the relevant nodes and source citations attached.\n4. **Act** only after reviewing the proposed graph changes and queued verification work.\n\nI prepared a small, non-destructive architecture update for review.",
+        content: "Treat them as one evidence-to-action loop:\n\n1. **Explore** relationship communities in the knowledge map.\n2. **Understand** boundaries across nested architecture layers in 3D.\n3. **Decide** here with the relevant nodes and source citations attached.\n4. **Act** only after reviewing the proposed graph changes and queued verification work.\n\nI prepared a small, non-destructive architecture update for review.",
+        delivery: "realtime",
         createdAt: readmeShowcaseTimestamp,
         webUsed: false,
         mcpToolCalls: [

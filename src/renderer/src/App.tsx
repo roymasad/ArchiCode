@@ -555,6 +555,7 @@ export function App() {
   }, [loadKeybindings]);
 
   useEffect(() => {
+    if (!window.archicode?.getLocale || !window.archicode?.onLocaleChanged) return;
     let disposed = false;
     void window.archicode.getLocale().then((locale) => {
       if (!disposed) void applyRendererLocale(locale).then(() => setLocaleRevision((revision) => revision + 1));

@@ -161,6 +161,10 @@ app.whenReady()
         docsAsset: "archicode-overview.png",
         script: `(async () => {
           ${collapseActivity}
+          const appShell = document.querySelector('.app-shell');
+          if (!appShell) throw new Error('App shell was not available.');
+          appShell.style.setProperty('--right-panel-width', '420px');
+          await new Promise((resolve) => setTimeout(resolve, 250));
           document.body.dispatchEvent(new KeyboardEvent('keydown', {
             key: 'e',
             code: 'KeyE',

@@ -39,6 +39,7 @@ describe("README showcase scenarios", () => {
 
     expect(session.scope).toEqual({ type: "flow", flowId: "flow-showcase" });
     expect(session.memory.decisions).toHaveLength(1);
+    expect(session.messages.every((message) => message.delivery === "realtime")).toBe(true);
     expect(answer.mcpToolCalls).toHaveLength(2);
     expect(answer.changeSet?.operations).toHaveLength(3);
     expect(answer.usage?.contextMode).toBe("compact");
