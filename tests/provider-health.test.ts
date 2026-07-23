@@ -4,9 +4,9 @@ import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StdioClientTransport } from "@modelcontextprotocol/sdk/client/stdio.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { applyOpenRouterSessionId, callProvider, callResearchProvider, checkProviderHealth, createConsecutiveToolCallLoopDetector, createUsageAccumulator, localResearchToolLoopInstructions, localResearchTurnValidationFeedback, researchHistoryThread, extractModelCapabilitiesFromModels, extractContextWindowFromModels, extractModelIdsFromModels, inferModelCapabilityProfile, researchResponseStyleDirective, researchSystemInstructions, type ResearchProviderContinuation, resolveProviderApiKey, resolvePhaseModelPolicy } from "../src/main/providers";
+import { applyOpenRouterSessionId, callProvider, callResearchProvider, checkProviderHealth, createConsecutiveToolCallLoopDetector, createUsageAccumulator, extractLocalResearchTurn, localResearchToolLoopInstructions, localResearchTurnValidationFeedback, researchHistoryThread, extractModelCapabilitiesFromModels, extractContextWindowFromModels, extractModelIdsFromModels, inferModelCapabilityProfile, researchResponseStyleDirective, researchSystemInstructions, type ResearchProviderContinuation, resolveProviderApiKey, resolvePhaseModelPolicy } from "../src/main/providers";
 import { buildAnthropicCompatibleBody, buildAnthropicResearchBody } from "../src/main/providers/anthropic";
-import { activeLocalProviderProcesses, buildAntigravityLocalArgs, buildClaudeLocalArgs, buildClaudeLocalResearchArgs, buildCodexLocalArgs, buildCodexLocalResearchArgs, buildGrokLocalArgs, buildKimiLocalArgs, buildOpenCodeLocalArgs, grokCatalogLooksUnauthenticated, grokJsonEvent, kimiArchiCodePermissionConfig, kimiJsonEvent, openCodeJsonEvent, openCodeProcessEnv, parseAntigravityModels, parseGrokModels, parseKimiModels, parseOpenCodeModels, runLocalProcess, windowsBatchCommandLine, windowsExecutableCandidates } from "../src/main/providers/localCli";
+import { activeLocalProviderProcesses, buildAntigravityLocalArgs, buildClaudeLocalArgs, buildClaudeLocalResearchArgs, buildCodexLocalArgs, buildCodexLocalResearchArgs, buildGrokLocalArgs, buildKimiLocalArgs, buildOpenCodeLocalArgs, codexLocalFinalMessage, grokCatalogLooksUnauthenticated, grokJsonEvent, kimiArchiCodePermissionConfig, kimiJsonEvent, openCodeJsonEvent, openCodeProcessEnv, parseAntigravityModels, parseGrokModels, parseKimiModels, parseOpenCodeModels, runLocalProcess, windowsBatchCommandLine, windowsExecutableCandidates } from "../src/main/providers/localCli";
 import { buildOpenAICompatibleBody, buildOpenAIResearchChatCompletionsBody, buildOpenAIResponsesBody, buildOpenAIResearchResponsesBody } from "../src/main/providers/openai";
 import { createSeedProject } from "../src/shared/fixtures";
 import { defaultPhaseModelPolicies, defaultSubagentModelPolicies } from "../src/shared/schema";
@@ -117,6 +117,21 @@ describe("provider health checks", () => {
     expect(localResearchTurnValidationFeedback(malformed)).toContain("could not parse it as a valid tool turn");
     expect(localResearchTurnValidationFeedback(valid)).toBeUndefined();
     expect(localResearchTurnValidationFeedback("The project review is complete.")).toBeUndefined();
+  });
+
+  it("parses a structured local research final answer with no tool calls", () => {
+    const output = JSON.stringify({
+      archicodeResearchTurn: {
+        answer: "The project review is complete.",
+        toolCalls: []
+      }
+    });
+
+    expect(extractLocalResearchTurn(output)).toEqual({
+      answer: "The project review is complete.",
+      toolCalls: []
+    });
+    expect(localResearchTurnValidationFeedback(output)).toBeUndefined();
   });
 
   it("records whether replayable reasoning state was received across provider rounds", () => {
@@ -1369,11 +1384,12 @@ process.exit(2);
       webSearchEnabled: true,
       scopeContext: "{}",
       messages: []
-    }, "/tmp/out.txt");
+    }, "/tmp/out.txt", "/tmp/research-turn.schema.json");
 
     expect(args).toContain("--search");
     expect(args).toContain("mcp_servers.archicode.enabled=false");
     expect(args).toContain("read-only");
+    expect(args).toEqual(expect.arrayContaining(["--output-schema", "/tmp/research-turn.schema.json"]));
     expect(args.indexOf("--search")).toBeLessThan(args.indexOf("exec"));
     expect(args.indexOf("mcp_servers.archicode.enabled=false")).toBeLessThan(args.indexOf("exec"));
   });
@@ -2050,6 +2066,89 @@ process.stdin.on("end", () => {
     })).resolves.toBe("Hello Codex");
 
     expect(chunks).toEqual(["Hello", " Codex"]);
+  });
+
+  it("recovers a structured tool envelope when Codex ends with an empty agent message", () => {
+    const envelope = JSON.stringify({
+      archicodeResearchTurn: {
+        toolCalls: [{
+          id: "inspect-scope",
+          providerToolName: "archicode_read_research_context",
+          arguments: { detail: "full-current-scope", reason: "Inspect the requested graph scope." }
+        }]
+      }
+    });
+    const stdout = [
+      JSON.stringify({ type: "item.completed", item: { id: "item_0", type: "agent_message", text: envelope } }),
+      JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "agent_message", text: "" } })
+    ].join("\n");
+
+    const recovered = codexLocalFinalMessage("", stdout);
+    expect(recovered).toBe(envelope);
+    expect(extractLocalResearchTurn(recovered)?.toolCalls[0]?.providerToolName).toBe("archicode_read_research_context");
+  });
+
+  it("continues the Codex Local tool loop when the final-message file is empty", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "archicode-codex-empty-final-message-"));
+    const commandPath = path.join(root, "fake-codex-empty-final-message.cjs");
+    const countPath = path.join(root, "count.txt");
+    await writeFile(commandPath, `#!/usr/bin/env node
+const fs = require("fs");
+const outIndex = process.argv.indexOf("--output-last-message");
+const countPath = ${JSON.stringify(countPath)};
+let count = 0;
+try { count = Number(fs.readFileSync(countPath, "utf8")) || 0; } catch {}
+count += 1;
+fs.writeFileSync(countPath, String(count), "utf8");
+process.stdin.resume();
+process.stdin.on("end", () => {
+  const message = count === 1
+    ? JSON.stringify({ archicodeResearchTurn: { toolCalls: [{ id: "inspect-scope", providerToolName: "archicode_read_research_context", arguments: { detail: "full-current-scope", reason: "Inspect the graph." } }] } })
+    : "Recovered after inspection.";
+  process.stdout.write(JSON.stringify({ type: "item.completed", item: { id: "item_" + count, type: "agent_message", text: message } }) + "\\n");
+  process.stdout.write(JSON.stringify({ type: "item.completed", item: { id: "empty_" + count, type: "agent_message", text: "" } }) + "\\n");
+  if (outIndex >= 0) fs.writeFileSync(process.argv[outIndex + 1], count === 1 ? "" : message, "utf8");
+  process.exit(0);
+});
+`, "utf8");
+    await chmod(commandPath, 0o755);
+    const provider = {
+      ...createSeedProject(root).project.settings.providers.find((item) => item.kind === "codex-local")!,
+      localCommand: commandPath
+    };
+    const calls: string[] = [];
+
+    await expect(callResearchProvider(provider, "Inspect the graph", {
+      projectRoot: root,
+      webSearchEnabled: false,
+      scopeContext: "{}",
+      messages: [],
+      mcpTools: [{
+        providerToolName: "archicode_read_research_context",
+        serverId: "archicode-research-context",
+        serverLabel: "Research Context",
+        toolName: "read_context"
+      }],
+      callMcpTool: async ({ providerToolName }) => {
+        calls.push(providerToolName);
+        return "Full graph context evidence.";
+      },
+      isTerminalTool: () => false
+    })).resolves.toBe("Recovered after inspection.");
+
+    expect(calls).toEqual(["archicode_read_research_context"]);
+    expect(await readFile(countPath, "utf8")).toBe("2");
+  });
+
+  it("allows direct card requests for bounded multi-operation graph edits", () => {
+    const instructions = researchSystemInstructions({
+      researchStructuredToolsEnabled: true,
+      graphReconciliationSubagentEnabled: true
+    } as Parameters<typeof researchSystemInstructions>[0]);
+
+    expect(instructions).toContain("operation count alone is not a Picasso trigger");
+    expect(instructions).toContain("explicitly asks to propose, prepare, or show the review card directly");
+    expect(instructions).not.toContain("A request to propose a concrete graph update is still a graph-edit scope-confirmation request");
   });
 
   it("resets and streams every later Codex Local research tool-loop iteration", async () => {

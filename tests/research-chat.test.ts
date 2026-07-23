@@ -12,7 +12,7 @@ import { listRuntimeServices, stopRuntimeService } from "../src/main/storage/run
 import { delphiTestingInputSchema, researchChatMessageSchema, researchChatSessionSchema, researchGraphOperationKinds, runSchema, subagentRunSchema, type ProjectSettings, type ResearchChatSession } from "../src/shared/schema";
 import { isResearchThinkingPhrase } from "../src/shared/researchPersonality";
 import { deriveResearchChatContextPlanForModel } from "../src/shared/contextBudget";
-import { applyResearchGraphChangeSet, cancelResearchChatMessage, delphiAuditReport, effectiveDelphiModelPreflight, mapExistingCodebase, prepareResearchChatForContextPlan, reconcileResearchOutcomeReportState, requestsRedundantOutcomeArtifactRead, respondToSubagentRun, resumeResearchGoalsForRunUpdate, sendResearchChatMessage, setGlobalResearchPersonalityResolver, setGlobalResearchVerbosityResolver } from "../src/main/research";
+import { applyResearchGraphChangeSet, cancelResearchChatMessage, delphiAuditReport, effectiveDelphiModelPreflight, mapExistingCodebase, prepareResearchChatForContextPlan, reconcileResearchOutcomeReportState, requestsRedundantOutcomeArtifactRead, researchTurnRequiresGraphReviewCard, respondToSubagentRun, resumeResearchGoalsForRunUpdate, sendResearchChatMessage, setGlobalResearchPersonalityResolver, setGlobalResearchVerbosityResolver } from "../src/main/research";
 import { appendDetachedResearchResult, appendResearchChatTranscript, createResearchChat, listResearchChats, markSubagentRunLive, markSubagentRunSettled, persistResearchSession, renameResearchChat, setResearchStorageRoot, transitionSubagentRun, updateResearchChatAutoApproval } from "../src/main/research/chatStore";
 import { buildResearchGraphLayoutToolResult, researchToolInspectCli, researchToolReadFile } from "../src/main/research/inspectionTools";
 import { deriveResearchTurnKind, researchTurnPolicy } from "../src/main/research/turnPolicy";
@@ -881,7 +881,10 @@ describe("research chat workflow", () => {
         status: "awaiting-approval"
       })
     ]));
-    expect(await readFile(promptPath!, "utf8")).toContain("REQUIRED GRAPH-REVIEW CORRECTION");
+    const prompt = await readFile(promptPath!, "utf8");
+    expect(prompt).toContain("REQUIRED GRAPH DELIVERABLE");
+    expect(prompt).toContain("no valid non-empty graph change set has been captured");
+    expect(prompt).not.toContain("REQUIRED GRAPH-REVIEW CORRECTION");
   });
 
   it("fails detached graph-review work instead of presenting prose as a card", async () => {
@@ -4353,7 +4356,7 @@ describe("research chat workflow", () => {
     });
   });
 
-  it("asks why after rejecting a proposed graph change set", async () => {
+  it("reports a rejected graph change set without automatically retrying it", async () => {
     const { projectRoot } = await setupProject([
       JSON.stringify({
         archicodeResearch: {
@@ -4401,11 +4404,76 @@ describe("research chat workflow", () => {
       changeSetId: assistant!.changeSet!.id,
       decisions: [{ operationIndex: 0, decision: "rejected" }]
     });
-    const followUp = [...result.session.messages].reverse().find((message) => message.role === "assistant" && message.id !== assistant!.id);
+    const report = [...result.session.messages].reverse().find((message) => message.role === "assistant" && message.id !== assistant!.id);
 
     expect(result.results[0]).toMatchObject({ status: "rejected" });
-    expect(followUp?.content).toContain("What felt off about that proposal");
-    expect(result.session.messages.some((message) => message.role === "assistant" && message.content.includes("Graph review complete"))).toBe(false);
+    expect(report?.content).toContain("Graph review complete");
+    expect(report?.content).toContain("No automatic retry was created");
+    expect(result.session.messages.filter((message) => message.role === "assistant" && message.changeSet)).toHaveLength(1);
+  });
+
+  it("applies independent selected operations when a dependent node is rejected", async () => {
+    const { projectRoot } = await setupProject(JSON.stringify({
+      archicodeResearch: {
+        answer: "Prepared Header and Footer as a review card.",
+        changeSet: {
+          summary: "Add Header and Footer",
+          operations: [
+            {
+              kind: "create-node",
+              flowId: "flow-main",
+              node: { id: "node-select-header", type: "component", title: "Header", description: "Site header." }
+            },
+            {
+              kind: "create-node",
+              flowId: "flow-main",
+              node: { id: "node-select-footer", type: "component", title: "Footer", description: "Site footer." }
+            },
+            {
+              kind: "create-edge",
+              flowId: "flow-main",
+              edge: { source: "node-project", target: "node-select-header", label: "uses shared layout" }
+            },
+            {
+              kind: "create-edge",
+              flowId: "flow-main",
+              edge: { source: "node-project", target: "node-select-footer", label: "uses shared layout" }
+            }
+          ]
+        }
+      }
+    }));
+    const session = await createResearchChat({ projectRoot, scope: { type: "project", projectId: "project-seed" } });
+    const answered = await sendResearchChatMessage({ projectRoot, sessionId: session.id, content: "Add Header and Footer." });
+    const assistant = answered.messages.find((message) => message.role === "assistant" && Boolean(message.changeSet));
+
+    const reviewed = await applyResearchGraphChangeSet({
+      projectRoot,
+      sessionId: answered.id,
+      messageId: assistant!.id,
+      changeSetId: assistant!.changeSet!.id,
+      decisions: [
+        { operationIndex: 0, decision: "accepted" },
+        { operationIndex: 1, decision: "rejected" },
+        { operationIndex: 2, decision: "accepted" },
+        // Simulate the old UI state where the dependent Footer edge remained checked.
+        { operationIndex: 3, decision: "accepted" }
+      ]
+    });
+    const flow = reviewed.bundle.flows.find((item) => item.id === "flow-main")!;
+
+    expect(reviewed.results.map((result) => result.status)).toEqual(["applied", "rejected", "applied", "rejected"]);
+    expect(flow.nodes.some((node) => node.id === "node-select-header")).toBe(true);
+    expect(flow.nodes.some((node) => node.id === "node-select-footer")).toBe(false);
+    expect(flow.edges.some((edge) => edge.source === "node-project" && edge.target === "node-select-header")).toBe(true);
+    expect(flow.edges.some((edge) => edge.source === "node-project" && edge.target === "node-select-footer")).toBe(false);
+    expect(reviewed.session.messages.filter((message) => message.role === "assistant" && message.changeSet)).toHaveLength(1);
+    const outcomeReport = reviewed.session.messages.at(-1)?.content ?? "";
+    expect(outcomeReport).toContain("Outcome: Applied: Created node Header on the root flow; Created edge Project Workspace -> Header.");
+    expect(outcomeReport).toContain("Not applied by your selection: Create node Footer on the root flow; Create edge Project Workspace -> Footer.");
+    expect(outcomeReport).toContain("I kept this exact review outcome and did not generate another proposal.");
+    expect(outcomeReport).toContain("Rejected: Create node Footer on the root flow.");
+    expect(outcomeReport).toContain("No automatic retry was created");
   });
 
   it("allows node-scoped research to edit other nodes in the same flow", async () => {
@@ -5045,16 +5113,13 @@ describe("research chat workflow", () => {
     expect(prompt).toContain("Never put a subflow id in any operation.flowId");
     expect(prompt).toContain("flowId names the containing top-level flow file, while node.subflowId is what places the node inside the detail subflow");
     expect(prompt).toContain("ask exactly once whether this is the scope they want prepared as a review card");
-    expect(prompt).toContain("The visible scope-confirmation response must end with a direct confirmation question");
-    expect(prompt).toContain("Never stop passively while waiting for confirmation");
-    expect(prompt).toContain("the next affirmative reply should produce the card");
-    expect(prompt).toContain("Do not invoke Picasso or produce a graph change set before that confirmation");
-    expect(prompt).toContain("A request to propose a concrete graph update");
-    expect(prompt).toContain("Do not finish that turn by merely promising future inspection");
-    expect(prompt).toContain("After the user confirms, invoke spawn_picasso in that next turn");
+    expect(prompt).toContain("If the user explicitly asks to propose, prepare, or show the review card directly");
+    expect(prompt).toContain("operation count alone is not a Picasso trigger");
+    expect(prompt).toContain("call the appropriate direct proposal tool or spawn_picasso in the same turn");
+    expect(prompt).toContain("Otherwise, end the visible response with a direct question");
     expect(prompt).toContain("Never say or imply that you will use Picasso");
     expect(prompt).toContain("unless you actually call spawn_picasso in that turn");
-    expect(prompt).toContain("An explicit request to use Picasso does not itself replace confirmation");
+    expect(prompt).toContain("An explicit request to use Picasso does not replace confirmation when the requested scope itself is still ambiguous");
     expect(prompt).toContain("own the investigation and tool trajectory until the objective is satisfied");
     expect(prompt).toContain("Subagents own their delegated tactics");
     expect(prompt).toContain("ArchiCode derives host-visible goal and memory state from persisted events");
@@ -5211,12 +5276,85 @@ describe("research chat workflow", () => {
     expect(scopeAssistant?.changeSet).toBeUndefined();
     expect(scopeAssistant?.content).toContain("scope you want me to prepare for review");
     expect(assistant?.changeSet?.operations).toHaveLength(1);
-    expect(prompt).toContain("ask every needed clarification in that same response");
+    expect(prompt).toContain("ask every clarification you need in the same scope-confirmation response");
     expect(prompt).toContain("inspect the affected nodes, edges, descriptions, acceptance criteria, and nearby responsibilities");
-    expect(prompt).toContain("State the coherent change you propose");
+    expect(prompt).toContain("state the coherent change");
     expect(prompt).toContain("ask once whether this is the scope they want prepared for review");
-    expect(prompt).toContain("Do not return the pending changeSet yet");
-    expect(prompt).toContain("When the user then affirms that scope, return the pending changeSet immediately without another scope confirmation");
+    expect(prompt).toContain("If the user explicitly asks to propose, prepare, or show the review card directly");
+    expect(prompt).toContain("deliver the card in this same turn after inspection");
+  });
+
+  it("requires the explicitly requested graph card instead of accepting Codex Local progress prose", async () => {
+    const progressOnlyTurn = JSON.stringify({
+      archicodeResearchTurn: {
+        answer: "I’m checking the current graph state first so I can submit the review card correctly.",
+        toolCalls: []
+      }
+    });
+    const { projectRoot, promptPath, argsPath } = await setupProject([
+      progressOnlyTurn,
+      localResearchSinkTurn("Prepared the Header and Footer graph review card.", [graphChangeSink({
+        summary: "Add Header and Footer connected to Landing Page",
+        operations: [
+          {
+            kind: "create-node",
+            flowId: "flow-main",
+            node: { id: "node-required-header", type: "component", title: "Header", description: "Reusable site header." }
+          },
+          {
+            kind: "create-node",
+            flowId: "flow-main",
+            node: { id: "node-required-footer", type: "component", title: "Footer", description: "Reusable site footer." }
+          },
+          {
+            kind: "create-edge",
+            flowId: "flow-main",
+            edge: { source: "node-project", target: "node-required-header", label: "uses shared layout" }
+          },
+          {
+            kind: "create-edge",
+            flowId: "flow-main",
+            edge: { source: "node-project", target: "node-required-footer", label: "uses shared layout" }
+          }
+        ]
+      })])
+    ], true, true);
+    const session = await createResearchChat({
+      projectRoot,
+      scope: { type: "project", projectId: "project-seed" }
+    });
+
+    const answered = await sendResearchChatMessage({
+      projectRoot,
+      sessionId: session.id,
+      content: "lets add 2 new nodes, one called footer and one called header and connect them to landing page plz, propose the card directly"
+    });
+
+    const assistant = answered.messages.at(-1)!;
+    const prompts = (await readFile(promptPath!, "utf8"))
+      .split("--- prompt boundary ---")
+      .map((part) => part.trim())
+      .filter(Boolean);
+    const invocations = (await readFile(argsPath!, "utf8")).trim().split("\n").map((line) => JSON.parse(line) as string[]);
+    const schemaArgumentIndex = invocations[0]!.indexOf("--output-schema");
+    const outputSchema = JSON.parse(await readFile(invocations[0]![schemaArgumentIndex + 1]!, "utf8")) as {
+      properties?: { archicodeResearchTurn?: { required?: string[] } };
+    };
+
+    expect(assistant.content).toBe("Prepared the Header and Footer graph review card.");
+    expect(assistant.changeSet?.operations).toHaveLength(4);
+    expect(assistant.turnDiagnostics).toMatchObject({ rounds: 2, rerolls: 1 });
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]).toContain("REQUIRED GRAPH DELIVERABLE");
+    expect(prompts[1]).toContain("no valid non-empty graph change set has been captured");
+    expect(invocations.every((args) => args.includes("--output-schema"))).toBe(true);
+    expect(outputSchema.properties?.archicodeResearchTurn?.required).toEqual(["answer", "toolCalls"]);
+  });
+
+  it("recognizes direct and missing-card requests without treating diagnostic questions as card orders", () => {
+    expect(researchTurnRequiresGraphReviewCard("propose the card directly")).toBe(true);
+    expect(researchTurnRequiresGraphReviewCard("i dont see any card")).toBe(true);
+    expect(researchTurnRequiresGraphReviewCard("why did it fail to propose an approval card?")).toBe(false);
   });
 
   it("leaves graph-review confirmation interpretation to the provider without host keyword routing", async () => {

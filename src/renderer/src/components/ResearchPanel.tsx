@@ -8,12 +8,14 @@ import { deriveResearchChatContextPlan } from "@shared/contextBudget";
 import { sumLlmUsage, isAllUsageUnavailable, formatCostUsd, formatTokenCount, llmUsageTotalTokens } from "@shared/llmPricing";
 import { extractArchicodeResearch } from "@shared/researchExtraction";
 import { isResearchThinkingPhrase } from "@shared/researchPersonality";
-import { researchChangeSetCategory, type ResearchChangeSetCategory } from "@shared/researchChangeSetSemantics";
+import { researchChangeSetCategory, toggleResearchGraphOperationSelection, type ResearchChangeSetCategory } from "@shared/researchChangeSetSemantics";
+import { changeSetResultReportPresentation } from "@shared/researchResultPresentation";
 import { defaultResearchScope, getActiveFlow, useArchicodeStore } from "../store/useArchicodeStore";
 import archiChatEmptyIllustration from "../assets/archi-chat-empty.png";
 import { ChatComposer } from "./ChatComposer";
 import { composerDraftText, serializeComposerDraft, composerHasContent } from "../store/useArchicodeStore";
 import { canRetryResearchMessage } from "../utils/researchRetry";
+import { researchTaskTiming } from "../utils/researchTaskTiming";
 import { localProviderUsageUnavailableDetail } from "../utils/providerProfiles";
 import { ContextSizeIndicator } from "./ContextSizeIndicator";
 import { Badge, Button, DialogContent, DialogRoot, EmptyState, IconButton, MenuContent, MenuItem, MenuLabel, MenuRoot, MenuSeparator, MenuTrigger, PopoverContent, PopoverRoot, PopoverTrigger, ScrollArea, Select, Switch, TextArea, TextInput, Tooltip } from "./ui";
@@ -21,7 +23,6 @@ import {
   attachmentFileName,
   displayResearchContent,
   formatUsageSummaryLine,
-  changeSetResultReportPresentation,
   isImageAttachmentPath,
   isImageArtifact,
   isTextAttachmentArtifact,
@@ -870,17 +871,23 @@ function ResearchDraftContextIndicator({
   return <ContextSizeIndicator {...props} estimatedTokens={estimatedTokens} />;
 }
 
-function ResearchTaskTimer({ startedAtMs }: { startedAtMs: number }) {
-  const [nowMs, setNowMs] = useState(() => Date.now());
+function ResearchTaskTimer({ startedAtMs, completedAtMs }: { startedAtMs: number; completedAtMs: number | null }) {
+  const [nowMs, setNowMs] = useState(() => completedAtMs ?? Date.now());
   useEffect(() => {
-    setNowMs(Date.now());
+    setNowMs(completedAtMs ?? Date.now());
+    if (completedAtMs !== null) return;
     const intervalId = window.setInterval(() => setNowMs(Date.now()), 1_000);
     return () => window.clearInterval(intervalId);
-  }, [startedAtMs]);
+  }, [completedAtMs, startedAtMs]);
   const elapsed = formatResearchTaskElapsed(nowMs - startedAtMs);
+  const completed = completedAtMs !== null;
   return (
-    <Tooltip content="Elapsed time for the current user request, including parent continuations and subagent work.">
-      <span className="ui-badge research-task-timer" aria-label={`Current task active for ${elapsed}`}>
+    <Tooltip content={completed
+      ? `Completed in ${elapsed}. This duration remains until the next user request.`
+      : "Elapsed time for the current user request, including parent continuations and subagent work."}>
+      <span className={`ui-badge research-task-timer${completed ? " is-complete" : ""}`} aria-label={completed
+        ? `Last task completed in ${elapsed}`
+        : `Current task active for ${elapsed}`}>
         <Clock3 size={12} aria-hidden="true" />
         <span>{elapsed}</span>
       </span>
@@ -1160,12 +1167,7 @@ export const ResearchPanel = memo(function ResearchPanel({
   }, [graphPreview, selected, hideGraphChangeSetPreview]);
   const activeGraphLockRun = bundle?.runs.find(isRunBlockingNewChange) ?? null;
   const researchBusy = selected ? researchBusySessionIds.includes(selected.id) : false;
-  const latestTaskUserMessage = [...(selected?.messages ?? [])].reverse().find((message) => message.role === "user");
-  const parsedResearchTaskStartedAtMs = latestTaskUserMessage ? Date.parse(latestTaskUserMessage.createdAt) : Number.NaN;
-  // The user message is the task boundary. Parent continuations, approvals,
-  // and subagent passes may briefly toggle the renderer's busy flag, but they
-  // must all retain this same cumulative start time.
-  const researchTaskStartedAtMs = Number.isFinite(parsedResearchTaskStartedAtMs) ? parsedResearchTaskStartedAtMs : null;
+  const selectedResearchTaskTiming = researchTaskTiming(selected, researchBusy);
   const queuedMessages = selected ? researchQueuedMessages[selected.id] ?? [] : [];
 
   const messageAttachmentArtifacts = useMemo(() => {
@@ -3909,8 +3911,11 @@ export const ResearchPanel = memo(function ResearchPanel({
                   <ResearchScopeIcon scope={scope} />
                 </span>
               </Tooltip>
-              {researchBusy && researchTaskStartedAtMs !== null ? (
-                <ResearchTaskTimer startedAtMs={researchTaskStartedAtMs} />
+              {selectedResearchTaskTiming ? (
+                <ResearchTaskTimer
+                  startedAtMs={selectedResearchTaskTiming.startedAtMs}
+                  completedAtMs={selectedResearchTaskTiming.completedAtMs}
+                />
               ) : null}
             </div>
           </div>
@@ -4123,25 +4128,35 @@ export const ResearchPanel = memo(function ResearchPanel({
                     ) : null}
                     <div className="research-message-content">
                       {changeSetResultReport ? (
-                        <div className={`research-change-set-result is-${changeSetResultReport.tone}`}>
-                          <div className="research-change-set-result-summary">
-                            <strong>{changeSetResultReport.title}</strong>
-                            <span>{changeSetResultReport.summary}</span>
-                          </div>
-                          <details>
-                            <summary>
-                              <span>Operation details</span>
-                              <small>{changeSetResultReport.operationCount}</small>
-                            </summary>
-                            <div className="research-change-set-result-details">
-                              <ResearchMarkdown
-                                content={changeSetResultReport.details}
-                                loadProjectImage={loadProjectImage}
-                                onGraphLink={navigateGraphLink}
-                                onProjectPathLink={openProjectPathLink}
-                              />
+                        <div className="research-change-set-result-message">
+                          {changeSetResultReport.narrative ? (
+                            <ResearchMarkdown
+                              content={changeSetResultReport.narrative}
+                              loadProjectImage={loadProjectImage}
+                              onGraphLink={navigateGraphLink}
+                              onProjectPathLink={openProjectPathLink}
+                            />
+                          ) : null}
+                          <div className={`research-change-set-result is-${changeSetResultReport.tone}`}>
+                            <div className="research-change-set-result-summary">
+                              <strong>{changeSetResultReport.title}</strong>
+                              <span>{changeSetResultReport.summary}</span>
                             </div>
-                          </details>
+                            <details>
+                              <summary>
+                                <span>Operation details</span>
+                                <small>{changeSetResultReport.operationCount}</small>
+                              </summary>
+                              <div className="research-change-set-result-details">
+                                <ResearchMarkdown
+                                  content={changeSetResultReport.details}
+                                  loadProjectImage={loadProjectImage}
+                                  onGraphLink={navigateGraphLink}
+                                  onProjectPathLink={openProjectPathLink}
+                                />
+                              </div>
+                            </details>
+                          </div>
                         </div>
                       ) : (
                         <ResearchMarkdown
@@ -4585,6 +4600,9 @@ export const ResearchPanel = memo(function ResearchPanel({
                       const canRetryFailedReview = Boolean(reviewSummary && reviewSummary.applied === 0 && reviewSummary.rejected === 0 && reviewSummary.failed === changeSet.operations.length);
                       const waitingForRun = Boolean(activeGraphLockRun && (!reviewed || canRetryFailedReview));
                       const previewingThisChangeSet = graphPreview?.changeSetId === changeSet.id;
+                      const acceptedOperationIndices = acceptedByChangeSet[changeSet.id]
+                        ?? new Set(changeSet.operations.map((_, operationIndex) => operationIndex));
+                      const previewOperations = changeSet.operations.filter((_, operationIndex) => acceptedOperationIndices.has(operationIndex));
                       // A superseded card was retired by a newer proposal — it was never
                       // applied, so its buttons must not read "Applied"/"Reviewed".
                       const supersededOnly = superseded && !reviewSummary;
@@ -4615,7 +4633,7 @@ export const ResearchPanel = memo(function ResearchPanel({
                               disabled={reviewed || superseded}
                               onClick={() => previewingThisChangeSet
                                 ? hideGraphChangeSetPreview()
-                                : showGraphChangeSetPreview(selected.id, message.id, changeSet.id, changeSet.operations)}
+                                : showGraphChangeSetPreview(selected.id, message.id, changeSet.id, previewOperations)}
                             >
                               {previewingThisChangeSet ? <EyeOff size={14} /> : <Eye size={14} />}
                             </IconButton>
@@ -4643,20 +4661,25 @@ export const ResearchPanel = memo(function ResearchPanel({
                             const operationFlowTitles = flowTitleMap(bundle, changeSet);
                             const operationSubflowTitles = subflowTitleMap(bundle, changeSet);
                             return changeSet.operations.map((operation, index) => {
-                              const set = acceptedByChangeSet[changeSet.id] ?? new Set(changeSet.operations.map((_, operationIndex) => operationIndex));
                               const fields = operationFields(operation);
                               return (
                                 <label key={`${changeSet.id}-${index}`} className="research-change-row">
                                   <input
                                     type="checkbox"
-                                    checked={set.has(index)}
+                                    checked={acceptedOperationIndices.has(index)}
                                     disabled={reviewPending || reviewed}
-                                    onChange={() => setAcceptedByChangeSet((current) => {
-                                      const next = new Set(current[changeSet.id] ?? changeSet.operations.map((_, operationIndex) => operationIndex));
-                                      if (next.has(index)) next.delete(index);
-                                      else next.add(index);
-                                      return { ...current, [changeSet.id]: next };
-                                    })}
+                                    onChange={() => {
+                                      const next = toggleResearchGraphOperationSelection(changeSet.operations, acceptedOperationIndices, index);
+                                      setAcceptedByChangeSet((current) => ({ ...current, [changeSet.id]: next }));
+                                      if (previewingThisChangeSet) {
+                                        showGraphChangeSetPreview(
+                                          selected.id,
+                                          message.id,
+                                          changeSet.id,
+                                          changeSet.operations.filter((_, operationIndex) => next.has(operationIndex))
+                                        );
+                                      }
+                                    }}
                                   />
                                   <span>
                                     {operationLabel(operation, operationTitles, operationSubflowTitles, operationFlowTitles)}

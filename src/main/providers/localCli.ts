@@ -198,20 +198,20 @@ export async function callLocalResearchProvider(
           researchSystemInstructions(options),
           "",
           isolatedSubagent
-            ? `You are being called as an isolated ArchiCode subagent through the local ${providerLabel} CLI. Follow the subagent system instructions above; do not adopt the parent Research-chat identity, confirmation flow, or archicodeResearch envelope.`
+            ? `You are being called as an isolated ArchiCode subagent through the local ${providerLabel} CLI. Follow the subagent system instructions above; do not adopt the parent Research-chat identity or confirmation flow. Still follow the local transport's archicodeResearchTurn envelope when it is required below.`
             : `You are being called for an ArchiCode Research chat through the local ${providerLabel} CLI, not a build run.`,
           isolatedSubagent
             ? "Use only the structured tools and permissions exposed to this isolated run. Do not infer additional restrictions or output wrappers from the parent Research chat."
             : "Do not edit project code files directly. Otherwise use the exposed structured tools and guarded console autonomously for any project-scoped action that advances the goal; normal risk classification and approval settings apply. Route source implementation through ArchiCode's graph/build path. Graph changes must only be returned as pending archicodeResearch changeSet JSON or the structured graph change-set sink tool.",
           isolatedSubagent
             ? ""
-            : "When the user asks to edit or update the graph, first inspect the affected nodes, edges, descriptions, acceptance criteria, and nearby responsibilities. State the coherent change you propose, ask every needed clarification in that same response, and ask once whether this is the scope they want prepared for review. Do not return the pending changeSet yet. When the user then affirms that scope, return the pending changeSet immediately without another scope confirmation. The card's own buttons or auto-approve setting still decide whether it is applied.",
+            : "When the user asks to edit or update the graph, first inspect the affected nodes, edges, descriptions, acceptance criteria, and nearby responsibilities. If the user explicitly asks to propose, prepare, or show the review card directly and the scope is concrete, treat that request as confirmation and deliver the card in this same turn after inspection. Otherwise, state the coherent change, ask every needed clarification, and ask once whether this is the scope they want prepared for review; do not return the pending changeSet until they affirm. The card's own buttons or auto-approve setting still decide whether it is applied.",
           isolatedSubagent
             ? ""
             : "If the user greets you or asks what you can do, the first sentence must sound clearly like the active persona rather than a generic assistant greeting. Include graph-to-code sync only as one brief capability alongside other capabilities. Do not explain sync options, comparison scopes, or the approval flow unless the user specifically asks about syncing, drift, or external edits.",
           isolatedSubagent
             ? ""
-            : "When the user asks you to propose or brainstorm, put the normal conversational proposal in archicodeResearch.answer without a changeSet. For a graph edit, use the same response to describe and confirm the scope; after the user affirms it, return the pending changeSet in the next turn without asking again.",
+            : "When the user asks you to propose or brainstorm, use normal conversation unless they explicitly ask to prepare/show the review card now. For a concrete graph edit with that direct-card request, inspect the graph and return the pending changeSet in the same turn; otherwise describe and confirm the scope first, then return the card after the user affirms it.",
           projectFilesNote,
           phasePolicyText("brainstorming", policy, profile),
           options.webSearchEnabled
@@ -228,6 +228,9 @@ export async function callLocalResearchProvider(
                     : "Web search is enabled for this chat. Use Codex web search only when current external information is needed, and cite sources when web results inform the answer."
             : "Web search is disabled by project settings. Use only provided context and local model knowledge.",
           askModeNote,
+          transport === "codex-local"
+            ? "CODEX LOCAL OUTPUT CONTRACT: Every generation is constrained to one archicodeResearchTurn object. Put the visible response in answer, put requested tools in toolCalls, use an empty array when no tool is needed, and encode each tool call's arguments as a JSON string. Never return prose outside that object."
+            : "",
           localResearchToolLoopInstructions(options),
           transcript.length
             ? "Continue the same task from the structured transcript below. Assistant text beside tool calls is progress from this same trajectory; use both it and the returned evidence, then choose the next useful action yourself."
@@ -244,7 +247,7 @@ export async function callLocalResearchProvider(
         const output = await runTurn(prompt, options.onToken);
         const parsedTurn = extractLocalResearchTurn(output);
         return {
-          text: parsedTurn?.toolCalls.length ? parsedTurn.answer ?? "" : output,
+          text: parsedTurn ? parsedTurn.answer ?? "" : output,
           toolCalls: parsedTurn?.toolCalls ?? [],
           raw: { output, parsedTurn }
         };
@@ -338,27 +341,31 @@ export async function callCodexLocalResearch(provider: Provider, userMessage: st
       const command = provider.localCommand?.trim() || "codex";
       const outputDir = await mkdtemp(path.join(tmpdir(), "archicode-research-codex-"));
       const outputPath = path.join(outputDir, "last-message.txt");
+      const outputSchemaPath = path.join(outputDir, "research-turn.schema.json");
+      await writeFile(outputSchemaPath, JSON.stringify(codexLocalResearchOutputSchema, null, 2), "utf8");
       const projectFileServers = options.projectRoot ? [await createCodexProjectFilesMcpServer(options.projectRoot, outputDir)] : [];
       const args = buildCodexLocalResearchArgs(provider, {
         ...options,
         mcpServers: projectFileServers
-      }, outputPath);
+      }, outputPath, outputSchemaPath);
       const streamCodexToken = createCodexLocalTokenStreamer(onToken);
       const { stdout, stderr, exitCode } = await runLocalProcess(command, args, prompt, options.projectRoot, onToken
         ? (event) => {
             if (event.stream === "stdout") streamCodexToken(event.text);
           }
         : undefined, options.signal);
-      let finalMessage = "";
+      let outputFileMessage = "";
       try {
-        finalMessage = await readFile(outputPath, "utf8");
+        outputFileMessage = await readFile(outputPath, "utf8");
       } catch {
-        finalMessage = stdout.trim();
+        // Some Codex CLI versions leave --output-last-message empty after an
+        // intermediate agent_message item. Recover the last non-empty message
+        // from the JSONL stream before treating stdout as plain text.
       }
       if (exitCode !== 0) {
         throw new Error(`Codex local research provider failed with exit code ${exitCode}.\n${stderr || stdout}`);
       }
-      return finalMessage.trim() || stdout.trim() || "Codex local research provider returned no content.";
+      return codexLocalFinalMessage(outputFileMessage, stdout) || "Codex local research provider returned no content.";
     }
   );
   emitUnavailableUsage(provider, policy, options.onUsage);
@@ -1744,6 +1751,45 @@ export function createCodexLocalTokenStreamer(onToken: ((text: string, kind?: Pr
   };
 }
 
+/**
+ * Codex --json emits agent messages as item.completed events. A CLI turn can
+ * finish with an empty agent_message even though an earlier message contains
+ * ArchiCode's structured tool envelope, so --output-last-message may be empty.
+ * Recover the last non-empty agent message before falling back to raw stdout.
+ */
+export function codexLocalFinalMessage(outputFile: string, stdout: string): string {
+  const stored = outputFile.trim();
+  const parseJsonl = (value: string): { lastAgentMessage: string; sawCodexEvent: boolean } => {
+    let lastAgentMessage = "";
+    let sawCodexEvent = false;
+    for (const line of value.split(/\r?\n/)) {
+      if (!line.trim()) continue;
+      try {
+        const event = JSON.parse(line) as Record<string, unknown>;
+        const eventType = typeof event.type === "string" ? event.type : "";
+        if (eventType === "thread.started" || eventType === "turn.started" || eventType === "turn.completed" || eventType === "item.completed") {
+          sawCodexEvent = true;
+        }
+        if (event.type !== "item.completed" || !event.item || typeof event.item !== "object") continue;
+        const item = event.item as Record<string, unknown>;
+        if (item.type !== "agent_message" || typeof item.text !== "string" || !item.text.trim()) continue;
+        lastAgentMessage = item.text.trim();
+      } catch {
+        // Plain-text output is handled by the caller's fallback.
+      }
+    }
+    return { lastAgentMessage, sawCodexEvent };
+  };
+
+  const storedJsonl = parseJsonl(stored);
+  if (storedJsonl.lastAgentMessage) return storedJsonl.lastAgentMessage;
+  if (stored && !storedJsonl.sawCodexEvent) return stored;
+
+  const stdoutJsonl = parseJsonl(stdout);
+  if (stdoutJsonl.lastAgentMessage) return stdoutJsonl.lastAgentMessage;
+  return stdoutJsonl.sawCodexEvent ? "" : stdout.trim();
+}
+
 export function createClaudeLocalTokenStreamer(onToken?: (text: string, kind?: ProviderTokenKind) => void): {
   (chunk: string): void;
   finalText(): string;
@@ -2028,7 +2074,45 @@ export function buildCodexLocalArgs(provider: Provider, options: ProviderCallOpt
   return args;
 }
 
-export function buildCodexLocalResearchArgs(provider: Provider, options: ResearchProviderOptions, outputPath: string): string[] {
+export const codexLocalResearchOutputSchema = {
+  $schema: "http://json-schema.org/draft-07/schema#",
+  type: "object",
+  additionalProperties: false,
+  required: ["archicodeResearchTurn"],
+  properties: {
+    archicodeResearchTurn: {
+      type: "object",
+      additionalProperties: false,
+      required: ["answer", "toolCalls"],
+      properties: {
+        answer: { type: "string" },
+        toolCalls: {
+          type: "array",
+          items: {
+            type: "object",
+            additionalProperties: false,
+            required: ["id", "providerToolName", "arguments"],
+            properties: {
+              id: { type: "string" },
+              providerToolName: { type: "string" },
+              arguments: {
+                type: "string",
+                description: "A JSON-encoded object satisfying the selected tool's arguments schema."
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+} as const;
+
+export function buildCodexLocalResearchArgs(
+  provider: Provider,
+  options: ResearchProviderOptions,
+  outputPath: string,
+  outputSchemaPath?: string
+): string[] {
   const args = [
     "--ask-for-approval",
     "never",
@@ -2045,6 +2129,7 @@ export function buildCodexLocalResearchArgs(provider: Provider, options: Researc
     "read-only",
     "--output-last-message",
     outputPath,
+    ...(outputSchemaPath ? ["--output-schema", outputSchemaPath] : []),
     ...codexLocalImageArgs(options.imageAttachments)
   ];
 

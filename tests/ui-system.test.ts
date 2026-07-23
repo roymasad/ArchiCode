@@ -20,6 +20,7 @@ const storeSourceFiles = [
 const researchPanelSourceFiles = [
   "src/renderer/src/components/ResearchPanel.tsx",
   "src/renderer/src/components/researchContent.ts",
+  "src/shared/researchResultPresentation.ts",
   "src/renderer/src/components/researchTts.ts",
   "src/renderer/src/components/researchTranscript.ts",
   "src/renderer/src/components/ResearchTodoCapsule.tsx",
@@ -1184,12 +1185,15 @@ describe("renderer UI system", () => {
     expect(panel).toContain("Archi — Parent investigation");
     expect(panel).toContain('const isParentActivityRunning = liveParentActivity?.status === "running"');
     expect(panel).toContain("formatResearchTaskElapsed");
-    expect(panel).toContain('className="ui-badge research-task-timer"');
-    expect(panel).toContain("researchTaskStartedAtMs !== null");
-    expect(panel).toContain("Date.parse(latestTaskUserMessage.createdAt)");
+    expect(panel).toContain('research-task-timer${completed ? " is-complete" : ""}');
+    expect(panel).toContain("selectedResearchTaskTiming ?");
+    expect(panel).toContain("completedAtMs={selectedResearchTaskTiming.completedAtMs}");
+    expect(panel).toContain("This duration remains until the next user request.");
     expect(panel).toContain("including parent continuations and subagent work");
     expect(panel).not.toContain("setResearchTaskStartedAtMs");
     expect(styles).toContain(".research-task-timer");
+    expect(styles).toContain(".research-task-timer.is-complete");
+    expect(styles).toContain("opacity: 0.58");
     expect(panel).toContain("streamingStructuredActivityLabel");
     expect(panel).toContain("researchHasNewActivity");
     expect(panel).toContain("researchRevealSubmittedMessageRef");

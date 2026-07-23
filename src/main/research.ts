@@ -82,10 +82,11 @@ import {
   type LlmUsage
 } from "../shared/schema";
 import { autoLayoutFlow, deleteSubflowFromFlow, isSubflowIgnored, linkNodeToSubflow, normalizeEvidenceFlow, workingNodesForFlow } from "../shared/graph";
-import { researchChangeSetCategory, type ResearchChangeSetCategory } from "../shared/researchChangeSetSemantics";
+import { researchChangeSetCategory, researchGraphOperationDependencies, type ResearchChangeSetCategory } from "../shared/researchChangeSetSemantics";
+import { placeCreatedResearchNodes } from "../shared/researchCreatedNodeLayout";
 import { runCodebaseImport } from "./importer";
 import { CodebaseImportCancelledError, type CodebaseImportInput } from "./importer/types";
-import { layoutImportedFlow, layoutScopeByDependencyDepth } from "./importer/layout";
+import { layoutImportedFlow } from "./importer/layout";
 import { importedProjectMetadata } from "./importer/projectMetadata";
 import { buildImportSummarySections, countActionableReviewConcerns, estimateImportAccuracy, importSummaryStatus, summarizeImportProviderCalls, type ImportAccuracyEstimate, type ImportSummarySections } from "./importer/importSummary";
 import { writeInitialCodebaseImportReport } from "./importer/importReports";
@@ -522,6 +523,17 @@ export function visibleResearchAnswer(answer: string): string {
     if (visible.slice(0, midpoint) === visible.slice(midpoint)) return visible.slice(0, midpoint).trim();
   }
   return visible;
+}
+
+export function researchTurnRequiresGraphReviewCard(content: string): boolean {
+  const normalized = content.replace(/[’]/g, "'").replace(/\s+/g, " ").trim();
+  if (!normalized || /^(?:why|how\s+(?:did|does|could)|what\s+(?:caused|made))\b/i.test(normalized)) return false;
+  const missingRequestedCard = [
+    /\b(?:i\s+)?(?:do\s*not|don't|dont|can't|cant|cannot)\s+see\b.{0,60}\b(?:review\s+|approval\s+)?card\b/i,
+    /\bwhere(?:'s|\s+is)\b.{0,40}\b(?:the\s+)?(?:review\s+|approval\s+)?card\b/i
+  ].some((pattern) => pattern.test(normalized));
+  if (missingRequestedCard) return true;
+  return /\b(?:propose|prepare|show|submit|create|generate|send|give|make)\b.{0,100}\b(?:the\s+)?(?:review\s+|approval\s+)?card\b/i.test(normalized);
 }
 
 export function validateResearchCanvasAction(
@@ -1018,6 +1030,7 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
     provider.kind === "antigravity-local" ||
     provider.kind === "grok-local" ||
     provider.kind === "kimi-local";
+  const graphReviewCardRequired = turnKind === "user" && directProvider && researchTurnRequiresGraphReviewCard(content);
   const toolVisibleMcpSettings = {
     ...researchMcpSettings,
     mcp: {
@@ -1411,6 +1424,9 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
       : graphReconciliationToolEnabled
         ? "2. GRAPH: Judge the work and match the tool to it. For simple, well-understood graph changes you are confident you can do correctly and quickly, do them yourself: call archicode_propose_graph_change_set directly and do NOT spawn Picasso. For complex, deep, or delicate graph work that benefits from careful design, delegate to Picasso, the graph specialist: call archicode_spawn_picasso once with the exact scope. Picasso exists for genuinely substantial design — decomposing a specification or attachment, laying out many interrelated nodes/flows/subflows, populated subflows, broad refinement, architecture, or reconciliation — not for edits you already understand. When unsure, prefer doing the simple work yourself. Never call archicode_spawn_picasso more than once per turn: after Picasso returns a change set the review card is already prepared, so finalize your answer instead of spawning it again. Graph edges cannot cross top-level flows: never create or instruct Picasso to prefer cross-flow edges. Preserve those dependencies as descriptions, acceptance criteria, or node-scoped notes, while connecting every node with meaningful intra-flow topology."
         : "2. GRAPH: Picasso is unavailable. Propose bounded edits directly with archicode_propose_graph_change_set; do not attempt substantial design synthesis without the missing graph architect.",
+    graphReviewCardRequired
+      ? "REQUIRED GRAPH DELIVERABLE: The user explicitly requested the graph review card in this turn, or reported that the requested card is missing. This turn cannot finish with prose alone. Inspect only what is needed, then call archicode_propose_graph_change_set for a simple bounded edit or archicode_spawn_picasso for genuinely substantial graph design. Finish only after the host confirms that a non-empty change set was captured."
+      : "",
     pendingProposedGraphDirective,
     "TRUTHFUL COMPLETION: Never promise a future tool action. Statements that work is queued, being prepared, or ready require the corresponding successful tool call in this same turn."
   ].filter(Boolean).join("\n");
@@ -1457,6 +1473,17 @@ async function sendResearchChatMessageTurn(input: SendResearchChatMessageInput &
       terminalToolCompletesTurn: (providerToolName) =>
         isResearchChangeSetTool(providerToolName) || isResearchCanvasControlTool(providerToolName),
       validateFinalAnswer: (_candidateText) => {
+        const legacyCandidateChangeSet = extractArchicodeResearch(_candidateText).response?.changeSet;
+        const capturedChangeSetResult = researchGraphChangeSetSchema
+          .omit({ id: true, createdAt: true })
+          .safeParse(capturedChangeSet ?? legacyCandidateChangeSet);
+        const hasCapturedChangeSet = capturedChangeSetResult.success && capturedChangeSetResult.data.operations.length > 0;
+        if (graphReviewCardRequired && !hasCapturedChangeSet) {
+          return [
+            "This user turn explicitly requires a visible graph review card, but no valid non-empty graph change set has been captured. Prose, progress narration, and statements that a card was prepared do not satisfy the requested deliverable.",
+            "Continue this same trajectory. Inspect the graph if needed, then call archicode_propose_graph_change_set for the bounded edit or archicode_spawn_picasso only if the work genuinely requires substantial graph design. Finalize only after the graph-change result succeeds."
+          ].join("\n\n");
+        }
         if (structuredVerificationDelegationRequired && !subagentRuns.some((run) => run.kind === "delphi-testing")) {
           return [
             "The user explicitly requested executable test/runtime-audit work, but this trajectory has not delegated that work to Delphi.",
@@ -2361,9 +2388,12 @@ export async function applyResearchGraphChangeSet(input: {
   const { reviewResult: reviewOutcome, message, changeSet, session } = result;
   const reviewReturn = { session: reviewOutcome.session, bundle: reviewOutcome.bundle, results: reviewOutcome.results };
   const hasUnblockedSubflowWork = shouldContinueAfterResearchReview(changeSet, reviewOutcome.results);
-  const hasRejectedOperations = reviewOutcome.results.some((result) => result.status === "rejected");
+  const hasPartialOrFailedReview = reviewOutcome.results.some((result) => result.status !== "applied");
   const hasUnfinishedGoal = researchGoalIsUnfinished(reviewOutcome.session);
-  if (!hasUnblockedSubflowWork && !hasRejectedOperations && !hasUnfinishedGoal) {
+  // A partial or failed review is a user decision boundary. Report the exact
+  // per-operation outcome and wait for an explicit retry/new proposal instead
+  // of sending the model an internal continuation that can recreate the card.
+  if (hasPartialOrFailedReview || (!hasUnblockedSubflowWork && !hasUnfinishedGoal)) {
     const reported = await appendAssistantReportMessage(
       input.projectRoot,
       session.id,
@@ -2440,24 +2470,73 @@ function researchChangeSetResultReport(changeSet: ResearchChangeSet, results: Re
   const failed = results.filter((result) => result.status === "failed").length;
   const nodeTitles = graphReviewNodeTitleMap(bundle, changeSet);
   const category = researchChangeSetCategory(changeSet.operations);
-  const lines = [
-    `${researchChangeSetReportHeading(category)} for "${changeSet.summary}".`,
-    `${applied} ${category === "queue" ? "queued" : "applied"}, ${rejected} rejected, ${failed} failed.`
-  ];
+  const appliedDetails: string[] = [];
+  const rejectedDetails: string[] = [];
+  const failedDetails: string[] = [];
+  const detailLines: string[] = [];
 
   for (const result of results) {
     const operation = changeSet.operations[result.operationIndex];
-    const detail = operation ? researchChangeSetOperationDetail(operation, nodeTitles) : `operation ${result.operationIndex}`;
+    const operationDetail = operation ? researchChangeSetOperationDetail(operation, nodeTitles) : `operation ${result.operationIndex}`;
+    const detail = result.status === "applied" ? operationDetail : researchUnappliedOperationDetail(operationDetail);
     const queued = category === "queue" && result.status === "applied";
     const statusLabel = queued ? "Queued" : capitalizeStatus(result.status);
     const presentedDetail = queued ? detail.replace(/^Queued\s+/, "") : detail;
-    lines.push(`${statusLabel}: ${presentedDetail}${result.message ? ` (${result.message})` : ""}`);
+    const conciseDetail = presentedDetail.replace(/\.$/, "");
+    if (result.status === "applied") appliedDetails.push(conciseDetail);
+    else if (result.status === "rejected") rejectedDetails.push(conciseDetail);
+    else failedDetails.push(conciseDetail);
+    detailLines.push(`${statusLabel}: ${presentedDetail}${result.message ? ` (${result.message})` : ""}`);
     if (operation?.kind === "add-note" && operation.note.kind === "system-note" && !operation.note.pinned) {
-      lines.push("Note: this was added as an unpinned system note, so the default Relevant notes filter may hide it. Use All notes or pin it if you want it to stay visible there.");
+      detailLines.push("Note: this was added as an unpinned system note, so the default Relevant notes filter may hide it. Use All notes or pin it if you want it to stay visible there.");
     }
   }
 
+  const outcomeParts = [
+    appliedDetails.length ? `${category === "queue" ? "Queued" : "Applied"}: ${summarizeResearchOutcomeDetails(appliedDetails)}.` : "",
+    rejectedDetails.length ? `Not applied by your selection: ${summarizeResearchOutcomeDetails(rejectedDetails)}.` : "",
+    failedDetails.length ? `Could not apply: ${summarizeResearchOutcomeDetails(failedDetails)}.` : "",
+    rejected || failed ? "I kept this exact review outcome and did not generate another proposal." : ""
+  ].filter(Boolean);
+  const lines = [
+    `${researchChangeSetReportHeading(category)} for "${changeSet.summary}".`,
+    `${applied} ${category === "queue" ? "queued" : "applied"}, ${rejected} rejected, ${failed} failed.`,
+    `Outcome: ${outcomeParts.join(" ")}`,
+    ...detailLines
+  ];
+
+  if (rejected || failed) {
+    lines.push("No automatic retry was created. Ask explicitly for a retry or a new proposal if you want to change the remaining operations.");
+  }
+
   return lines.join("\n\n");
+}
+
+function summarizeResearchOutcomeDetails(details: string[], limit = 3): string {
+  const visible = details.slice(0, limit).join("; ");
+  const remaining = details.length - limit;
+  return remaining > 0 ? `${visible}; and ${remaining} more` : visible;
+}
+
+function researchUnappliedOperationDetail(detail: string): string {
+  const replacements: Array<[RegExp, string]> = [
+    [/^Added\b/, "Add"],
+    [/^Updated\b/, "Update"],
+    [/^Created\b/, "Create"],
+    [/^Linked\b/, "Link"],
+    [/^Cleared\b/, "Clear"],
+    [/^Resolved\b/, "Resolve"],
+    [/^Reopened\b/, "Reopen"],
+    [/^Replaced\b/, "Replace"],
+    [/^Queued\b/, "Queue"],
+    [/^Stopped\b/, "Stop"],
+    [/^Restarted\b/, "Restart"],
+    [/^Deleted\b/, "Delete"]
+  ];
+  for (const [pattern, replacement] of replacements) {
+    if (pattern.test(detail)) return detail.replace(pattern, replacement);
+  }
+  return detail;
 }
 
 function capitalizeStatus(status: ResearchGraphChangeResult["status"]): string {
@@ -3884,7 +3963,6 @@ async function reviewResearchGraphChangeSet(input: {
   allowReviewedRetry?: boolean;
 }): Promise<{ session: ResearchChatSession; bundle: ProjectBundle; results: ResearchGraphChangeResult[] }> {
   const parsedDecisions = input.decisions.map((decision) => researchGraphChangeDecisionSchema.parse(decision));
-  const accepted = new Map(parsedDecisions.map((decision) => [decision.operationIndex, decision]));
   const message = input.session.messages.find((item) => item.id === input.messageId);
   const changeSet = message?.changeSet;
   if (!message || !changeSet || changeSet.id !== input.changeSetId) {
@@ -3893,6 +3971,7 @@ async function reviewResearchGraphChangeSet(input: {
   if (changeSet.reviewedAt && !input.allowReviewedRetry) {
     throw new Error("Research change set was already reviewed.");
   }
+  const accepted = normalizeResearchGraphReviewDecisions(changeSet, parsedDecisions);
   const validationBundle = await loadProject(input.projectRoot);
   const capturedAcceptedOperationEntries = changeSet.operations
     .map((operation, operationIndex) => ({ operation, operationIndex }))
@@ -4053,6 +4132,31 @@ function isBoundedGraphMutationRetry(operation: ResearchOperation): boolean {
     operation.kind !== "start-incident-debug-run";
 }
 
+function normalizeResearchGraphReviewDecisions(
+  changeSet: ResearchChangeSet,
+  decisions: ResearchGraphChangeDecision[]
+): Map<number, ResearchGraphChangeDecision> {
+  const dependenciesByOperation = researchGraphOperationDependencies(changeSet.operations);
+  const normalized = new Map(decisions.map((decision) => [decision.operationIndex, decision]));
+  let changed = true;
+  while (changed) {
+    changed = false;
+    changeSet.operations.forEach((_operation, operationIndex) => {
+      const decision = normalized.get(operationIndex);
+      if (!decision || decision.decision !== "accepted") return;
+      const missingDependency = dependenciesByOperation[operationIndex]?.find((dependencyIndex) => normalized.get(dependencyIndex)?.decision !== "accepted");
+      if (missingDependency === undefined) return;
+      normalized.set(operationIndex, {
+        ...decision,
+        decision: "rejected",
+        reason: decision.reason ?? `Not applied because operation #${missingDependency + 1} was not selected.`
+      });
+      changed = true;
+    });
+  }
+  return normalized;
+}
+
 export async function layoutResearchCreatedNodes(projectRoot: string, createdNodeLayoutHints: ResearchCreatedNodeLayoutHints): Promise<void> {
   if (!createdNodeLayoutHints.size) return;
   const bundle = await loadProject(projectRoot);
@@ -4060,166 +4164,11 @@ export async function layoutResearchCreatedNodes(projectRoot: string, createdNod
     if (!createdNodeIds.size) continue;
     const flow = bundle.flows.find((item) => item.id === flowId);
     if (!flow) continue;
-    const laidOut = placeCreatedResearchNodes(flow, createdNodeIds);
+    const laidOut = placeCreatedResearchNodes(flow, createdNodeIds, iso());
     if (laidOut !== flow) {
       await saveFlow(projectRoot, laidOut);
     }
   }
-}
-
-function placeCreatedResearchNodes(flow: Flow, createdNodeIds: Set<string>): Flow {
-  const scopedSubflowIds = new Set<string | null>();
-  for (const node of flow.nodes) {
-    if (createdNodeIds.has(node.id)) scopedSubflowIds.add(node.subflowId ?? null);
-  }
-  if (!scopedSubflowIds.size) return flow;
-
-  let nextFlow = flow;
-  for (const subflowId of scopedSubflowIds) {
-    nextFlow = placeCreatedResearchNodesInScope(nextFlow, createdNodeIds, subflowId);
-  }
-  return nextFlow;
-}
-
-function placeCreatedResearchNodesInScope(flow: Flow, createdNodeIds: Set<string>, subflowId: string | null): Flow {
-  const scopedNodes = flow.nodes.filter((node) => (node.subflowId ?? null) === subflowId);
-  const createdNodes = scopedNodes.filter((node) => createdNodeIds.has(node.id));
-  if (!createdNodes.length) return flow;
-
-  const existingNodes = scopedNodes.filter((node) => !createdNodeIds.has(node.id));
-  const scopedIds = new Set(scopedNodes.map((node) => node.id));
-  const scopedEdges = flow.edges.filter((edge) => scopedIds.has(edge.source) && scopedIds.has(edge.target));
-  const createdIds = new Set(createdNodes.map((node) => node.id));
-  if (!existingNodes.length && scopedEdges.length) {
-    // A wholly generated canvas can use the importer's full SCC-aware,
-    // dependency-depth layout without disturbing any user-positioned nodes.
-    return layoutScopeByDependencyDepth(flow, subflowId);
-  }
-  const xGap = 330;
-  const yGap = 220;
-  const fallbackX = 80;
-  const fallbackY = 80;
-  const byId = new Map(scopedNodes.map((node) => [node.id, node]));
-  const positioned = new Map<string, { x: number; y: number }>();
-  const anchorIds = new Set<string>();
-  const createdParents = new Map<string, Set<string>>();
-  const desiredAnchorY = new Map<string, number[]>();
-
-  for (const edge of scopedEdges) {
-    const sourceCreated = createdIds.has(edge.source);
-    const targetCreated = createdIds.has(edge.target);
-    if (sourceCreated && targetCreated) {
-      const parents = createdParents.get(edge.target) ?? new Set<string>();
-      parents.add(edge.source);
-      createdParents.set(edge.target, parents);
-    }
-    if (sourceCreated === targetCreated) continue;
-    const createdId = sourceCreated ? edge.source : edge.target;
-    const anchorId = sourceCreated ? edge.target : edge.source;
-    anchorIds.add(anchorId);
-    const values = desiredAnchorY.get(createdId) ?? [];
-    values.push(byId.get(anchorId)?.position.y ?? fallbackY);
-    desiredAnchorY.set(createdId, values);
-  }
-
-  const anchorNodes = [...anchorIds].map((id) => byId.get(id)).filter((node): node is ArchicodeNode => Boolean(node));
-  const scopeNodesForBounds = existingNodes.length ? existingNodes : anchorNodes;
-  const baseX = scopeNodesForBounds.length
-    ? Math.max(...scopeNodesForBounds.map((node) => node.position.x)) + xGap
-    : fallbackX;
-  const baselineY = anchorNodes.length
-    ? average(anchorNodes.map((node) => node.position.y))
-    : existingNodes.length
-      ? average(existingNodes.map((node) => node.position.y))
-      : fallbackY;
-  const hasCreatedNodeEdges = scopedEdges.some((edge) => createdIds.has(edge.source) || createdIds.has(edge.target));
-  if (!hasCreatedNodeEdges && createdNodes.length > 1) {
-    // A missing topology should not collapse every generated node into one
-    // depth-zero column. Picasso normally supplies semantic edges; this grid is
-    // the safe visual fallback for older or deliberately disconnected cards.
-    const sorted = [...createdNodes].sort((left, right) => left.title.localeCompare(right.title));
-    const columnCount = Math.max(2, Math.ceil(Math.sqrt(sorted.length)));
-    const rowCount = Math.ceil(sorted.length / columnCount);
-    const startY = Math.max(fallbackY, baselineY - ((rowCount - 1) * yGap) / 2);
-    sorted.forEach((node, index) => {
-      positioned.set(node.id, {
-        x: baseX + (index % columnCount) * xGap,
-        y: startY + Math.floor(index / columnCount) * yGap
-      });
-    });
-  } else {
-    const depthMemo = new Map<string, number>();
-    const depthForNode = (nodeId: string, stack: Set<string> = new Set()): number => {
-      const cached = depthMemo.get(nodeId);
-      if (cached !== undefined) return cached;
-      if (stack.has(nodeId)) return 0;
-      stack.add(nodeId);
-      const parents = [...(createdParents.get(nodeId) ?? [])];
-      const depth = parents.length ? 1 + Math.max(...parents.map((parentId) => depthForNode(parentId, stack))) : 0;
-      stack.delete(nodeId);
-      depthMemo.set(nodeId, depth);
-      return depth;
-    };
-
-    const columns = new Map<number, ArchicodeNode[]>();
-    for (const node of createdNodes) {
-      const depth = depthForNode(node.id);
-      const column = columns.get(depth) ?? [];
-      column.push(node);
-      columns.set(depth, column);
-    }
-
-    const sortedDepths = [...columns.keys()].sort((left, right) => left - right);
-    for (const depth of sortedDepths) {
-      const columnNodes = columns.get(depth) ?? [];
-      const ranked = columnNodes
-        .map((node) => {
-          const explicitYTargets = desiredAnchorY.get(node.id) ?? [];
-          const parentTargets = [...(createdParents.get(node.id) ?? [])]
-            .map((parentId) => positioned.get(parentId)?.y)
-            .filter((value): value is number => typeof value === "number");
-          const targets = [...explicitYTargets, ...parentTargets];
-          return {
-            node,
-            desiredY: targets.length ? average(targets) : baselineY
-          };
-        })
-        .sort((left, right) => left.desiredY === right.desiredY
-          ? left.node.title.localeCompare(right.node.title)
-          : left.desiredY - right.desiredY);
-      const columnCenterY = average(ranked.map((item) => item.desiredY));
-      const startY = columnCenterY - ((ranked.length - 1) * yGap) / 2;
-      ranked.forEach((item, index) => {
-        positioned.set(item.node.id, {
-          x: baseX + depth * xGap,
-          y: startY + index * yGap
-        });
-      });
-    }
-  }
-
-  return {
-    ...flow,
-    nodes: flow.nodes.map((node) => {
-      const nextPosition = positioned.get(node.id);
-      if (!nextPosition) return node;
-      return {
-        ...node,
-        position: nextPosition,
-        updatedAt: stampForGraphMutation()
-      };
-    }),
-    updatedAt: iso()
-  };
-}
-
-function average(values: number[]): number {
-  if (!values.length) return 0;
-  return values.reduce((sum, value) => sum + value, 0) / values.length;
-}
-
-function stampForGraphMutation(): string {
-  return new Date().toISOString();
 }
 
 export type CodebaseMappingInput = {

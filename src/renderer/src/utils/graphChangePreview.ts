@@ -1,4 +1,5 @@
 import type { ArchicodeNode, Flow, FlowEdge, ResearchGraphOperation } from "@shared/schema";
+import { placeCreatedResearchNodes } from "../../../shared/researchCreatedNodeLayout";
 
 export type GraphPreviewChangeKind = "added" | "modified" | "removed";
 
@@ -136,6 +137,7 @@ export function buildFlowGraphPreview(flow: Flow, operations: ResearchGraphOpera
   const edgeStates = new Map<string, GraphPreviewChangeKind>();
   const phantomNodes: ArchicodeNode[] = [];
   const phantomEdges: FlowEdge[] = [];
+  const autoLayoutNodeIds = new Set<string>();
 
   const positionsById = new Map<string, { x: number; y: number }>(flow.nodes.map((node) => [node.id, node.position]));
   const nodeExists = new Set<string>(flow.nodes.map((node) => node.id));
@@ -152,6 +154,9 @@ export function buildFlowGraphPreview(flow: Flow, operations: ResearchGraphOpera
         phantomStackIndex += 1;
         const phantomNode = toPhantomNode(operation.node, id, position);
         phantomNodes.push(phantomNode);
+        if (!isConcretePosition(operation.node.position) && !isPositionHint(operation.node.positionHint) && !isPositionHint(operation.node.position)) {
+          autoLayoutNodeIds.add(id);
+        }
         positionsById.set(id, position);
         nodeExists.add(id);
         nodeStates.set(id, "added");
@@ -188,9 +193,26 @@ export function buildFlowGraphPreview(flow: Flow, operations: ResearchGraphOpera
     }
   }
 
+  // Apply the exact same topology-aware placement used after approval. The
+  // filtered operation list already reflects the user's checkbox selection,
+  // so a partial preview and its partial apply share identical coordinates.
+  const laidOutPreviewFlow = autoLayoutNodeIds.size
+    ? placeCreatedResearchNodes({
+        ...flow,
+        nodes: [...flow.nodes, ...phantomNodes],
+        edges: [...flow.edges, ...phantomEdges]
+      }, autoLayoutNodeIds)
+    : null;
+  const laidOutPositions = laidOutPreviewFlow
+    ? new Map(laidOutPreviewFlow.nodes.map((node) => [node.id, node.position]))
+    : null;
+  const positionedPhantomNodes = laidOutPositions
+    ? phantomNodes.map((node) => ({ ...node, position: laidOutPositions.get(node.id) ?? node.position }))
+    : phantomNodes;
+
   const stats = { added: 0, modified: 0, removed: 0 };
   for (const kind of nodeStates.values()) stats[kind] += 1;
   for (const kind of edgeStates.values()) stats[kind] += 1;
 
-  return { nodeStates, phantomNodes, edgeStates, phantomEdges, stats };
+  return { nodeStates, phantomNodes: positionedPhantomNodes, edgeStates, phantomEdges, stats };
 }

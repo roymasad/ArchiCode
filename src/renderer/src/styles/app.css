@@ -11556,6 +11556,13 @@ button.activity-maintenance-indicator {
   font-variant-numeric: tabular-nums;
 }
 
+.research-task-timer.is-complete {
+  border-color: var(--border);
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--surface-raised) 72%, transparent);
+  opacity: 0.58;
+}
+
 .research-task-timer svg {
   flex: 0 0 auto;
 }
@@ -11900,6 +11907,10 @@ button.activity-maintenance-indicator {
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
+}
+
+.research-change-set-result-message > .research-markdown {
+  margin-bottom: 12px;
 }
 
 .research-change-set-result.is-success {
