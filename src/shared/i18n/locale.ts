@@ -1,4 +1,4 @@
-export const supportedLocales = ["en", "fr"] as const;
+export const supportedLocales = ["en", "fr", "es", "pt", "zh-Hans", "ja"] as const;
 
 export type SupportedLocale = (typeof supportedLocales)[number];
 export type LocalePreference = "system" | SupportedLocale;
@@ -15,7 +15,16 @@ export function isLocalePreference(value: unknown): value is LocalePreference {
 export function resolveSupportedLocale(languages: readonly string[]): SupportedLocale {
   for (const language of languages) {
     const normalized = language.trim().toLowerCase();
-    const exact = supportedLocales.find((locale) => locale === normalized);
+    if (
+      normalized === "zh"
+      || normalized === "zh-cn"
+      || normalized === "zh-sg"
+      || normalized === "zh-hans"
+      || normalized.startsWith("zh-hans-")
+    ) {
+      return "zh-Hans";
+    }
+    const exact = supportedLocales.find((locale) => locale.toLowerCase() === normalized);
     if (exact) return exact;
     const base = normalized.split("-")[0];
     const baseMatch = supportedLocales.find((locale) => locale === base);

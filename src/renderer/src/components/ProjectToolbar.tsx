@@ -111,6 +111,15 @@ import {
   Toolbar
 } from "./ui";
 
+function applicationLanguageLabelKey(locale: LocaleState["resolvedLocale"]): string {
+  if (locale === "fr") return "app.languageFrench";
+  if (locale === "es") return "app.languageSpanish";
+  if (locale === "pt") return "app.languagePortuguese";
+  if (locale === "zh-Hans") return "app.languageChineseSimplified";
+  if (locale === "ja") return "app.languageJapanese";
+  return "app.languageEnglish";
+}
+
 
 import { RuntimeUrlLinks, contextBudgetSourceLabel, contextLabel, defaultSpeechSettings, defaultTtsSettings, defaultVoiceSettings, encodeWav, formatBytes, formatTokenCount, isMacRuntime, mcpRegistryCategoryLabel, mcpRegistryCategoryOptions, mcpRegistryInitials, mcpRegistrySortOptions, modelHint, modelOptionLabel, modelOptionsForProvider, normalizeSpeechLanguage, openAiEndpointHint, openAiEndpointLabel, openRuntimeUrl, projectSettingsTabs, providerCheckHint, providerDescription, providerSupportsImages, renderRuntimeInsightDetail, renderRuntimeTextWithLinks, runtimeCwdLabel, runtimeUrls, selectedModelImageHint, speechLanguageOptions, mergeAudioChunks } from "./projectToolbarShared";
 
@@ -332,6 +341,7 @@ export function ProjectToolbar({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsTab, setSettingsTab] = useState("general");
   const [localeState, setLocaleState] = useState<LocaleState>({ preference: "system", resolvedLocale: "en" });
+  const [pendingLocalePreference, setPendingLocalePreference] = useState<LocalePreference | null>(null);
   const [implementationEffort, setImplementationEffort] = useState<RunEffort>("auto");
   const [pendingImplementScope, setPendingImplementScope] = useState<RunScope | null>(null);
   const [cleanLayoutConfirmOpen, setCleanLayoutConfirmOpen] = useState(false);
@@ -2442,6 +2452,41 @@ export function ProjectToolbar({
         </DialogContent>
       </DialogRoot>
 
+      <DialogRoot
+        open={pendingLocalePreference !== null}
+        onOpenChange={(open) => {
+          if (!open) setPendingLocalePreference(null);
+        }}
+      >
+        <DialogContent
+          title={t("Change application language?")}
+          description={t("Changing the application language restarts the ArchiCode window.")}
+        >
+          <div className="confirm-summary">
+            <div className="confirm-summary-grid">
+              <span>
+                <b>{t("Warning")}</b>
+                {t("Running tasks, if any, may be interrupted.")}
+              </span>
+            </div>
+          </div>
+          <div className="dialog-actions">
+            <Button
+              type="button"
+              variant="danger"
+              onClick={() => {
+                const preference = pendingLocalePreference;
+                setPendingLocalePreference(null);
+                if (preference !== null) void updateLocale(preference);
+              }}
+            >
+              {t("Restart and change language")}
+            </Button>
+            <Button type="button" onClick={() => setPendingLocalePreference(null)}>{t("Cancel")}</Button>
+          </div>
+        </DialogContent>
+      </DialogRoot>
+
       <DialogRoot open={logicReviewOpen} onOpenChange={setLogicReviewOpen}>
         <DialogContent
           title={t("Review flow logic")}
@@ -2886,16 +2931,23 @@ export function ProjectToolbar({
                 <Field label={t("app.language")} hint={t("app.languageHint")}>
                   <Select
                     value={localeState.preference}
-                    onValueChange={(value) => void updateLocale(value as LocalePreference)}
+                    onValueChange={(value) => {
+                      const preference = value as LocalePreference;
+                      if (preference !== localeState.preference) setPendingLocalePreference(preference);
+                    }}
                     options={[
                       { value: "system", label: t("app.languageSystem") },
-                      { value: "en", label: t("app.languageEnglish") },
-                      { value: "fr", label: t("app.languageFrench") }
+                      { value: "en", label: `🇬🇧 ${t("app.languageEnglish")}` },
+                      { value: "fr", label: `🇫🇷 ${t("app.languageFrench")}` },
+                      { value: "es", label: `🇪🇸 ${t("app.languageSpanish")}` },
+                      { value: "pt", label: `🇵🇹 ${t("app.languagePortuguese")}` },
+                      { value: "zh-Hans", label: `🇨🇳 ${t("app.languageChineseSimplified")}` },
+                      { value: "ja", label: `🇯🇵 ${t("app.languageJapanese")}` }
                     ]}
                   />
                 </Field>
                 <small>{t("app.languageResolved", {
-                  language: t(localeState.resolvedLocale === "fr" ? "app.languageFrench" : "app.languageEnglish")
+                  language: t(applicationLanguageLabelKey(localeState.resolvedLocale))
                 })}</small>
 
                 {draft ? (

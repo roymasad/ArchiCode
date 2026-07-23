@@ -2451,7 +2451,16 @@ describe("renderer UI system", () => {
     expect(toolbar).toContain('<TabsTrigger value="general">{t("General")}</TabsTrigger>');
     expect(toolbar).toContain('<TabsContent value="general" className="settings-tab-content narrow">');
     expect(toolbar).toContain('label={t("app.language")}');
-    expect(toolbar).toContain('{ value: "fr", label: t("app.languageFrench") }');
+    expect(toolbar).toContain('{ value: "en", label: `🇬🇧 ${t("app.languageEnglish")}` }');
+    expect(toolbar).toContain('{ value: "fr", label: `🇫🇷 ${t("app.languageFrench")}` }');
+    expect(toolbar).toContain('{ value: "es", label: `🇪🇸 ${t("app.languageSpanish")}` }');
+    expect(toolbar).toContain('{ value: "pt", label: `🇵🇹 ${t("app.languagePortuguese")}` }');
+    expect(toolbar).toContain('{ value: "zh-Hans", label: `🇨🇳 ${t("app.languageChineseSimplified")}` }');
+    expect(toolbar).toContain('{ value: "ja", label: `🇯🇵 ${t("app.languageJapanese")}` }');
+    expect(toolbar).toContain("setPendingLocalePreference(preference)");
+    expect(toolbar).toContain('title={t("Change application language?")}');
+    expect(toolbar).toContain('t("Running tasks, if any, may be interrupted.")');
+    expect(toolbar).toContain('if (preference !== null) void updateLocale(preference)');
     const generalTabStart = toolbar.indexOf('<TabsContent value="general"');
     expect(toolbar.indexOf('label={t("Project name")}', generalTabStart)).toBeLessThan(
       toolbar.indexOf('label={t("app.language")}', generalTabStart)

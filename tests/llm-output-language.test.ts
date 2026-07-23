@@ -20,6 +20,19 @@ describe("LLM output language awareness", () => {
     expect(directive).toContain("Structured outputs must remain syntactically valid");
   });
 
+  it("describes Spanish generically for future locale-aware agent roles", () => {
+    expect(llmOutputLanguageDirective("es")).toContain("Spanish (es)");
+  });
+
+  it("describes Portuguese generically for future locale-aware agent roles", () => {
+    expect(llmOutputLanguageDirective("pt")).toContain("Portuguese (pt)");
+  });
+
+  it("describes Simplified Chinese generically for future locale-aware agent roles", () => {
+    expect(llmOutputLanguageDirective("zh-Hans")).toContain("Simplified Chinese (zh-Hans)");
+    expect(llmOutputLanguageDirective("ja")).toContain("Japanese (ja)");
+  });
+
   it("reaches Research, isolated subagents, Build/Debug, and Realtime while leaving extraction contracts alone", async () => {
     await setMainLocale("fr");
     try {
