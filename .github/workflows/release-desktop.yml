@@ -19,35 +19,11 @@ permissions:
 
 jobs:
   # --------------------------------------------------------------------------
-  # 1. Create a DRAFT release up front so both build jobs upload into the same
-  #    release without racing each other to create it.
-  # --------------------------------------------------------------------------
-  create-release:
-    runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.ver.outputs.version }}
-    steps:
-      - uses: actions/checkout@v4
-      - id: ver
-        run: echo "version=$(node -p "require('./package.json').version")" >> "$GITHUB_OUTPUT"
-      - name: Create or reuse draft release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          V: ${{ steps.ver.outputs.version }}
-        run: |
-          if gh release view "v$V" >/dev/null 2>&1; then
-            echo "Release v$V already exists — reusing it."
-          else
-            gh release create "v$V" --draft --title "ArchiCode v$V" \
-              --notes "Automated desktop builds for v$V."
-          fi
-
-  # --------------------------------------------------------------------------
-  # 2a. Windows — unsigned nsis installer + zip. No secrets needed.
+  # Windows — unsigned nsis installer + zip. No secrets needed.
+  # Uploads results as a transient CI artifact (not to a release yet).
   # --------------------------------------------------------------------------
   build-windows:
     if: ${{ inputs.build_windows }}
-    needs: create-release
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -56,27 +32,26 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-        # Produce an UNSIGNED Windows build: stop electron-builder from
-        # auto-discovering a cert in the runner's store and invoking signtool.
-        # --publish never: build the files only; our gh step handles the upload.
+        # Unsigned build: stop electron-builder auto-discovering a cert in the
+        # runner store (signtool). --publish never: don't let it self-publish.
       - run: npm run dist:win -- --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: "false"
-      - name: Upload Windows assets to release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          V: ${{ needs.create-release.outputs.version }}
-        shell: pwsh
-        run: |
-          $files = Get-ChildItem -Path release -Include *.exe,*.zip,*.blockmap -Recurse | ForEach-Object { $_.FullName }
-          gh release upload "v$env:V" $files --clobber
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-build
+          path: |
+            release/*.exe
+            release/*.zip
+            release/*.blockmap
+          retention-days: 1
+          if-no-files-found: error
 
   # --------------------------------------------------------------------------
-  # 2b. macOS — signed + notarized dmg + zip. Requires the secrets below.
+  # macOS — signed + notarized dmg + zip. Requires the Apple secrets.
   # --------------------------------------------------------------------------
   build-mac:
     if: ${{ inputs.build_mac }}
-    needs: create-release
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
@@ -87,36 +62,50 @@ jobs:
       - run: npm ci
       - name: Build, sign & notarize
         env:
-          # Signing: your Developer ID cert exported as base64-encoded .p12
           CSC_LINK: ${{ secrets.CSC_LINK }}
           CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
-          # Notarization (read by scripts/notarize.cjs)
           APPLE_NOTARIZE: "true"
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        # --publish never: build the files only; our gh step handles the upload.
+        # --publish never: build the files only; the release job publishes them.
         run: npm run dist:mac -- --publish never
-      - name: Upload macOS assets to release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          V: ${{ needs.create-release.outputs.version }}
-        run: |
-          shopt -s nullglob
-          files=(release/*.dmg release/*.zip release/*.blockmap)
-          gh release upload "v$V" "${files[@]}" --clobber
+      - uses: actions/upload-artifact@v4
+        with:
+          name: mac-build
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.blockmap
+          retention-days: 1
+          if-no-files-found: error
 
   # --------------------------------------------------------------------------
-  # 3. Publish the release (flip draft -> published) once builds are done.
+  # Collect all build artifacts and publish ONE release with them attached.
+  # Runs if at least one build succeeded; never creates an empty release.
   # --------------------------------------------------------------------------
-  finalize:
-    needs: [create-release, build-windows, build-mac]
-    if: ${{ always() && needs.create-release.result == 'success' }}
+  release:
+    needs: [build-windows, build-mac]
+    if: ${{ always() && (needs.build-windows.result == 'success' || needs.build-mac.result == 'success') }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Publish release
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist-assets # each artifact lands in its own subfolder
+      - name: Create or update the release with all binaries
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          V: ${{ needs.create-release.outputs.version }}
-        run: gh release edit "v$V" --draft=false
+        run: |
+          V=$(node -p "require('./package.json').version")
+          mapfile -t files < <(find dist-assets -type f)
+          echo "Publishing ${#files[@]} asset(s) to release v$V:"
+          printf '  %s\n' "${files[@]}"
+          if gh release view "v$V" >/dev/null 2>&1; then
+            gh release upload "v$V" "${files[@]}" --clobber
+          else
+            gh release create "v$V" "${files[@]}" \
+              --title "ArchiCode v$V" \
+              --notes "Automated desktop builds for v$V."
+          fi
