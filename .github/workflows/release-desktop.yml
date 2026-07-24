@@ -56,7 +56,12 @@ jobs:
           node-version: 22
           cache: npm
       - run: npm ci
-      - run: npm run dist:win
+        # Produce an UNSIGNED Windows build: stop electron-builder from
+        # auto-discovering a cert in the runner's store and invoking signtool.
+        # --publish never: build the files only; our gh step handles the upload.
+      - run: npm run dist:win -- --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
       - name: Upload Windows assets to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -90,7 +95,8 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: npm run dist:mac
+        # --publish never: build the files only; our gh step handles the upload.
+        run: npm run dist:mac -- --publish never
       - name: Upload macOS assets to release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
