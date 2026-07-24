@@ -103,6 +103,8 @@ import {
   readProjectFileDiff
 } from "./projectTools";
 import { getGraphNodeHistory, listGraphHistory, listHistoricalProjectFiles, loadHistoricalGraphBundle, readHistoricalProjectFile } from "./graphHistory";
+import { askProjectBriefingQuestion, generateProjectBriefing, listProjectBriefings, loadProjectBriefing } from "./projectBriefing";
+import { exportProjectBriefing, type ProjectBriefingExportFormat } from "./projectBriefingExport";
 import { previewGraphBranches } from "./graphBranchPreview";
 import {
   deleteSpeechModel,
@@ -3010,6 +3012,45 @@ function registerIpc(): void {
   ipcMain.handle("archicode:preview-graph-branches", async (_event, projectRoot: string, baseRef: string, candidateRef: string) =>
     previewGraphBranches(projectRoot, baseRef, candidateRef)
   );
+  ipcMain.handle("archicode:generate-project-briefing", async (_event, projectRoot: string, preset) => {
+    const { resolvedLocale } = await globalLocaleState();
+    return withSleepBlocked(
+      `project-briefing:${projectRoot}:${preset}`,
+      () => generateProjectBriefing(projectRoot, preset, resolvedLocale)
+    );
+  });
+  ipcMain.handle("archicode:list-project-briefings", async (_event, projectRoot: string) =>
+    listProjectBriefings(projectRoot)
+  );
+  ipcMain.handle("archicode:ask-project-briefing-question", async (_event, projectRoot: string, input) => {
+    const { resolvedLocale } = await globalLocaleState();
+    return withSleepBlocked(
+      `project-briefing-question:${projectRoot}:${input.deck.id}`,
+      () => askProjectBriefingQuestion(projectRoot, input, resolvedLocale)
+    );
+  });
+  ipcMain.handle("archicode:export-project-briefing", async (_event, projectRoot: string, briefingId: string, format: ProjectBriefingExportFormat) => {
+    if (format !== "pdf" && format !== "pptx") throw new Error(`Unsupported briefing export format: ${format}`);
+    const briefing = await loadProjectBriefing(projectRoot, briefingId);
+    const safeName = briefing.title.trim().replace(/[^a-z0-9._-]+/gi, "-").replace(/^-+|-+$/g, "") || "archicode-project-briefing";
+    const win = BrowserWindow.getFocusedWindow();
+    const options: SaveDialogOptions = {
+      title: format === "pdf" ? "Download briefing as PDF" : "Download briefing as PowerPoint",
+      defaultPath: path.join(app.getPath("downloads"), `${safeName}.${format}`),
+      filters: [{
+        name: format === "pdf" ? "PDF document" : "PowerPoint presentation",
+        extensions: [format]
+      }],
+      properties: ["createDirectory"]
+    };
+    const result = win ? await dialog.showSaveDialog(win, options) : await dialog.showSaveDialog(options);
+    if (result.canceled || !result.filePath) return false;
+    const targetFilePath = path.extname(result.filePath) ? result.filePath : `${result.filePath}.${format}`;
+    await withSleepBlocked(`project-briefing-export:${briefing.id}:${format}`, () =>
+      exportProjectBriefing(briefing, format, targetFilePath)
+    );
+    return true;
+  });
   ipcMain.handle("archicode:list-graph-history", async (_event, projectRoot: string, options) => listGraphHistory(projectRoot, options));
   ipcMain.handle("archicode:load-historical-graph", async (_event, projectRoot: string, commit: string) =>
     loadHistoricalGraphBundle(projectRoot, commit)

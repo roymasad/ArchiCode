@@ -16,6 +16,7 @@ import type {
 import type { GitOperationResult, GitStatus, ProjectFileBrowserData, ProjectFileDiff, ProjectFileText } from "../shared/projectTools";
 import type { GraphHistoryPage, GraphHistoryPageOptions, GraphNodeHistory, HistoricalGraphBundle } from "../shared/graphHistory";
 import type { GraphBranchPreview } from "../shared/graphBranchPreview";
+import type { ProjectBriefing, ProjectBriefingAnswer, ProjectBriefingPreset, ProjectBriefingQuestionInput } from "../shared/projectBriefing";
 import type { GlobalResearchPersonality, GlobalResearchVerbosity } from "../shared/researchPersonality";
 import type { AppUpdateStatus } from "../main/updater";
 import type { ExternalMcpHostStatus } from "../main/mcpHost";
@@ -570,6 +571,14 @@ const api = {
     ipcRenderer.invoke("archicode:get-git-status", projectRoot),
   previewGraphBranches: (projectRoot: string, baseRef: string, candidateRef: string): Promise<GraphBranchPreview> =>
     ipcRenderer.invoke("archicode:preview-graph-branches", projectRoot, baseRef, candidateRef),
+  generateProjectBriefing: (projectRoot: string, preset: ProjectBriefingPreset): Promise<ProjectBriefing> =>
+    ipcRenderer.invoke("archicode:generate-project-briefing", projectRoot, preset),
+  listProjectBriefings: (projectRoot: string): Promise<ProjectBriefing[]> =>
+    ipcRenderer.invoke("archicode:list-project-briefings", projectRoot),
+  askProjectBriefingQuestion: (projectRoot: string, input: ProjectBriefingQuestionInput): Promise<ProjectBriefingAnswer> =>
+    ipcRenderer.invoke("archicode:ask-project-briefing-question", projectRoot, input),
+  exportProjectBriefing: (projectRoot: string, briefingId: string, format: "pdf" | "pptx"): Promise<boolean> =>
+    ipcRenderer.invoke("archicode:export-project-briefing", projectRoot, briefingId, format),
   listGraphHistory: (projectRoot: string, options?: GraphHistoryPageOptions): Promise<GraphHistoryPage> =>
     ipcRenderer.invoke("archicode:list-graph-history", projectRoot, options),
   loadHistoricalGraph: (projectRoot: string, commit: string): Promise<HistoricalGraphBundle> =>

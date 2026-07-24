@@ -50,6 +50,45 @@ function sourceFilesUnder(directory: string): string[] {
 }
 
 describe("renderer UI system", () => {
+  it("offers an evidence-grounded project briefing without exposing graph editing", () => {
+    const toolbar = readProjectToolbarSource();
+    const sidebar = readFileSync(resolve(repoRoot, "src/renderer/src/components/ProjectSidebar.tsx"), "utf8");
+    const briefing = readFileSync(resolve(repoRoot, "src/renderer/src/components/ProjectBriefing.tsx"), "utf8");
+    const englishCatalog = JSON.parse(readFileSync(resolve(repoRoot, "src/shared/i18n/locales/en.json"), "utf8")) as Record<string, string>;
+    const catalogKeys = Object.keys(englishCatalog);
+    const briefingKeys = catalogKeys
+      .slice(catalogKeys.indexOf("Visual relationships"), catalogKeys.indexOf("Following the evidence") + 1)
+      .filter((key) => key !== "PDF" && key !== "PowerPoint");
+
+    expect(toolbar).not.toContain("<ProjectBriefing />");
+    expect(sidebar).toContain("<ProjectBriefing />");
+    expect(sidebar).toContain("<MenuSub>");
+    expect(sidebar).toContain('t("New project")');
+    expect(briefing).toContain('t("Brief me")');
+    expect(briefing).toContain("generateProjectBriefing");
+    expect(briefing).toContain("askProjectBriefingQuestion");
+    expect(briefing).toContain("Continue briefing");
+    expect(briefing).toContain("<EvidenceList");
+    expect(briefing).toContain("listProjectBriefings");
+    expect(briefing).toContain("Open saved");
+    expect(briefing).toContain("Regenerate");
+    expect(briefing).toContain('downloadDeck("pdf")');
+    expect(briefing).toContain('downloadDeck("pptx")');
+    expect(briefing).toContain("project-briefing-question-thinking");
+    expect(briefing).toContain("{activeQuestion}");
+    expect(briefing).toContain('t("Generate")');
+    expect(briefing).not.toContain("saveFlow");
+    expect(briefing).not.toContain("updateNode");
+    for (const locale of ["es", "fr", "ja", "pt", "zh-Hans"]) {
+      const localizedCatalog = JSON.parse(
+        readFileSync(resolve(repoRoot, `src/shared/i18n/locales/${locale}.json`), "utf8")
+      ) as Record<string, string>;
+      for (const key of briefingKeys) {
+        expect(localizedCatalog[key], `${locale}:${key}`).not.toBe(englishCatalog[key]);
+      }
+    }
+  });
+
   it("keeps functional toolbar labels while surfacing the Gaia and Pandora personas", () => {
     const toolbar = readProjectToolbarSource();
     const identities = readFileSync(resolve(repoRoot, "src/shared/agentIdentities.ts"), "utf8");
@@ -2074,6 +2113,10 @@ describe("renderer UI system", () => {
     expect(sidebar).toContain("setGraphPreviewFlow(item.id)");
     expect(canvas).toContain("proposedPreviewFlow ?? getActiveFlow");
     expect(graphSlice).toContain("activeProposedFlowId");
+    expect(panel).toContain("function changeSetSupportsGraphPreview");
+    expect(panel).toContain("{canPreviewOnCanvas ? (");
+    expect(panel).toContain("if (!changeSetSupportsGraphPreview(changeSet))");
+    expect(graphSlice).toContain('researchChangeSetCategory(operations) !== "graph"');
   });
 
   it("offers an explicit multi-select when Delphi has several compatible runtime targets", () => {

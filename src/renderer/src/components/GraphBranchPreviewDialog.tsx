@@ -61,6 +61,12 @@ function entityKindLabel(change: GraphBranchPreviewChange): string {
   return t("Node");
 }
 
+function localizedFieldValue(value: string): string {
+  if (value === "Yes" || value === "No" || value === "None") return t(value);
+  const itemCount = /^(\d+) items?$/.exec(value);
+  return itemCount ? t("{{count}} items", { count: Number(itemCount[1]) }) : value;
+}
+
 function edgeStyle(edge: FlowEdge): Record<string, string | number> {
   const dash = edge.lineStyle === "dashed" ? "8 6" : edge.lineStyle === "dotted" ? "2 6" : "none";
   return {
@@ -340,12 +346,12 @@ export function GraphBranchPreviewDialog({
                                 <article key={field.field}>
                                   <strong>{t(field.label)}</strong>
                                   {change.changeKind === "added" ? (
-                                    <code>{field.after}</code>
+                                    <code>{localizedFieldValue(field.after)}</code>
                                   ) : (
                                     <div>
-                                      <span><small>{t("Before")}</small><code>{field.before}</code></span>
+                                      <span><small>{t("Before")}</small><code>{localizedFieldValue(field.before)}</code></span>
                                       <ChevronRight size={14} aria-hidden="true" />
-                                      <span><small>{t("After")}</small><code>{field.after}</code></span>
+                                      <span><small>{t("After")}</small><code>{localizedFieldValue(field.after)}</code></span>
                                     </div>
                                   )}
                                 </article>

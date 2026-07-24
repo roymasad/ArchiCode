@@ -96,6 +96,33 @@ describe("application localization", () => {
       .toBe("ルートフローにノード「ヘッダー」を作成");
   });
 
+  it("localizes the branch graph preview and its change details", () => {
+    const cases = [
+      { locale: "fr", title: "Aperçu des modifications du graphe", candidate: "Branche candidate", position: "Position", count: "3 supprimés" },
+      { locale: "es", title: "Vista previa de cambios del grafo", candidate: "Rama candidata", position: "Posición", count: "3 eliminados" },
+      { locale: "pt", title: "Pré-visualização de alterações do grafo", candidate: "Ramificação candidata", position: "Posição", count: "3 removidos" },
+      { locale: "zh-Hans", title: "图谱变更预览", candidate: "候选分支", position: "位置", count: "移除 3 项" },
+      { locale: "ja", title: "グラフ変更プレビュー", candidate: "候補ブランチ", position: "位置", count: "削除 3 件" }
+    ] as const;
+
+    for (const item of cases) {
+      const instance = createI18n(item.locale);
+      expect(translate(instance, "Graph change preview")).toBe(item.title);
+      expect(translate(instance, "Candidate branch")).toBe(item.candidate);
+      expect(translate(instance, "Position")).toBe(item.position);
+      expect(translate(instance, "{{count}} removed", { count: 3 })).toBe(item.count);
+    }
+  });
+
+  it("localizes the curator's casual greeting", () => {
+    expect(translate(createI18n("en"), "Hi! I’m Archi. How should I brief you?")).toBe("Hi! I’m Archi. How should I brief you?");
+    expect(translate(createI18n("fr"), "Hi! I’m Archi. How should I brief you?")).toContain("Archi");
+    expect(translate(createI18n("es"), "Hi! I’m Archi. How should I brief you?")).toContain("Archi");
+    expect(translate(createI18n("pt"), "Hi! I’m Archi. How should I brief you?")).toContain("Archi");
+    expect(translate(createI18n("zh-Hans"), "Hi! I’m Archi. How should I brief you?")).toContain("Archi");
+    expect(translate(createI18n("ja"), "Hi! I’m Archi. How should I brief you?")).toContain("Archi");
+  });
+
   it("keeps complete, matching, non-empty catalogs", () => {
     expect(Object.keys(english).length).toBeGreaterThan(2_000);
     expect(Object.values(english).every((value) => typeof value === "string" && value.length > 0)).toBe(true);

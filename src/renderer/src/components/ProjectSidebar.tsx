@@ -40,6 +40,9 @@ import {
   MenuLabel,
   MenuRoot,
   MenuSeparator,
+  MenuSub,
+  MenuSubContent,
+  MenuSubTrigger,
   MenuTrigger,
   PopoverContent,
   PopoverRoot,
@@ -56,6 +59,7 @@ import { isRunBlockingNewChange } from "../utils/runStatus";
 import { childSubflowsForFlow, compareSiblingSubflows, compareTopLevelFlows, editableFlowName, flowDisplayName, isSubflowIgnored, normalizeEvidenceFlow, visibleNodesForFlow } from "@shared/graph";
 import { matches as chordMatches } from "../utils/keybindings";
 import { proposedFlowsForGraphPreview } from "../utils/graphChangePreview";
+import { ProjectBriefing } from "./ProjectBriefing";
 
 const sidebarStageLabels: Record<ArchicodeNode["stage"], string> = {
   planned: "planned",
@@ -684,36 +688,7 @@ export function ProjectSidebar({
       ) : null}
 
       <div className="project-switcher">
-        <MenuRoot>
-          <MenuTrigger asChild>
-            <Button type="button" variant="primary" className="project-create-button">
-              <Plus size={16} />
-              <span>{t("New Project")}</span>
-            </Button>
-          </MenuTrigger>
-          <MenuContent align="start">
-            <MenuLabel>{t("New project")}</MenuLabel>
-            <MenuItem disabled={!onOpenProjectLauncher} onSelect={onOpenProjectLauncher}>
-              <span className="menu-item-stack">
-                <strong>{t("Open project launcher")}</strong>
-                <small>{t("Open a folder, clone from Git, or choose a template.")}</small>
-              </span>
-            </MenuItem>
-            <MenuSeparator />
-            <MenuLabel>{t("Start from template")}</MenuLabel>
-            {projectTemplates.map((template) => (
-              <MenuItem
-                key={template.id}
-                onSelect={() => void createProjectFromTemplate(template.id as ProjectTemplateId)}
-              >
-                <span className="menu-item-stack">
-                  <strong>{template.name}</strong>
-                  <small>{template.description}</small>
-                </span>
-              </MenuItem>
-            ))}
-          </MenuContent>
-        </MenuRoot>
+        <ProjectBriefing />
         <MenuRoot>
           <MenuTrigger asChild>
             <IconButton title={t("Project menu")} className="project-menu-button">
@@ -721,6 +696,34 @@ export function ProjectSidebar({
             </IconButton>
           </MenuTrigger>
           <MenuContent align="end">
+            <MenuSub>
+              <MenuSubTrigger>
+                <Plus size={15} />
+                <span>{t("New project")}</span>
+              </MenuSubTrigger>
+              <MenuSubContent>
+                <MenuItem disabled={!onOpenProjectLauncher} onSelect={onOpenProjectLauncher}>
+                  <span className="menu-item-stack">
+                    <strong>{t("Open project launcher")}</strong>
+                    <small>{t("Open a folder, clone from Git, or choose a template.")}</small>
+                  </span>
+                </MenuItem>
+                <MenuSeparator />
+                <MenuLabel>{t("Start from template")}</MenuLabel>
+                {projectTemplates.map((template) => (
+                  <MenuItem
+                    key={template.id}
+                    onSelect={() => void createProjectFromTemplate(template.id as ProjectTemplateId)}
+                  >
+                    <span className="menu-item-stack">
+                      <strong>{template.name}</strong>
+                      <small>{template.description}</small>
+                    </span>
+                  </MenuItem>
+                ))}
+              </MenuSubContent>
+            </MenuSub>
+            <MenuSeparator />
             <MenuLabel>{t("Current project")}</MenuLabel>
             <MenuItem disabled={!rootPath} onSelect={() => void revealProjectFolder()}>
               <span className="menu-item-stack" title={rootPath}>

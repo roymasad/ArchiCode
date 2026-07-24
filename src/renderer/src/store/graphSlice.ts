@@ -56,6 +56,7 @@ import { isRunBlockingNewChange } from "../utils/runStatus";
 import { mergeResearchSessionsPreservingOptimistic } from "../utils/researchSessions";
 import { operationFlowId, proposedFlowsForGraphPreview } from "../utils/graphChangePreview";
 import { isResearchThinkingPhrase, pickRandomResearchThinkingPhrase } from "@shared/researchPersonality";
+import { researchChangeSetCategory } from "@shared/researchChangeSetSemantics";
 import type { ResearchMessageNodeReference } from "@shared/schema";
 import {
   DEFAULT_BINDINGS,
@@ -750,6 +751,10 @@ export const createGraphSlice = (set: StoreSet, get: StoreGet): Pick<ArchicodeSt
   },
 
   showGraphChangeSetPreview: (sessionId, messageId, changeSetId, operations) => {
+    if (researchChangeSetCategory(operations) !== "graph") {
+      set({ graphPreview: null });
+      return;
+    }
     const currentFlowId = get().activeFlowId;
     const proposedFlows = proposedFlowsForGraphPreview(operations);
     const affectsCurrentFlow = Boolean(currentFlowId && operations.some((operation) => operationFlowId(operation) === currentFlowId));

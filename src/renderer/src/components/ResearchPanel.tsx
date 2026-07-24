@@ -853,6 +853,10 @@ function researchChangeSetActionKind(changeSet: ResearchChangeSetView): "run-app
   return "graph";
 }
 
+function changeSetSupportsGraphPreview(changeSet: ResearchChangeSetView): boolean {
+  return researchChangeSetCategory(changeSet.operations) === "graph";
+}
+
 function ResearchSubmitButton({
   disabled,
   label,
@@ -1152,10 +1156,10 @@ export const ResearchPanel = memo(function ResearchPanel({
       : { lastVisibleMessageIndex: -1, reviewSummaryByChangeSetIndex: new Map<number, ResearchChangeSetReviewSummary>() },
     [selected]
   );
-  // Defaults the newest unreviewed changeSet card into "previewing" so the ghost
-  // overlay shows up without the user having to click the toggle. Tracked in a ref
-  // (not state) so a manual toggle-off isn't immediately re-forced back on by this
-  // same effect re-running on the next render.
+  // Defaults the newest unreviewed graph-edit card into "previewing" so the ghost
+  // overlay shows up without the user having to click the toggle. Implementation
+  // and run cards never own the graph canvas. Tracked in a ref (not state) so a
+  // manual toggle-off isn't immediately re-forced back on by this effect.
   const autoPreviewedChangeSetIdsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!selected) return;
@@ -1169,18 +1173,27 @@ export const ResearchPanel = memo(function ResearchPanel({
     if (lastChangeSetIndex < 0) return;
     const lastChangeSetMessage = selected.messages[lastChangeSetIndex]!;
     const changeSet = lastChangeSetMessage.changeSet!;
+    if (!changeSetSupportsGraphPreview(changeSet)) {
+      if (graphPreview?.sessionId === selected.id) hideGraphChangeSetPreview();
+      return;
+    }
     const reviewSummary = transcriptAnalysis.reviewSummaryByChangeSetIndex.get(lastChangeSetIndex) ?? null;
     const reviewed = Boolean(changeSet.reviewedAt) || Boolean(reviewSummary);
     if (reviewed || autoPreviewedChangeSetIdsRef.current.has(changeSet.id)) return;
     autoPreviewedChangeSetIdsRef.current.add(changeSet.id);
     showGraphChangeSetPreview(selected.id, lastChangeSetMessage.id, changeSet.id, changeSet.operations);
-  }, [selected, transcriptAnalysis, showGraphChangeSetPreview]);
+  }, [graphPreview?.sessionId, hideGraphChangeSetPreview, selected, transcriptAnalysis, showGraphChangeSetPreview]);
   // Drop a lingering preview whose card was retired (applied, rejected, or superseded
-  // by a newer proposal) so the canvas never ghosts a change the user can no longer act on.
+  // by a newer proposal), or whose card is not made entirely of graph edits.
   useEffect(() => {
     if (!graphPreview) return;
     const previewedChangeSet = selected?.messages.find((message) => message.changeSet?.id === graphPreview.changeSetId)?.changeSet;
-    if (previewedChangeSet && (previewedChangeSet.reviewedAt || previewedChangeSet.supersededAt)) {
+    if (
+      !previewedChangeSet
+      || !changeSetSupportsGraphPreview(previewedChangeSet)
+      || previewedChangeSet.reviewedAt
+      || previewedChangeSet.supersededAt
+    ) {
       hideGraphChangeSetPreview();
     }
   }, [graphPreview, selected, hideGraphChangeSetPreview]);
@@ -4672,7 +4685,8 @@ export const ResearchPanel = memo(function ResearchPanel({
                       const reviewed = Boolean(changeSet.reviewedAt) || Boolean(reviewSummary);
                       const canRetryFailedReview = Boolean(reviewSummary && reviewSummary.retryable && reviewSummary.applied === 0 && reviewSummary.rejected === 0 && reviewSummary.failed === changeSet.operations.length);
                       const waitingForRun = Boolean(activeGraphLockRun && (!reviewed || canRetryFailedReview));
-                      const previewingThisChangeSet = graphPreview?.changeSetId === changeSet.id;
+                      const canPreviewOnCanvas = changeSetSupportsGraphPreview(changeSet);
+                      const previewingThisChangeSet = canPreviewOnCanvas && graphPreview?.changeSetId === changeSet.id;
                       const acceptedOperationIndices = acceptedByChangeSet[changeSet.id]
                         ?? new Set(changeSet.operations.map((_, operationIndex) => operationIndex));
                       const previewOperations = changeSet.operations.filter((_, operationIndex) => acceptedOperationIndices.has(operationIndex));
@@ -4710,22 +4724,24 @@ export const ResearchPanel = memo(function ResearchPanel({
                         <div className="research-change-set">
                           <div className="research-change-set-head">
                             <strong>{implementationSubmission ? implementationApprovalTitle(changeSet.summary) : changeSet.summary}</strong>
-                            <IconButton
-                              type="button"
-                              className={previewingThisChangeSet ? "is-active" : ""}
-                              title={supersededOnly
-                                ? t("Superseded by a newer proposal — preview unavailable")
-                                : reviewed
-                                  ? t("Nothing to preview — this card was already reviewed")
-                                  : previewingThisChangeSet ? t("Hide canvas preview") : t("Preview on canvas")}
-                              aria-pressed={previewingThisChangeSet}
-                              disabled={reviewed || superseded}
-                              onClick={() => previewingThisChangeSet
-                                ? hideGraphChangeSetPreview()
-                                : showGraphChangeSetPreview(selected.id, message.id, changeSet.id, previewOperations)}
-                            >
-                              {previewingThisChangeSet ? <EyeOff size={14} /> : <Eye size={14} />}
-                            </IconButton>
+                            {canPreviewOnCanvas ? (
+                              <IconButton
+                                type="button"
+                                className={previewingThisChangeSet ? "is-active" : ""}
+                                title={supersededOnly
+                                  ? t("Superseded by a newer proposal — preview unavailable")
+                                  : reviewed
+                                    ? t("Nothing to preview — this card was already reviewed")
+                                    : previewingThisChangeSet ? t("Hide canvas preview") : t("Preview on canvas")}
+                                aria-pressed={previewingThisChangeSet}
+                                disabled={reviewed || superseded}
+                                onClick={() => previewingThisChangeSet
+                                  ? hideGraphChangeSetPreview()
+                                  : showGraphChangeSetPreview(selected.id, message.id, changeSet.id, previewOperations)}
+                              >
+                                {previewingThisChangeSet ? <EyeOff size={14} /> : <Eye size={14} />}
+                              </IconButton>
+                            ) : null}
                             {superseded && !reviewSummary
                               ? <Badge tone="neutral">{t("Superseded")}</Badge>
                               : reviewPresentation
