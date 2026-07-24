@@ -77,6 +77,9 @@ describe("renderer UI system", () => {
     expect(briefing).toContain("project-briefing-question-thinking");
     expect(briefing).toContain("{activeQuestion}");
     expect(briefing).toContain('t("Generate")');
+    expect(briefing).toContain("Use two or three concise, natural sentences.");
+    expect(briefing).toContain("Name the open project briefing:");
+    expect(briefing).toContain("The project is:");
     expect(briefing).not.toContain("saveFlow");
     expect(briefing).not.toContain("updateNode");
     for (const locale of ["es", "fr", "ja", "pt", "zh-Hans"]) {
@@ -329,11 +332,14 @@ describe("renderer UI system", () => {
     expect(helpPage).toContain("Archi, the chat research agent");
     expect(helpPage).toContain("edit or create graph nodes and groups");
     expect(helpPage).toContain("execute builds");
-    expect(helpPage).toContain("Canvas shortcuts");
-    expect(helpPage).toContain("Space over empty canvas");
-    expect(helpPage).toContain("Toggle the minimap.");
-    expect(helpPage).toContain("Ctrl/Cmd + F");
-    expect(helpPage).toContain("Ctrl/Cmd + drag empty canvas");
+    expect(helpPage).not.toContain("Canvas shortcuts");
+    expect(helpPage).not.toContain("Space over empty canvas");
+    expect(helpPage).toContain("Meet ArchiCode’s AI team");
+    expect(helpPage).toContain("icon: <Earth");
+    expect(helpPage).toContain("Briefing curator");
+    expect(helpPage).toContain("Graph architect");
+    expect(helpPage).toContain("Merge arbiter");
+    expect(helpPage).not.toContain("Current key bindings");
   });
 
   it("mounts the shared safety-broker console for Codex Local research chats", () => {
@@ -2696,8 +2702,8 @@ describe("renderer UI system", () => {
     expect(shortcutsTab).toContain("Reset all to defaults");
     expect(shortcutsTab).toContain("Apply");
     expect(shortcutsTab).toContain("findConflicts");
-    // Live bindings are surfaced in Help, and a Shortcuts link is present.
-    expect(help).toContain("Current key bindings");
+    // Help keeps the Shortcuts link without duplicating the live binding list.
+    expect(help).not.toContain("Current key bindings");
     expect(help).toContain("Open Shortcuts");
     expect(help).toContain("archicode:open-help");
     // IPC bridge for persisting bindings globally.

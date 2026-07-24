@@ -171,6 +171,7 @@ export const createResearchSlice = (set: StoreSet, get: StoreGet): Pick<Archicod
 
   handleResearchChatSessionUpdated: (payload) => set((state) => {
     if (state.rootPath !== payload.projectRoot) return state;
+    if (payload.session.origin?.type === "project-briefing") return state;
     const sessions = state.researchSessions.some((session) => session.id === payload.session.id)
       ? state.researchSessions.map((session) => session.id === payload.session.id ? payload.session : session)
       : [payload.session, ...state.researchSessions];

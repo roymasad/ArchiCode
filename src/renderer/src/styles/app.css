@@ -2502,6 +2502,22 @@ textarea {
   color: var(--success);
 }
 
+.project-briefing-regenerate-confirm.ui-dialog-content {
+  width: min(560px, calc(100vw - 40px));
+}
+
+.project-briefing-regenerate-confirm .confirm-note {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.project-briefing-regenerate-confirm .confirm-note svg {
+  flex: 0 0 auto;
+  margin-top: 1px;
+  color: var(--warning);
+}
+
 .project-briefing-error {
   margin: 0;
   color: var(--danger);
@@ -2567,6 +2583,112 @@ textarea {
 .project-briefing-deck-tools > div {
   display: flex;
   gap: 7px;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.project-briefing-atlas-controls {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  padding-right: 7px;
+  border-right: 1px solid var(--border);
+}
+
+.project-briefing-atlas-status {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  padding: 5px 9px;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border));
+  border-radius: 99px;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--accent) 7%, var(--surface));
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.project-briefing-atlas-status > i {
+  position: relative;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 calc(2px + var(--atlas-input-level, 0) * 7px) color-mix(in srgb, var(--accent) 24%, transparent);
+  transition: box-shadow 80ms linear;
+}
+
+.project-briefing-atlas-status.status-speaking > i {
+  background: var(--success);
+}
+
+.project-briefing-atlas-status.status-thinking > i,
+.project-briefing-atlas-status.status-preparing > i,
+.project-briefing-atlas-status.status-starting > i {
+  animation: briefing-pulse-ring 1.2s ease-out infinite;
+}
+
+.project-briefing-atlas-unavailable {
+  opacity: 0.62;
+}
+
+.project-briefing-atlas-presence {
+  display: grid;
+  gap: 8px;
+  margin-top: 18px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--accent) 42%, var(--border));
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface-raised));
+}
+
+.project-briefing-atlas-presence.is-error {
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+}
+
+.project-briefing-atlas-presence > header {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.project-briefing-atlas-presence > header span {
+  display: inline-flex;
+  gap: 7px;
+  align-items: center;
+  color: var(--accent-strong);
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.project-briefing-atlas-presence > header small,
+.project-briefing-atlas-presence > div small {
+  color: var(--text-subtle);
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.project-briefing-atlas-presence > div {
+  display: grid;
+  gap: 3px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.project-briefing-atlas-presence > div.is-atlas {
+  border-left: 2px solid var(--accent);
+}
+
+.project-briefing-atlas-presence p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .project-briefing-stage {
@@ -3050,7 +3172,6 @@ textarea {
 
 .help-intro,
 .help-quick-start,
-.help-shortcuts,
 .help-footer-note {
   display: grid;
   gap: 8px;
@@ -3060,7 +3181,6 @@ textarea {
 .help-intro p,
 .help-quick-start li,
 .help-section p,
-.help-shortcut-list dd,
 .help-footer-note p {
   margin: 0;
   color: var(--text-muted);
@@ -3108,60 +3228,6 @@ textarea {
   letter-spacing: 0;
 }
 
-.help-shortcuts {
-  padding-top: 14px;
-  border-top: 1px solid var(--border);
-}
-
-.help-shortcuts-heading {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  color: var(--accent-strong);
-}
-
-.help-shortcuts-heading h3 {
-  margin: 2px 0 0;
-  color: var(--text);
-  font-size: 14px;
-  line-height: 1.25;
-  letter-spacing: 0;
-}
-
-.help-shortcut-list {
-  display: grid;
-  gap: 8px;
-  margin: 0;
-}
-
-.help-shortcut-list div {
-  display: grid;
-  grid-template-columns: minmax(160px, 220px) minmax(0, 1fr);
-  gap: 12px;
-  align-items: start;
-  min-width: 0;
-}
-
-.help-shortcut-list dt,
-.help-shortcut-list dd {
-  min-width: 0;
-}
-
-.help-shortcut-list kbd {
-  display: inline-flex;
-  max-width: 100%;
-  padding: 3px 7px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  color: var(--text);
-  background: var(--surface-muted);
-  font-family: inherit;
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1.25;
-  white-space: normal;
-}
-
 .help-footer-note {
   grid-template-columns: auto minmax(0, 1fr);
   align-items: start;
@@ -3190,28 +3256,81 @@ textarea {
   text-decoration: underline;
 }
 
-.help-shortcuts-live {
+.help-agents {
   display: grid;
-  gap: 10px;
-  margin-top: 14px;
-  padding-top: 12px;
-  border-top: 1px dashed var(--border);
+  gap: 12px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
 }
 
-.help-shortcuts-live p {
+.help-agents-heading {
+  display: grid;
+  grid-template-columns: minmax(180px, 0.7fr) minmax(0, 1.3fr);
+  gap: 16px;
+  align-items: end;
+}
+
+.help-agents-heading h3 {
+  margin: 2px 0 0;
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.25;
+  letter-spacing: 0;
+}
+
+.help-agents-heading p,
+.help-agent-card p {
   margin: 0;
   color: var(--text-muted);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
-.help-shortcuts-live ul.help-shortcut-list {
-  grid-template-columns: 1fr;
-}
-
-.help-shortcuts-live ul.help-shortcut-list li {
+.help-agent-grid {
   display: grid;
-  grid-template-columns: minmax(140px, 220px) minmax(0, 1fr);
-  gap: 12px;
-  align-items: baseline;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.help-agent-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 9px;
+  min-width: 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-muted);
+}
+
+.help-agent-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 9px;
+  color: var(--accent-strong);
+  background: var(--accent-muted);
+}
+
+.help-agent-card h4 {
+  margin: 0;
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.2;
+}
+
+.help-agent-card strong {
+  display: block;
+  margin: 2px 0 4px;
+  color: var(--accent-strong);
+  font-size: 11px;
+  line-height: 1.25;
+}
+
+.help-agents > .ui-button {
+  width: fit-content;
 }
 
 .preferences-modal {
@@ -17511,7 +17630,8 @@ button.activity-maintenance-indicator {
 
   .welcome-secondary-actions,
   .help-section-grid,
-  .help-shortcut-list div {
+  .help-agents-heading,
+  .help-agent-grid {
     grid-template-columns: 1fr;
   }
 

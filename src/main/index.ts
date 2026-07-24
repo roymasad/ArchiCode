@@ -103,7 +103,7 @@ import {
   readProjectFileDiff
 } from "./projectTools";
 import { getGraphNodeHistory, listGraphHistory, listHistoricalProjectFiles, loadHistoricalGraphBundle, readHistoricalProjectFile } from "./graphHistory";
-import { askProjectBriefingQuestion, generateProjectBriefing, listProjectBriefings, loadProjectBriefing } from "./projectBriefing";
+import { askProjectBriefingQuestion, generateProjectBriefing, listProjectBriefings, loadProjectBriefing, projectBriefingLanguageInstruction } from "./projectBriefing";
 import { exportProjectBriefing, type ProjectBriefingExportFormat } from "./projectBriefingExport";
 import { previewGraphBranches } from "./graphBranchPreview";
 import {
@@ -125,8 +125,8 @@ import {
 } from "./tts";
 import { parseGlobalResearchPersonality, parseGlobalResearchVerbosity, researchPersonalityPrompt, type GlobalResearchPersonality, type GlobalResearchVerbosity } from "../shared/researchPersonality";
 import { createCodexRealtimeClientSecret, getCodexRealtimeStatus, type CodexRealtimeStartInput } from "./codexRealtime";
-import { buildCompactResearchContext, buildResearchChatHistoryToolResult, buildResearchPreviousChatsToolResult } from "./research/contextAssembly";
-import { buildResearchRealtimePrompt } from "./research/realtimePrompt";
+import { buildCompactResearchContext, buildExpandedResearchContextToolResult, buildResearchChatHistoryToolResult, buildResearchPreviousChatsToolResult } from "./research/contextAssembly";
+import { buildBriefingCuratorRealtimePrompt, buildResearchRealtimePrompt } from "./research/realtimePrompt";
 import { deriveResearchChatContextPlanForModel } from "../shared/contextBudget";
 import { cancelRealtimeResearchTask, getRealtimeResearchTask, startRealtimeResearchTask, type RealtimeResearchTaskEvent, type StartRealtimeResearchTaskInput } from "./research/realtimeTasks";
 import { shutdownLocalProviderProcesses } from "./providers/localCli";
@@ -768,6 +768,20 @@ async function codexRealtimeResearchPrompt(input: CodexRealtimeStartInput): Prom
     contextPlan
   });
   const compactContext = await buildCompactResearchContext(projectRoot, bundle, researchSession.scope);
+  if (input.surface === "briefing-curator") {
+    const briefingId = input.briefing?.briefingId?.trim();
+    if (!briefingId) throw new Error("Atlas needs a saved briefing before starting Live.");
+    const briefing = await loadProjectBriefing(projectRoot, briefingId);
+    return buildBriefingCuratorRealtimePrompt({
+      briefing,
+      compactContext,
+      contextPlan,
+      history: input.briefing?.history ?? [],
+      languageInstruction: projectBriefingLanguageInstruction(briefing.locale),
+      session: researchSession,
+      slideIndex: input.briefing?.slideIndex ?? 0
+    });
+  }
   return buildResearchRealtimePrompt({
     compactContext,
     contextPlan,
@@ -780,7 +794,8 @@ async function codexRealtimeResearchPrompt(input: CodexRealtimeStartInput): Prom
 const codexRealtimeDirectProjectTools = new Set([
   "archicode_project_list_files",
   "archicode_project_search_files",
-  "archicode_project_read_file"
+  "archicode_project_read_file",
+  "archicode_project_query_code_graph"
 ]);
 
 async function callCodexRealtimeReadTool(input: {
@@ -803,6 +818,27 @@ async function callCodexRealtimeReadTool(input: {
     return buildResearchPreviousChatsToolResult(
       await listResearchChats(input.projectRoot),
       input.researchSessionId,
+      input.argumentsJson
+    );
+  }
+  if (input.providerToolName === "archicode_read_research_context") {
+    const [bundle, session] = await Promise.all([
+      loadProject(input.projectRoot),
+      prepareResearchChatForContextPlan({
+        projectRoot: input.projectRoot,
+        sessionId: input.researchSessionId,
+        contextPlan
+      })
+    ]);
+    return buildExpandedResearchContextToolResult(
+      input.projectRoot,
+      bundle,
+      session.scope,
+      [],
+      new Set(),
+      new Set(),
+      [],
+      [],
       input.argumentsJson
     );
   }
@@ -2937,11 +2973,9 @@ function registerIpc(): void {
     if (!prompt) throw new Error("ArchiCode could not assemble the selected Research chat context for Live.");
     return createCodexRealtimeClientSecret({ ...input, apiKey, prompt });
   });
-  ipcMain.handle("archicode:get-codex-realtime-context", async (_event, input: { model?: string; projectRoot: string; researchSessionId: string }) => {
+  ipcMain.handle("archicode:get-codex-realtime-context", async (_event, input: Omit<CodexRealtimeStartInput, "voice"> & { projectRoot: string; researchSessionId: string }) => {
     const prompt = await codexRealtimeResearchPrompt({
-      projectRoot: input.projectRoot,
-      researchSessionId: input.researchSessionId,
-      model: input.model,
+      ...input,
       voice: "marin"
     });
     if (!prompt) throw new Error("ArchiCode could not refresh the selected Research chat context.");

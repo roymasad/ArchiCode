@@ -316,7 +316,7 @@ export async function listResearchChats(projectRoot: string): Promise<ResearchCh
     await persistReconciledStaleRunningSubagents(projectRoot).catch(() => undefined);
   }
   return reconciled.map(({ session }) => session)
-    .filter((session) => !session.archived)
+    .filter((session) => !session.archived && session.origin?.type !== "project-briefing")
     .map((session) => researchChatSessionSchema.parse({
       ...session,
       autoApproveGraphChanges: bundle.project.settings.researchAutoApproveGraphChanges
@@ -327,6 +327,7 @@ export async function listResearchChats(projectRoot: string): Promise<ResearchCh
 export async function createResearchChat(input: {
   projectRoot: string;
   scope: ResearchChatScope;
+  origin?: ResearchChatSession["origin"];
   title?: string;
   providerId?: string;
   modelId?: string;
@@ -340,6 +341,7 @@ export async function createResearchChat(input: {
     id: id("research"),
     projectRoot: input.projectRoot,
     scope,
+    origin: input.origin,
     title: input.title?.trim() || defaultTitleForScope(bundle, scope),
     summary: "",
     autoApproveGraphChanges: bundle.project.settings.researchAutoApproveGraphChanges,

@@ -1,4 +1,5 @@
 import {
+  AlertTriangle,
   ArrowRight,
   BookOpen,
   Box,
@@ -10,6 +11,8 @@ import {
   FileText,
   Loader2,
   MessageCircleQuestion,
+  Mic,
+  MicOff,
   Monitor,
   Network,
   Play,
@@ -17,10 +20,18 @@ import {
   Route,
   ShieldCheck,
   Sparkles,
+  Square,
   UserRound
 } from "lucide-react";
-import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type ReactNode } from "react";
 import { useShallow } from "zustand/react/shallow";
+import {
+  codexRealtimeModels,
+  codexRealtimeV2Voices,
+  defaultAtlasRealtimeVoice,
+  defaultCodexRealtimeModel,
+  type ResearchChatSession
+} from "@shared/schema";
 import type {
   ProjectBriefing as ProjectBriefingDeck,
   ProjectBriefingAnswer,
@@ -30,6 +41,7 @@ import type {
 import { t } from "../i18n";
 import { useArchicodeStore } from "../store/useArchicodeStore";
 import { Badge, Button, DialogContent, DialogRoot, TextInput, Tooltip } from "./ui";
+import { OpenAiRealtimeCall, type RealtimeFunctionCall } from "./researchRealtime";
 
 type QuestionHistory = Array<{ question: string; answer: string }>;
 
@@ -136,9 +148,16 @@ function EvidenceList({ evidence }: { evidence: ProjectBriefingDeck["slides"][nu
 }
 
 export function ProjectBriefing() {
-  const { rootPath, bundle } = useArchicodeStore(useShallow((state) => ({
+  const {
+    rootPath,
+    bundle,
+    globalVoiceSettings,
+    openProjectSettings
+  } = useArchicodeStore(useShallow((state) => ({
     rootPath: state.rootPath,
-    bundle: state.bundle
+    bundle: state.bundle,
+    globalVoiceSettings: state.globalVoiceSettings,
+    openProjectSettings: state.openProjectSettings
   })));
   const [launcherOpen, setLauncherOpen] = useState(false);
   const [deckOpen, setDeckOpen] = useState(false);
@@ -157,10 +176,66 @@ export function ProjectBriefing() {
   const [asking, setAsking] = useState(false);
   const [exporting, setExporting] = useState<"pdf" | "pptx" | null>(null);
   const [history, setHistory] = useState<QuestionHistory>([]);
+  const [regenerateConfirmation, setRegenerateConfirmation] = useState<ProjectBriefingDeck | null>(null);
+  const [realtimeAvailability, setRealtimeAvailability] = useState<Awaited<ReturnType<typeof window.archicode.getCodexRealtimeStatus>> | null>(null);
+  const [atlasSession, setAtlasSession] = useState<{
+    error?: string | null;
+    inputLevel: number;
+    muted: boolean;
+    researchSessionId: string;
+    sessionId: string;
+    status: "preparing" | "starting" | "hearing" | "listening" | "speaking" | "thinking" | "ended" | "error";
+  } | null>(null);
+  const [atlasLiveTurn, setAtlasLiveTurn] = useState<{ assistant?: string; user?: string } | null>(null);
+  const atlasCallRef = useRef<OpenAiRealtimeCall | null>(null);
+  const atlasStartGenerationRef = useRef(0);
+  const atlasStartInFlightRef = useRef(false);
+  const atlasIntroductionInProgressRef = useRef(false);
+  const atlasIntroducedThisOpeningRef = useRef(false);
+  const atlasConversationRef = useRef<ResearchChatSession | null>(null);
+  const atlasResearchSessionIdRef = useRef<string | null>(null);
+  const deckRef = useRef<ProjectBriefingDeck | null>(null);
+  const slideIndexRef = useRef(0);
+  const historyRef = useRef<QuestionHistory>([]);
   const slide = deck?.slides[slideIndex] ?? null;
   const progress = deck ? ((slideIndex + 1) / deck.slides.length) * 100 : 0;
   const preset = useMemo(() => presetCards.find((item) => item.preset === deck?.preset), [deck?.preset]);
   const generationStageIndex = Math.floor(generationSeconds / 3) % generationStages.length;
+  const realtimeMode = globalVoiceSettings?.mode === "openai-realtime";
+  const configuredRealtimeModel = globalVoiceSettings?.atlasRealtime.model
+    && (codexRealtimeModels as readonly string[]).includes(globalVoiceSettings.atlasRealtime.model)
+    ? globalVoiceSettings.atlasRealtime.model
+    : defaultCodexRealtimeModel;
+  const atlasLive = Boolean(atlasSession && atlasSession.status !== "ended" && atlasSession.status !== "error");
+  const realtimeReady = realtimeMode && Boolean(realtimeAvailability?.realtimeAvailable);
+  const atlasStatusLabel = atlasSession?.muted
+    ? t("Muted")
+    : atlasSession?.status === "speaking"
+      ? t("Speaking")
+      : atlasSession?.status === "thinking"
+        ? t("Thinking")
+        : atlasSession?.status === "hearing"
+          ? t("Hearing you")
+          : atlasSession?.status === "preparing" || atlasSession?.status === "starting"
+            ? t("Connecting")
+            : t("Listening");
+  const realtimeSetupHint = !realtimeMode
+    ? t("This briefing supports live discussion with Atlas. Enable OpenAI Realtime and add an API key in Voice settings.")
+    : realtimeAvailability?.message
+      ? t("Live discussion is not ready: {{message}}", { message: realtimeAvailability.message })
+      : t("Checking OpenAI Realtime setup...");
+
+  useEffect(() => {
+    deckRef.current = deck;
+  }, [deck]);
+
+  useEffect(() => {
+    slideIndexRef.current = slideIndex;
+  }, [slideIndex]);
+
+  useEffect(() => {
+    historyRef.current = history;
+  }, [history]);
 
   useEffect(() => {
     if (!loadingPreset) {
@@ -170,6 +245,325 @@ export function ProjectBriefing() {
     const timer = window.setInterval(() => setGenerationSeconds((value) => value + 1), 1000);
     return () => window.clearInterval(timer);
   }, [loadingPreset]);
+
+  useEffect(() => {
+    if (!deckOpen || !realtimeMode) {
+      setRealtimeAvailability(null);
+      return;
+    }
+    let cancelled = false;
+    void window.archicode.getCodexRealtimeStatus(configuredRealtimeModel)
+      .then((status) => {
+        if (!cancelled) setRealtimeAvailability(status);
+      })
+      .catch((cause) => {
+        if (!cancelled) {
+          setRealtimeAvailability({
+            available: true,
+            command: "OpenAI API",
+            message: cause instanceof Error ? cause.message : String(cause),
+            realtimeAvailable: false
+          });
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [configuredRealtimeModel, deckOpen, realtimeMode]);
+
+  const stopAtlas = useCallback(() => {
+    atlasStartGenerationRef.current += 1;
+    atlasStartInFlightRef.current = false;
+    atlasIntroductionInProgressRef.current = false;
+    atlasCallRef.current?.close();
+    atlasCallRef.current = null;
+    atlasResearchSessionIdRef.current = null;
+    setAtlasSession((current) => current ? { ...current, inputLevel: 0, status: "ended" } : null);
+  }, []);
+
+  const closeAtlasOpening = useCallback(() => {
+    stopAtlas();
+    atlasConversationRef.current = null;
+    atlasIntroducedThisOpeningRef.current = false;
+  }, [stopAtlas]);
+
+  useEffect(() => () => stopAtlas(), [stopAtlas]);
+
+  const persistAtlasTurn = useCallback(async (
+    researchSessionId: string,
+    role: "user" | "assistant",
+    text: string
+  ) => {
+    if (!rootPath || !text.trim()) return;
+    const session = await window.archicode.appendResearchChatTranscript({
+      projectRoot: rootPath,
+      sessionId: researchSessionId,
+      role,
+      text
+    });
+    if (atlasConversationRef.current?.id === session.id) atlasConversationRef.current = session;
+  }, [rootPath]);
+
+  const ensureAtlasResearchSession = useCallback(async (currentDeck: ProjectBriefingDeck) => {
+    if (!rootPath || !bundle) throw new Error("Open a project before talking with Atlas.");
+    const existing = atlasConversationRef.current;
+    if (
+      existing?.origin?.type === "project-briefing"
+      && existing.origin.briefingId === currentDeck.id
+    ) return existing;
+    atlasConversationRef.current = null;
+    const session = await window.archicode.createResearchChat({
+      projectRoot: rootPath,
+      scope: { type: "project", projectId: bundle.project.id },
+      origin: { type: "project-briefing", briefingId: currentDeck.id },
+      title: `Atlas · ${currentDeck.title}`,
+      providerId: bundle.project.settings.providers.find((provider) => provider.enabled)?.id
+    });
+    atlasConversationRef.current = session;
+    return session;
+  }, [bundle, rootPath]);
+
+  const atlasBriefingInput = useCallback(() => {
+    const currentDeck = deckRef.current;
+    if (!currentDeck) return null;
+    return {
+      briefingId: currentDeck.id,
+      history: historyRef.current,
+      slideIndex: slideIndexRef.current
+    };
+  }, []);
+
+  const atlasAuthoritativeViewContext = useCallback((reason: string) => {
+    const currentDeck = deckRef.current;
+    if (!currentDeck) return "";
+    const currentIndex = Math.max(0, Math.min(currentDeck.slides.length - 1, slideIndexRef.current));
+    const currentSlide = currentDeck.slides[currentIndex];
+    if (!currentSlide) return "";
+    return [
+      "AUTHORITATIVE CURRENT BRIEFING VIEW — this supersedes every earlier slide or page reference in the conversation.",
+      `Reason for refresh: ${reason}.`,
+      `The user is visibly on slide ${currentIndex + 1} of ${currentDeck.slides.length}.`,
+      `Visible slide id: ${currentSlide.id}.`,
+      `Visible slide title: ${currentSlide.title}.`,
+      JSON.stringify(currentSlide, null, 2),
+      "Do not claim that another slide is visible. Do not speak merely because this context update arrived."
+    ].join("\n\n");
+  }, []);
+
+  const handleAtlasFunctionCall = useCallback(async (call: RealtimeFunctionCall) => {
+    const realtime = atlasCallRef.current;
+    const researchSessionId = atlasResearchSessionIdRef.current;
+    const briefing = atlasBriefingInput();
+    if (!realtime || !rootPath || !researchSessionId || !briefing) return;
+    try {
+      if (call.name === "archicode_refresh_project_context") {
+        const context = await window.archicode.getCodexRealtimeContext({
+          briefing,
+          model: configuredRealtimeModel,
+          projectRoot: rootPath,
+          researchSessionId,
+          surface: "briefing-curator"
+        });
+        realtime.sendFunctionOutput(call.callId, { context });
+        return;
+      }
+      if ([
+        "archicode_read_research_context",
+        "archicode_read_chat_history",
+        "archicode_search_previous_chats",
+        "archicode_project_list_files",
+        "archicode_project_search_files",
+        "archicode_project_read_file",
+        "archicode_project_query_code_graph"
+      ].includes(call.name)) {
+        const resultText = await window.archicode.callCodexRealtimeReadTool({
+          argumentsJson: call.argumentsJson || "{}",
+          model: configuredRealtimeModel,
+          projectRoot: rootPath,
+          providerToolName: call.name,
+          researchSessionId
+        });
+        let result: unknown = resultText;
+        try {
+          result = JSON.parse(resultText);
+        } catch {
+          // Fuller graph and context reads may intentionally return formatted text.
+        }
+        realtime.sendFunctionOutput(call.callId, { result });
+        return;
+      }
+      throw new Error(`Atlas cannot use ${call.name} in read-only briefing mode.`);
+    } catch (cause) {
+      realtime.sendFunctionOutput(call.callId, {
+        error: cause instanceof Error ? cause.message : "Atlas could not complete that read-only lookup."
+      });
+    }
+  }, [atlasBriefingInput, configuredRealtimeModel, rootPath]);
+
+  const startAtlas = useCallback(async () => {
+    const currentDeck = deckRef.current;
+    if (
+      atlasStartInFlightRef.current
+      || atlasCallRef.current
+      || !rootPath
+      || !bundle
+      || !currentDeck
+      || !realtimeReady
+      || !globalVoiceSettings
+    ) return;
+    atlasStartInFlightRef.current = true;
+    const generation = atlasStartGenerationRef.current + 1;
+    atlasStartGenerationRef.current = generation;
+    const isCurrent = () => atlasStartGenerationRef.current === generation;
+    let call: OpenAiRealtimeCall | null = null;
+    try {
+      setAtlasLiveTurn(null);
+      setAtlasSession({
+        inputLevel: 0,
+        muted: false,
+        researchSessionId: "",
+        sessionId: "starting",
+        status: "preparing"
+      });
+      const researchSession = await ensureAtlasResearchSession(currentDeck);
+      if (!isCurrent()) return;
+      atlasResearchSessionIdRef.current = researchSession.id;
+      const voice = globalVoiceSettings.atlasRealtime.voice
+        && (codexRealtimeV2Voices as readonly string[]).includes(globalVoiceSettings.atlasRealtime.voice)
+        ? globalVoiceSettings.atlasRealtime.voice
+        : defaultAtlasRealtimeVoice;
+      const briefing = atlasBriefingInput();
+      if (!briefing) throw new Error("Atlas could not read the active briefing.");
+      const secret = await window.archicode.startCodexRealtime({
+        briefing,
+        includeStartupContext: true,
+        model: configuredRealtimeModel,
+        outputModality: globalVoiceSettings.codexRealtime.outputModality,
+        projectRoot: rootPath,
+        researchSessionId: researchSession.id,
+        surface: "briefing-curator",
+        voice
+      });
+      if (!isCurrent()) return;
+      const sessionId = secret.sessionId ?? window.crypto.randomUUID();
+      call = new OpenAiRealtimeCall({
+        onAssistantTranscript: (text) => {
+          if (!isCurrent()) return;
+          setAtlasLiveTurn((current) => ({ ...current, assistant: text }));
+          void persistAtlasTurn(researchSession.id, "assistant", text);
+        },
+        onError: (message) => {
+          if (!isCurrent()) return;
+          atlasCallRef.current?.close();
+          atlasCallRef.current = null;
+          setAtlasSession((current) => current ? { ...current, error: message, status: "error" } : current);
+        },
+        onFunctionCall: (functionCall) => {
+          if (isCurrent()) void handleAtlasFunctionCall(functionCall);
+        },
+        onInputLevel: (inputLevel) => {
+          if (isCurrent()) setAtlasSession((current) => current ? { ...current, inputLevel } : current);
+        },
+        onSessionCreated: () => undefined,
+        onStatus: (status) => {
+          if (!isCurrent()) return;
+          if (status === "listening" && atlasIntroductionInProgressRef.current) {
+            atlasIntroductionInProgressRef.current = false;
+            atlasCallRef.current?.setMuted(false);
+            setAtlasSession((current) => current ? { ...current, inputLevel: 0, muted: false, status } : current);
+            return;
+          }
+          setAtlasSession((current) => current ? { ...current, status } : current);
+        },
+        onUserTranscript: (text) => {
+          if (!isCurrent()) return;
+          const viewContext = atlasAuthoritativeViewContext("the user just spoke");
+          if (viewContext) atlasCallRef.current?.appendDeveloperContext(viewContext, false);
+          setAtlasLiveTurn({ user: text });
+          void persistAtlasTurn(researchSession.id, "user", text);
+        }
+      });
+      atlasCallRef.current = call;
+      setAtlasSession({
+        inputLevel: 0,
+        muted: false,
+        researchSessionId: researchSession.id,
+        sessionId,
+        status: "starting"
+      });
+      await call.connect(secret);
+      if (!isCurrent()) return;
+      const viewContext = atlasAuthoritativeViewContext("the live session has connected");
+      if (viewContext) call.appendDeveloperContext(viewContext, false);
+      if (!atlasIntroducedThisOpeningRef.current) {
+        atlasIntroducedThisOpeningRef.current = true;
+        atlasIntroductionInProgressRef.current = true;
+        call.setMuted(true);
+        setAtlasSession((current) => current ? { ...current, inputLevel: 0, muted: true } : current);
+        call.appendDeveloperContext([
+          "Give the opening introduction exactly once now.",
+          "Use two or three concise, natural sentences.",
+          "Introduce yourself as Atlas, the project curator.",
+          `Name the open project briefing: ${currentDeck.title}.`,
+          `Its subtitle is: ${currentDeck.subtitle}.`,
+          `The project is: ${bundle.project.name}.`,
+          "Briefly explain what this presentation will help the user understand, grounded in the briefing title, subtitle, and deck.",
+          "Invite the user to interrupt or ask questions.",
+          "Do not start narrating the current slide, and do not send a second greeting."
+        ].join("\n"), true);
+      }
+    } catch (cause) {
+      if (atlasIntroductionInProgressRef.current) {
+        atlasIntroductionInProgressRef.current = false;
+        atlasIntroducedThisOpeningRef.current = false;
+      }
+      call?.close();
+      if (atlasCallRef.current === call) atlasCallRef.current = null;
+      if (!isCurrent()) return;
+      setAtlasSession((current) => ({
+        error: cause instanceof Error ? cause.message : "Could not start Atlas.",
+        inputLevel: 0,
+        muted: false,
+        researchSessionId: current?.researchSessionId ?? "",
+        sessionId: current?.sessionId ?? "error",
+        status: "error"
+      }));
+    } finally {
+      if (isCurrent()) atlasStartInFlightRef.current = false;
+    }
+  }, [
+    atlasAuthoritativeViewContext,
+    atlasBriefingInput,
+    bundle,
+    configuredRealtimeModel,
+    ensureAtlasResearchSession,
+    globalVoiceSettings,
+    handleAtlasFunctionCall,
+    persistAtlasTurn,
+    realtimeReady,
+    rootPath
+  ]);
+
+  const toggleAtlasMute = useCallback(() => {
+    const call = atlasCallRef.current;
+    if (!call) return;
+    const muted = !call.isMuted();
+    call.setMuted(muted);
+    setAtlasSession((current) => current ? {
+      ...current,
+      inputLevel: muted ? 0 : current.inputLevel,
+      muted
+    } : current);
+  }, []);
+
+  useEffect(() => {
+    const call = atlasCallRef.current;
+    if (!call || !atlasLive) return;
+    const viewContext = atlasAuthoritativeViewContext(
+      showEvidence ? "the user changed slides or opened the evidence panel" : "the user changed slides or closed the evidence panel"
+    );
+    if (viewContext) call.appendDeveloperContext(viewContext, false);
+  }, [atlasAuthoritativeViewContext, atlasLive, showEvidence, slideIndex]);
 
   const openLauncher = async () => {
     if (!rootPath) return;
@@ -186,6 +580,10 @@ export function ProjectBriefing() {
   };
 
   const openDeck = (savedDeck: ProjectBriefingDeck) => {
+    closeAtlasOpening();
+    deckRef.current = savedDeck;
+    slideIndexRef.current = 0;
+    historyRef.current = [];
     setDeck(savedDeck);
     setSlideIndex(0);
     setShowEvidence(false);
@@ -213,7 +611,9 @@ export function ProjectBriefing() {
 
   const moveTo = (nextIndex: number) => {
     if (!deck) return;
-    setSlideIndex(Math.max(0, Math.min(deck.slides.length - 1, nextIndex)));
+    const boundedIndex = Math.max(0, Math.min(deck.slides.length - 1, nextIndex));
+    slideIndexRef.current = boundedIndex;
+    setSlideIndex(boundedIndex);
     setShowEvidence(false);
     setAnswer(null);
     setActiveQuestion(null);
@@ -237,7 +637,23 @@ export function ProjectBriefing() {
         history
       });
       setAnswer(nextAnswer);
-      setHistory((items) => [...items, { question: nextQuestion, answer: nextAnswer.answer }].slice(-6));
+      const nextHistory = [...history, { question: nextQuestion, answer: nextAnswer.answer }].slice(-6);
+      historyRef.current = nextHistory;
+      setHistory(nextHistory);
+      atlasCallRef.current?.appendDeveloperContext([
+        "The user asked a typed question in the briefing and received this evidence-grounded answer from the read-only curator.",
+        `Question: ${nextQuestion}`,
+        `Answer: ${nextAnswer.answer}`,
+        `Evidence: ${JSON.stringify(nextAnswer.evidence)}`,
+        "Treat this as part of the same conversation. Do not speak now; use it if the user follows up."
+      ].join("\n\n"), false);
+      const researchSessionId = atlasResearchSessionIdRef.current;
+      if (researchSessionId) {
+        void (async () => {
+          await persistAtlasTurn(researchSessionId, "user", nextQuestion);
+          await persistAtlasTurn(researchSessionId, "assistant", nextAnswer.answer);
+        })();
+      }
       setQuestion("");
     } catch (cause) {
       setQuestionError(cause instanceof Error ? cause.message : String(cause));
@@ -246,9 +662,12 @@ export function ProjectBriefing() {
     }
   };
 
-  const regenerateDeck = () => {
-    if (!deck) return;
-    const selectedPreset = deck.preset;
+  const confirmRegenerateDeck = () => {
+    const confirmation = regenerateConfirmation;
+    if (!confirmation) return;
+    closeAtlasOpening();
+    const selectedPreset = confirmation.preset;
+    setRegenerateConfirmation(null);
     setDeckOpen(false);
     setLauncherOpen(true);
     void startBriefing(selectedPreset);
@@ -287,7 +706,7 @@ export function ProjectBriefing() {
       <DialogRoot open={launcherOpen} onOpenChange={(open) => !loadingPreset && setLauncherOpen(open)}>
         <DialogContent
           className="project-briefing-launcher"
-          title={t("Hi! I’m Archi. How should I brief you?")}
+          title={t("Hi! I’m Atlas, your curator. How should I brief you?")}
           description={t("Choose a pace. I’ll investigate read-only project evidence and curate a small visual story.")}
         >
           {loadingPreset ? (
@@ -331,7 +750,11 @@ export function ProjectBriefing() {
                             <Play size={15} />
                             {t("Open saved")}
                           </Button>
-                          <Button type="button" size="sm" onClick={() => void startBriefing(card.preset)}>
+                          <Button
+                            type="button"
+                            size="sm"
+                            onClick={() => setRegenerateConfirmation(savedDeck)}
+                          >
                             <RefreshCw size={15} />
                             {t("Regenerate")}
                           </Button>
@@ -361,7 +784,10 @@ export function ProjectBriefing() {
         </DialogContent>
       </DialogRoot>
 
-      <DialogRoot open={deckOpen} onOpenChange={setDeckOpen}>
+      <DialogRoot open={deckOpen} onOpenChange={(open) => {
+        if (!open) closeAtlasOpening();
+        setDeckOpen(open);
+      }}>
         {deck && slide ? (
           <DialogContent
             className="project-briefing-deck"
@@ -374,7 +800,51 @@ export function ProjectBriefing() {
             <div className="project-briefing-deck-tools">
               <span><ShieldCheck size={14} /> {t("Saved in this project")}</span>
               <div>
-                <Button type="button" size="sm" onClick={regenerateDeck} disabled={Boolean(exporting) || asking}>
+                {atlasLive ? (
+                  <div className="project-briefing-atlas-controls">
+                    <span className={`project-briefing-atlas-status status-${atlasSession?.status ?? "listening"}`}>
+                      <i style={{ "--atlas-input-level": atlasSession?.inputLevel ?? 0 } as CSSProperties} />
+                      {atlasStatusLabel}
+                    </span>
+                    <Tooltip content={atlasSession?.muted ? t("Unmute microphone") : t("Mute microphone")}>
+                      <Button type="button" size="sm" onClick={toggleAtlasMute} aria-pressed={Boolean(atlasSession?.muted)}>
+                        {atlasSession?.muted ? <MicOff size={15} /> : <Mic size={15} />}
+                      </Button>
+                    </Tooltip>
+                    <Tooltip content={t("End the live conversation with Atlas.")}>
+                      <Button type="button" size="sm" variant="danger" onClick={stopAtlas}>
+                        <Square size={14} />
+                        {t("End live")}
+                      </Button>
+                    </Tooltip>
+                  </div>
+                ) : realtimeReady ? (
+                  <Tooltip content={t("Talk with Atlas about this briefing and the wider project.")}>
+                    <Button type="button" size="sm" variant="primary" onClick={() => void startAtlas()}>
+                      <Mic size={15} />
+                      {t("Talk with Atlas")}
+                    </Button>
+                  </Tooltip>
+                ) : (
+                  <Tooltip content={realtimeSetupHint}>
+                    <Button
+                      type="button"
+                      size="sm"
+                      className="project-briefing-atlas-unavailable"
+                      onClick={() => openProjectSettings("advanced")}
+                      aria-label={t("Set up live discussion with Atlas")}
+                    >
+                      <MicOff size={15} />
+                      {t("Live discussion")}
+                    </Button>
+                  </Tooltip>
+                )}
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => setRegenerateConfirmation(deck)}
+                  disabled={Boolean(exporting) || asking}
+                >
                   <RefreshCw size={15} />
                   {t("Regenerate")}
                 </Button>
@@ -398,6 +868,28 @@ export function ProjectBriefing() {
                 </div>
                 <h2>{slide.title}</h2>
                 <p>{slide.body}</p>
+
+                {atlasSession && atlasSession.status !== "ended" ? (
+                  <section className={`project-briefing-atlas-presence${atlasSession.status === "error" ? " is-error" : ""}`} aria-live="polite">
+                    <header>
+                      <span><Mic size={15} /> {t("Atlas · Project curator")}</span>
+                      <small>{atlasSession.status === "error" ? t("Connection ended") : atlasStatusLabel}</small>
+                    </header>
+                    {atlasLiveTurn?.user ? (
+                      <div>
+                        <small>{t("You")}</small>
+                        <p>{atlasLiveTurn.user}</p>
+                      </div>
+                    ) : null}
+                    {atlasLiveTurn?.assistant ? (
+                      <div className="is-atlas">
+                        <small>{t("Atlas")}</small>
+                        <p>{atlasLiveTurn.assistant}</p>
+                      </div>
+                    ) : null}
+                    {atlasSession.error ? <p className="project-briefing-error">{atlasSession.error}</p> : null}
+                  </section>
+                ) : null}
 
                 {answer ? (
                   <section className="project-briefing-answer" aria-live="polite">
@@ -505,13 +997,63 @@ export function ProjectBriefing() {
               <Button
                 type="button"
                 variant="primary"
-                onClick={() => slideIndex === deck.slides.length - 1 ? setDeckOpen(false) : moveTo(slideIndex + 1)}
+                onClick={() => {
+                  if (slideIndex === deck.slides.length - 1) {
+                    closeAtlasOpening();
+                    setDeckOpen(false);
+                  } else {
+                    moveTo(slideIndex + 1);
+                  }
+                }}
                 disabled={asking}
               >
                 {slideIndex === deck.slides.length - 1 ? t("Finish") : t("Next")}
                 {slideIndex === deck.slides.length - 1 ? <Sparkles size={17} /> : <ChevronRight size={17} />}
               </Button>
             </footer>
+          </DialogContent>
+        ) : null}
+      </DialogRoot>
+
+      <DialogRoot
+        open={Boolean(regenerateConfirmation)}
+        onOpenChange={(open) => {
+          if (!open && !loadingPreset) setRegenerateConfirmation(null);
+        }}
+      >
+        {regenerateConfirmation ? (
+          <DialogContent
+            className="project-briefing-regenerate-confirm"
+            title={t("Regenerate this briefing?")}
+            description={t("This will replace the saved {{preset}} briefing.", {
+              preset: t(presetCards.find((item) => item.preset === regenerateConfirmation.preset)?.title ?? "Project briefing")
+            })}
+          >
+            <div className="confirm-summary">
+              <div className="confirm-summary-grid">
+                <span>
+                  <b>{t("Saved briefing")}</b>
+                  {regenerateConfirmation.title}
+                </span>
+                <span>
+                  <b>{t("Effect")}</b>
+                  {t("The current saved presentation will be permanently replaced.")}
+                </span>
+              </div>
+              <p className="confirm-note">
+                <AlertTriangle size={15} />
+                {t("Downloaded PDF or PowerPoint files are not affected. The existing Atlas conversation stays in Research history but will not be linked to the new briefing.")}
+              </p>
+            </div>
+            <div className="dialog-actions">
+              <Button type="button" onClick={() => setRegenerateConfirmation(null)}>
+                {t("Cancel")}
+              </Button>
+              <Button type="button" variant="danger" onClick={confirmRegenerateDeck}>
+                <RefreshCw size={15} />
+                {t("Regenerate and replace")}
+              </Button>
+            </div>
           </DialogContent>
         ) : null}
       </DialogRoot>

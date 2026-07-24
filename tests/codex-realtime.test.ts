@@ -1,9 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
 import { createCodexRealtimeClientSecret } from "../src/main/codexRealtime";
-import { buildResearchRealtimePrompt } from "../src/main/research/realtimePrompt";
+import { buildBriefingCuratorRealtimePrompt, buildResearchRealtimePrompt } from "../src/main/research/realtimePrompt";
 import { OpenAiRealtimeCall, OpenAiRealtimeEventBridge } from "../src/renderer/src/components/researchRealtime";
 import { deriveResearchChatContextPlanForModel } from "../src/shared/contextBudget";
 import { researchChatMessageSchema } from "../src/shared/schema";
+import { projectBriefingSchema, projectBriefingVoiceCommands } from "../src/shared/projectBriefing";
 
 function message(index: number, role: "user" | "assistant", content: string) {
   return researchChatMessageSchema.parse({
@@ -83,6 +84,65 @@ describe("OpenAI Realtime Research context", () => {
     expect(prompt).not.toContain("turn-0");
     expect(prompt).toContain(`turn-${messages.length - 1}`);
   });
+
+  it("gives Atlas complete briefing and project awareness without narration or action authority", () => {
+    const briefing = projectBriefingSchema.parse({
+      id: "briefing-atlas",
+      projectId: "project-voice",
+      preset: "quick",
+      locale: "en",
+      title: "Project in five cards",
+      subtitle: "A useful orientation",
+      generatedAt: "2026-07-24T10:00:00.000Z",
+      voice: projectBriefingVoiceCommands,
+      slides: Array.from({ length: 5 }, (_, index) => ({
+        id: `slide-${index + 1}`,
+        kicker: `Part ${index + 1}`,
+        title: `Slide ${index + 1}`,
+        body: `Grounded explanation ${index + 1}`,
+        narration: `Natural narration ${index + 1}`,
+        visual: {
+          kind: "spotlight",
+          items: [{ id: "system", label: "System", kind: "system", tone: "cyan" }],
+          connections: []
+        },
+        evidence: [{ reference: "project:project-voice", label: "Project", excerpt: "Grounded project fact." }],
+        suggestedQuestions: []
+      }))
+    });
+    const prompt = buildBriefingCuratorRealtimePrompt({
+      briefing,
+      compactContext: JSON.stringify({ project: { name: "Voice Project" }, graph: { flows: ["Checkout"] } }),
+      contextPlan,
+      history: [{ question: "Who uses it?", answer: "Operators use it." }],
+      languageInstruction: "Write all user-facing content in English.",
+      session: {
+        title: "Atlas · Project in five cards",
+        scope: { type: "project", projectId: "project-voice" },
+        messages: [message(1, "assistant", "Welcome to the briefing.")]
+      },
+      slideIndex: 2
+    });
+
+    expect(prompt).toContain("You are Atlas");
+    expect(prompt).toContain("distinct from Archi");
+    expect(prompt).toContain("exactly one concise opening of two or three natural sentences");
+    expect(prompt).toContain("name the project briefing that is open");
+    expect(prompt).toContain("what this presentation will help the user understand");
+    expect(prompt).toContain("Every newly opened briefing is a fresh orientation");
+    expect(prompt).toContain("Never infer that the user is already aligned");
+    expect(prompt).toContain("Do not narrate slide changes");
+    expect(prompt).toContain("strictly read-only");
+    expect(prompt).toContain("archicode_read_research_context");
+    expect(prompt).toContain("AUTHORITATIVE CURRENT BRIEFING VIEW");
+    expect(prompt).toContain("always wins");
+    expect(prompt).toContain("Voice Project");
+    expect(prompt).toContain("Slide 5");
+    expect(prompt).toContain("Slide 3");
+    expect(prompt).toContain("Operators use it.");
+    expect(prompt).toContain("Atlas: Welcome to the briefing.");
+    expect(prompt).not.toContain("Archi: Welcome to the briefing.");
+  });
 });
 
 describe("OpenAI Realtime session tools", () => {
@@ -154,6 +214,48 @@ describe("OpenAI Realtime session tools", () => {
         expect(lifecycleTool?.parameters?.required).toEqual(["serviceId"]);
         expect(lifecycleTool?.parameters?.properties).toHaveProperty("serviceId");
       }
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  it("limits Atlas briefing sessions to read-only context and inspection tools", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      value: "ephemeral-secret",
+      expires_at: 1_800_000_000,
+      session: { id: "atlas-session", model: "gpt-realtime-2.1" }
+    }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    try {
+      await createCodexRealtimeClientSecret({
+        apiKey: "test-key",
+        model: "gpt-realtime-2.1",
+        prompt: "You are Atlas.",
+        projectRoot: "/tmp/project",
+        surface: "briefing-curator",
+        voice: "marin"
+      });
+      const request = fetchMock.mock.calls[0]?.[1] as RequestInit;
+      const body = JSON.parse(String(request.body)) as {
+        session?: { tools?: Array<{ name?: string }> };
+      };
+      const names = body.session?.tools?.map((tool) => tool.name) ?? [];
+      expect(names).toEqual([
+        "archicode_refresh_project_context",
+        "archicode_read_research_context",
+        "archicode_read_chat_history",
+        "archicode_search_previous_chats",
+        "archicode_project_list_files",
+        "archicode_project_search_files",
+        "archicode_project_read_file",
+        "archicode_project_query_code_graph"
+      ]);
+      expect(names).not.toEqual(expect.arrayContaining([
+        "archicode_queue_implementation",
+        "archicode_run_guarded_command",
+        "archicode_launch_run_app",
+        "archicode_run_verification"
+      ]));
     } finally {
       vi.unstubAllGlobals();
     }

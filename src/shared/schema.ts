@@ -237,6 +237,7 @@ export const codexRealtimeV2Voices = [
   "cedar"
 ] as const;
 export const defaultCodexRealtimeV2Voice = "marin";
+export const defaultAtlasRealtimeVoice = "ash";
 export const codexRealtimeModels = [
   "gpt-realtime-2.1-mini",
   "gpt-realtime-2.1",
@@ -263,9 +264,17 @@ export const codexRealtimeSettingsSchema = z.object({
   model: defaultCodexRealtimeModel,
   includeStartupContext: true
 });
+export const atlasRealtimeSettingsSchema = z.object({
+  voice: codexRealtimeVoiceSchema.default(defaultAtlasRealtimeVoice),
+  model: codexRealtimeModelSchema
+}).default({
+  voice: defaultAtlasRealtimeVoice,
+  model: defaultCodexRealtimeModel
+});
 export const voiceSettingsSchema = z.object({
   mode: voiceModeSchema,
-  codexRealtime: codexRealtimeSettingsSchema
+  codexRealtime: codexRealtimeSettingsSchema,
+  atlasRealtime: atlasRealtimeSettingsSchema
 }).default({
   mode: "local",
   codexRealtime: {
@@ -273,6 +282,10 @@ export const voiceSettingsSchema = z.object({
     outputModality: "audio",
     model: defaultCodexRealtimeModel,
     includeStartupContext: true
+  },
+  atlasRealtime: {
+    voice: defaultAtlasRealtimeVoice,
+    model: defaultCodexRealtimeModel
   }
 });
 
@@ -2592,6 +2605,12 @@ export const researchChatSessionSchema = z.object({
   id: z.string(),
   projectRoot: z.string(),
   scope: researchChatScopeSchema,
+  origin: z.discriminatedUnion("type", [
+    z.object({
+      type: z.literal("project-briefing"),
+      briefingId: z.string().trim().min(1)
+    })
+  ]).optional(),
   title: z.string(),
   summary: z.string().default(""),
   memory: researchMemorySchema,

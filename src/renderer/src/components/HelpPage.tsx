@@ -1,30 +1,12 @@
 import { t } from "@renderer/i18n";
-import { BookOpen, CheckCircle2, ExternalLink, FolderOpen, GitBranch, Keyboard, Lock, MessageSquare, Play, SlidersHorizontal, Sparkles } from "lucide-react";
+import { BookOpen, Bot, Bug, CheckCircle2, Earth, ExternalLink, FolderOpen, GitBranch, GitMerge, Hammer, Lock, MessageSquare, Network, Play, Search, SlidersHorizontal, Sparkles, TestTube2 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
 import { gaiaAgent, pandoraAgent } from "@shared/agentIdentities";
 import { Button, DialogContent, DialogRoot, DialogTrigger, ScrollArea } from "./ui";
 import { useArchicodeStore } from "../store/useArchicodeStore";
-import { ACTION_DESCRIPTORS, formatChord, type ActionId } from "../utils/keybindings";
 import { openRuntimeUrl } from "./projectToolbarShared";
 
 const ARCHICODE_WEBSITE_URL = "https://archicode.pixel-hat.com";
-
-const helpLiveBindingOrder: ActionId[] = [
-  "canvas.addNode",
-  "canvas.toggleMinimap",
-  "canvas.delete",
-  "canvas.copy",
-  "canvas.cut",
-  "canvas.paste",
-  "canvas.duplicate",
-  "canvas.autoLayout",
-  "canvas.undo",
-  "canvas.reload",
-  "project.focusSidebarSearch",
-  "project.toggleWorkbench",
-  "project.toggleChat",
-  "project.openPreferences"
-];
 
 const helpSections = [
   {
@@ -59,49 +41,60 @@ const helpSections = [
   }
 ];
 
-const helpShortcuts = [
+const helpAgents = [
   {
-    keys: "Space over empty canvas",
-    action: "Open the add-node menu at the pointer."
+    icon: <Bot size={18} />,
+    name: "Archi",
+    role: "Research & project companion",
+    body: "Your main conversational partner for understanding the project, investigating questions, and coordinating focused work."
   },
   {
-    keys: "Tab",
-    action: "Toggle the minimap."
+    icon: <Earth size={18} />,
+    name: "Atlas",
+    role: "Briefing curator",
+    body: "Guides generated project briefings, explains the current slide, and answers grounded follow-up questions without editing the project."
   },
   {
-    keys: "Ctrl/Cmd + F",
-    action: "Focus the current-scope search field in the left sidebar."
+    icon: <Hammer size={18} />,
+    name: "Gaia",
+    role: "Build & implementation",
+    body: "Plans and implements approved project changes, then carries the work through verification."
   },
   {
-    keys: "Ctrl/Cmd + drag empty canvas",
-    action: "Draw a marquee around nodes to select them together."
+    icon: <Bug size={18} />,
+    name: "Pandora",
+    role: "Debug & recovery",
+    body: "Investigates failures and incidents, makes focused repairs, and verifies that the project recovered."
   },
   {
-    keys: "Shift/Ctrl/Cmd + click node",
-    action: "Add a node to the current selection, or remove it from the selection."
+    icon: <Network size={18} />,
+    name: "Picasso",
+    role: "Graph architect",
+    body: "Assesses and redesigns graph structure. Picasso proposes graph changes for review and never applies them silently."
   },
   {
-    keys: "Delete or Backspace",
-    action: "Delete the selected node or nodes after confirmation."
+    icon: <Search size={18} />,
+    name: "Sherlock",
+    role: "Research detective",
+    body: "Performs bounded, evidence-led investigations when Archi needs deeper research before answering."
   },
   {
-    keys: "Ctrl/Cmd + C/X/V",
-    action: "Copy, cut, and paste selected nodes."
+    icon: <GitMerge size={18} />,
+    name: "Solomon",
+    role: "Merge arbiter",
+    body: "Helps resolve Git merge conflicts after approval, then verifies the resulting resolution."
   },
   {
-    keys: "Ctrl/Cmd + D",
-    action: "Duplicate selected nodes."
-  },
-  {
-    keys: "Ctrl/Cmd + L",
-    action: "Auto-layout the active graph view."
+    icon: <TestTube2 size={18} />,
+    name: "Delphi",
+    role: "Test & runtime oracle",
+    body: "Runs bounded test, runtime, emulator, and visual audits using the targets you approve."
   }
 ];
 
 export function HelpPage({ trigger }: { trigger?: ReactNode }) {
   const [open, setOpen] = useState(false);
   const openProjectSettings = useArchicodeStore((state) => state.openProjectSettings);
-  const keybindings = useArchicodeStore((state) => state.keybindings);
   useEffect(() => {
     const onOpenHelp = () => setOpen(true);
     window.addEventListener("archicode:open-help", onOpenHelp);
@@ -153,43 +146,30 @@ export function HelpPage({ trigger }: { trigger?: ReactNode }) {
               ))}
             </section>
 
-            <section className="help-shortcuts" aria-label={t("Keyboard shortcuts")}>
-              <div className="help-shortcuts-heading">
-                <Keyboard size={18} aria-hidden="true" />
+            <section className="help-agents" aria-label={t("AI agents")}>
+              <div className="help-agents-heading">
                 <div>
-                  <span className="ui-eyebrow">{t("Shortcuts")}</span>
-                  <h3>{t("Canvas shortcuts")}</h3>
+                  <span className="ui-eyebrow">{t("AI agents")}</span>
+                  <h3>{t("Meet ArchiCode’s AI team")}</h3>
                 </div>
+                <p>{t("Each agent has a focused role, so you always know who is helping and what kind of work to expect.")}</p>
               </div>
-              <dl className="help-shortcut-list">
-                {helpShortcuts.map((shortcut) => (
-                  <div key={shortcut.keys}>
-                    <dt><kbd>{shortcut.keys}</kbd></dt>
-                    <dd>{shortcut.action}</dd>
-                  </div>
+              <div className="help-agent-grid">
+                {helpAgents.map((agent) => (
+                  <article key={agent.name} className="help-agent-card">
+                    <div className="help-agent-icon" aria-hidden="true">{agent.icon}</div>
+                    <div>
+                      <h4>{agent.name}</h4>
+                      <strong>{t(agent.role)}</strong>
+                      <p>{t(agent.body)}</p>
+                    </div>
+                  </article>
                 ))}
-              </dl>
-              <div className="help-shortcuts-live">
-                <span className="ui-eyebrow">{t("Current key bindings")}</span>
-                <p>{t("These reflect your current key bindings. Customize them in Preferences:")}</p>
-                <ul className="help-shortcut-list">
-                  {helpLiveBindingOrder.map((id) => {
-                    const descriptor = ACTION_DESCRIPTORS.find((item) => item.id === id);
-                    if (!descriptor) return null;
-                    const chord = keybindings[id];
-                    return (
-                      <li key={id}>
-                        <kbd>{chord ? formatChord(chord) : descriptor.default ? formatChord(descriptor.default) : ""}</kbd>
-                        <span>{descriptor.label}</span>
-                      </li>
-                    );
-                  })}
-                </ul>
-                <Button type="button" size="sm" variant="secondary" onClick={() => { setOpen(false); openProjectSettings("shortcuts"); }}>
-                  <SlidersHorizontal size={14} />
-                  <span>{t("Open Shortcuts")}</span>
-                </Button>
               </div>
+              <Button type="button" size="sm" variant="secondary" onClick={() => { setOpen(false); openProjectSettings("shortcuts"); }}>
+                <SlidersHorizontal size={14} />
+                <span>{t("Open Shortcuts")}</span>
+              </Button>
             </section>
 
             <section className="help-footer-note" aria-label={t("Working model")}>

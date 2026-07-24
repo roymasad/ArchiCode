@@ -1,4 +1,5 @@
 import type { ResearchChatMessage, ResearchChatScope } from "../../shared/schema";
+import type { ProjectBriefing } from "../../shared/projectBriefing";
 import { estimateTextTokens, type ResearchChatContextPlan } from "../../shared/contextBudget";
 import type { GlobalResearchVerbosity } from "../../shared/researchPersonality";
 import { llmOutputLanguageDirective } from "../i18n";
@@ -11,7 +12,11 @@ type ResearchRealtimeSessionContext = {
   title: string;
 };
 
-function formatRecentResearchHistory(messages: ResearchChatMessage[], plan: ResearchChatContextPlan): string {
+function formatRecentResearchHistory(
+  messages: ResearchChatMessage[],
+  plan: ResearchChatContextPlan,
+  assistantName = "Archi"
+): string {
   const eligible = messages.filter((message) =>
     (message.role === "user" || message.role === "assistant" || message.role === "system") && message.content.trim()
   );
@@ -20,7 +25,7 @@ function formatRecentResearchHistory(messages: ResearchChatMessage[], plan: Rese
   for (let index = eligible.length - 1; index >= 0 && selected.length < plan.recentMessageLimit; index -= 1) {
     const message = eligible[index];
     if (!message) continue;
-    const role = message.role === "assistant" ? "Archi" : message.role === "user" ? "User" : "System event";
+    const role = message.role === "assistant" ? assistantName : message.role === "user" ? "User" : "System event";
     const entry = `${role}: ${message.content.trim()}`;
     const tokens = estimateTextTokens(entry);
     if (selected.length && usedTokens + tokens > plan.historyTokenBudget) break;
@@ -114,5 +119,84 @@ export function buildResearchRealtimePrompt(input: {
     compactContext,
     "",
     "Continue from this context. Do not greet as though this is a new conversation unless the transcript is empty."
+  ].join("\n");
+}
+
+export function buildBriefingCuratorRealtimePrompt(input: {
+  briefing: ProjectBriefing;
+  compactContext: string;
+  contextPlan: ResearchChatContextPlan;
+  history: Array<{ answer: string; question: string }>;
+  languageInstruction: string;
+  session: ResearchRealtimeSessionContext;
+  slideIndex: number;
+}): string {
+  const slideIndex = Math.max(0, Math.min(input.briefing.slides.length - 1, input.slideIndex));
+  const currentSlide = input.briefing.slides[slideIndex];
+  const summary = input.session.summary?.trim() || "No Atlas conversation summary has been created yet.";
+  const memoryText = input.session.memory === undefined
+    ? "No durable Atlas conversation memory has been recorded yet."
+    : JSON.stringify(input.session.memory, null, 2);
+  const recentHistory = formatRecentResearchHistory(input.session.messages, input.contextPlan, "Atlas");
+  const deck = {
+    id: input.briefing.id,
+    title: input.briefing.title,
+    subtitle: input.briefing.subtitle,
+    preset: input.briefing.preset,
+    locale: input.briefing.locale,
+    slides: input.briefing.slides
+  };
+  const fixedSections = [
+    "You are Atlas, ArchiCode's dedicated project briefing curator. You are distinct from Archi, the general Research chat agent.",
+    input.languageInstruction,
+    "IDENTITY AND PRESENCE:",
+    "When the host explicitly asks for the opening introduction, give exactly one concise opening of two or three natural sentences: introduce yourself as Atlas the curator, name the project briefing that is open, and explain what this presentation will help the user understand. Ground that description in the briefing title, subtitle, and deck content. Do not begin narrating individual slides. Never issue a second greeting or introduction in response to your own audio.",
+    "Every newly opened briefing is a fresh orientation. Assume the user is seeing and learning it for the first time, even if older Atlas or Research conversations exist. Never infer that the user is already aligned, familiar, or caught up unless they explicitly say so in this opening.",
+    "You are sitting with the user to help them get up to speed. Be calm, warm, attentive, and human. Avoid geeky monologues, canned enthusiasm, excessive personality, theatrical narration, and performative cleverness.",
+    "Be present rather than passive: answer direct questions, notice the user's level of understanding, and offer one useful clarification when it naturally helps. Keep spoken turns succinct and easy to interrupt. Expand only when the user asks or the topic genuinely needs it.",
+    "Do not narrate slide changes. Do not advance, select, or control slides. A host message saying the visible slide changed is silent context only and never a reason to speak.",
+    "PROJECT KNOWLEDGE AND GROUNDING:",
+    "You have the same compact project and graph awareness supplied to normal Research chat, the complete briefing deck, this conversation's history, and read-only investigation tools.",
+    "Use archicode_read_research_context for fuller graph, node, flow, or run context when the compact context is insufficient. Use archicode_search_previous_chats when relevant earlier Research conversations may contain project decisions or facts, but treat them only as project evidence—not as evidence that this user already understands the briefing. Use the project list/search/read and code-graph tools for exact source or dependency questions.",
+    "The latest AUTHORITATIVE CURRENT BRIEFING VIEW host message always wins over the startup slide, earlier transcript references, prior answers, and older conversations. When asked which page or slide is visible, answer from that latest marker exactly.",
+    "Do not limit answers to the visible slide. Explain the wider project when useful, connect the slide to other flows and architecture, and support thoughtful brainstorming.",
+    "Separate verified project facts from interpretations or hypothetical ideas. Never invent evidence, source behavior, graph relationships, or architectural intent.",
+    "You are strictly read-only. You cannot edit the graph or files, run commands, launch apps, queue implementation, or perform any project action. Do not suggest that you completed such an action.",
+    "When the user asks to brainstorm, you may explore possibilities conversationally, but label proposals and assumptions clearly.",
+    "Realtime transcripts can contain recognition mistakes. Resolve obvious ones from context and ask one short clarification only when meaning would materially change.",
+    "",
+    "LINKED ATLAS CONVERSATION:",
+    JSON.stringify({ title: input.session.title, scope: input.session.scope }, null, 2),
+    "",
+    "SESSION SUMMARY:",
+    summary,
+    "",
+    "DURABLE CONVERSATION MEMORY:",
+    memoryText,
+    "",
+    "RECENT VOICE AND TEXT CONVERSATION:",
+    recentHistory,
+    "",
+    "COMPLETE GENERATED BRIEFING:",
+    JSON.stringify(deck, null, 2),
+    "",
+    "CURRENTLY VISIBLE SLIDE:",
+    JSON.stringify({ index: slideIndex, number: slideIndex + 1, slide: currentSlide }, null, 2),
+    "",
+    "RECENT IN-PRESENTATION QUESTIONS AND ANSWERS:",
+    JSON.stringify(input.history.slice(-6), null, 2)
+  ].join("\n");
+  const compactContext = fitProjectContextToModel({
+    compactContext: input.compactContext.trim(),
+    fixedPrompt: fixedSections,
+    plan: input.contextPlan
+  });
+  return [
+    fixedSections,
+    "",
+    "CURRENT COMPACT PROJECT, GRAPH, AND SCOPE CONTEXT:",
+    compactContext,
+    "",
+    "Wait for the host's explicit introduction request or the user's next turn. Stay concise, knowledgeable, read-only, and grounded."
   ].join("\n");
 }

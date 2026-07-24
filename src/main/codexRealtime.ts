@@ -31,12 +31,18 @@ export type CodexRealtimeStatus = {
 };
 
 export type CodexRealtimeStartInput = {
+  briefing?: {
+    briefingId: string;
+    history?: Array<{ answer: string; question: string }>;
+    slideIndex: number;
+  } | null;
   includeStartupContext?: boolean;
   model?: string | null;
   outputModality?: "text" | "audio";
   projectRoot?: string | null;
   prompt?: string | null;
   researchSessionId?: string | null;
+  surface?: "research" | "briefing-curator";
   voice: CodexRealtimeVoice;
 };
 
@@ -293,6 +299,47 @@ const projectReadFileTool = {
   }
 } as const;
 
+const projectQueryCodeGraphTool = {
+  type: "function",
+  name: "archicode_project_query_code_graph",
+  description: "Query the local structural code graph without loading it all into context. Supports bounded search, neighbors, dependency paths, and reverse impact.",
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    required: ["action"],
+    properties: {
+      action: { type: "string", enum: ["search", "neighbors", "path", "impact"] },
+      query: { type: "string", description: "Search text for the search action." },
+      source: { type: "string", description: "Exact node id, file path, or unique symbol label for neighbors, path, or impact." },
+      target: { type: "string", description: "Exact node id, file path, or unique symbol label for the path target." },
+      direction: { type: "string", enum: ["incoming", "outgoing", "both"] },
+      kinds: { type: "array", maxItems: 4, items: { type: "string", enum: ["contains", "dependency", "calls", "runtime"] } },
+      maxResults: { type: "integer", minimum: 1, maximum: 40 },
+      maxDepth: { type: "integer", minimum: 1, maximum: 4 }
+    }
+  }
+} as const;
+
+const expandedResearchContextTool = {
+  type: "function",
+  name: "archicode_read_research_context",
+  description: "Read fuller read-only ArchiCode project and graph context when the compact startup context is insufficient for an exact explanation.",
+  parameters: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      detail: {
+        type: "string",
+        enum: ["full-current-scope", "node-detail", "run-trace", "project-graph"]
+      },
+      reason: {
+        type: "string",
+        description: "Short reason the fuller context is needed."
+      }
+    }
+  }
+} as const;
+
 const guardedCommandTool = {
   type: "function",
   name: "archicode_run_guarded_command",
@@ -354,6 +401,36 @@ function realtimeSessionConfig(input: CodexRealtimeStartInput, prompt: string) {
   const voice = (codexRealtimeV2Voices as readonly string[]).includes(input.voice)
     ? input.voice
     : defaultCodexRealtimeV2Voice;
+  const tools = input.surface === "briefing-curator"
+    ? [
+        freshProjectContextTool,
+        expandedResearchContextTool,
+        currentChatHistoryTool,
+        previousChatsTool,
+        projectListFilesTool,
+        projectSearchFilesTool,
+        projectReadFileTool,
+        projectQueryCodeGraphTool
+      ]
+    : [
+        asyncResearchTool,
+        runAppResearchTool,
+        stopRunAppTool,
+        restartRunAppTool,
+        implementationResearchTool,
+        verificationResearchTool,
+        researchTaskStatusTool,
+        cancelResearchTaskTool,
+        freshProjectContextTool,
+        liveActivityTool,
+        currentChatHistoryTool,
+        previousChatsTool,
+        projectListFilesTool,
+        projectSearchFilesTool,
+        projectReadFileTool,
+        guardedCommandTool,
+        webResearchTool
+      ];
   return {
     type: "realtime",
     model,
@@ -376,25 +453,7 @@ function realtimeSessionConfig(input: CodexRealtimeStartInput, prompt: string) {
       }
     },
     ...(model.startsWith("gpt-realtime-2") ? { reasoning: { effort: "low" } } : {}),
-    tools: [
-      asyncResearchTool,
-      runAppResearchTool,
-      stopRunAppTool,
-      restartRunAppTool,
-      implementationResearchTool,
-      verificationResearchTool,
-      researchTaskStatusTool,
-      cancelResearchTaskTool,
-      freshProjectContextTool,
-      liveActivityTool,
-      currentChatHistoryTool,
-      previousChatsTool,
-      projectListFilesTool,
-      projectSearchFilesTool,
-      projectReadFileTool,
-      guardedCommandTool,
-      webResearchTool
-    ],
+    tools,
     tool_choice: "auto",
     tracing: "auto"
   };

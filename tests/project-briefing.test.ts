@@ -148,6 +148,16 @@ describe("project briefing", () => {
       expect(Object.keys(archive.files).filter((name) => /^ppt\/slides\/slide\d+\.xml$/.test(name))).toHaveLength(5);
       expect(Object.keys(archive.files).some((name) => name.startsWith("ppt/notesSlides/notesSlide"))).toBe(true);
       expect(await archive.file("ppt/slides/slide1.xml")?.async("text")).toContain("Card 1");
+
+      const contentTypes = await archive.file("[Content_Types].xml")?.async("text");
+      expect(contentTypes).toBeDefined();
+      const declaredParts = Array.from(
+        contentTypes!.matchAll(/<Override\b[^>]*\bPartName="\/([^"]+)"/g),
+        (match) => match[1]
+      );
+      expect(declaredParts).toContain("ppt/slideMasters/slideMaster1.xml");
+      expect(declaredParts).not.toContain("ppt/slideMasters/slideMaster2.xml");
+      expect(declaredParts.filter((part) => !archive.file(part))).toEqual([]);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

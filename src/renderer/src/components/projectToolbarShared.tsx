@@ -41,7 +41,7 @@ import {
   X
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type WheelEvent } from "react";
-import { defaultCodexRealtimeModel, defaultCodexRealtimeV2Voice, defaultPhaseModelPolicies, runTargetProfileSchema, type LlmPhase, type ProjectSettings, type RunEffort, type RunScope, type RuntimeService, type SpeechSettings, type TtsSettings, type VoiceSettings } from "@shared/schema";
+import { defaultAtlasRealtimeVoice, defaultCodexRealtimeModel, defaultCodexRealtimeV2Voice, defaultPhaseModelPolicies, runTargetProfileSchema, type LlmPhase, type ProjectSettings, type RunEffort, type RunScope, type RuntimeService, type SpeechSettings, type TtsSettings, type VoiceSettings } from "@shared/schema";
 import { deriveContextBudgetPlan } from "@shared/contextBudget";
 import { isSubflowIgnored } from "@shared/graph";
 import { providerHasCompletedCapabilityCheck, providerImageInputSupportStatus } from "@shared/providerCapabilities";
@@ -172,6 +172,10 @@ export const defaultVoiceSettings: VoiceSettings = {
     outputModality: "audio",
     model: defaultCodexRealtimeModel,
     includeStartupContext: true
+  },
+  atlasRealtime: {
+    voice: defaultAtlasRealtimeVoice,
+    model: defaultCodexRealtimeModel
   }
 };
 

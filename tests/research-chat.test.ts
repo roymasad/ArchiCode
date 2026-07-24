@@ -509,6 +509,37 @@ describe("research chat workflow", () => {
     expect(() => transitionSubagentRun(completed, "running")).toThrow("Invalid subagent run transition completed -> running");
   });
 
+  it("keeps Atlas briefing conversations out of Archi chat history while retaining their live context", async () => {
+    const { projectRoot } = await setupProject();
+    const atlasSession = await createResearchChat({
+      projectRoot,
+      scope: { type: "project", projectId: "project-seed" },
+      origin: { type: "project-briefing", briefingId: "briefing-one" },
+      title: "Atlas · Temporary briefing"
+    });
+    await appendResearchChatTranscript({
+      projectRoot,
+      sessionId: atlasSession.id,
+      role: "user",
+      text: "Which slide am I viewing?"
+    });
+    const archiSession = await createResearchChat({
+      projectRoot,
+      scope: { type: "project", projectId: "project-seed" },
+      title: "Archi project chat"
+    });
+
+    const visibleChats = await listResearchChats(projectRoot);
+    expect(visibleChats.map((session) => session.id)).toEqual([archiSession.id]);
+
+    const atlasContext = await prepareResearchChatForContextPlan({
+      projectRoot,
+      sessionId: atlasSession.id,
+      contextPlan: deriveResearchChatContextPlanForModel("gpt-realtime-2.1-mini")
+    });
+    expect(atlasContext.messages.at(-1)?.content).toBe("Which slide am I viewing?");
+  });
+
   it("persists completed realtime utterances in the active Research chat", async () => {
     const { projectRoot } = await setupProject();
     const session = await createResearchChat({

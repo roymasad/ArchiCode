@@ -45,7 +45,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { codexRealtimeModels, codexRealtimeV2Voices, defaultCodexRealtimeModel, defaultCodexRealtimeV2Voice, defaultPhaseModelPolicies, defaultSubagentModelPolicies, runTargetProfileSchema, type CodeIdeApplication, type CodeIdeSettings, type CodexRealtimeModel, type CodexRealtimeVoice, type DebugIncident, type LlmPhase, type PhaseModelPolicy, type ProjectSettings, type RunEffort, type RunScope, type RuntimeService, type SpeechSettings, type SubagentModelProfile, type TtsSettings, type VoiceSettings } from "@shared/schema";
+import { codexRealtimeModels, codexRealtimeV2Voices, defaultAtlasRealtimeVoice, defaultCodexRealtimeModel, defaultCodexRealtimeV2Voice, defaultPhaseModelPolicies, defaultSubagentModelPolicies, runTargetProfileSchema, type CodeIdeApplication, type CodeIdeSettings, type CodexRealtimeModel, type CodexRealtimeVoice, type DebugIncident, type LlmPhase, type PhaseModelPolicy, type ProjectSettings, type RunEffort, type RunScope, type RuntimeService, type SpeechSettings, type SubagentModelProfile, type TtsSettings, type VoiceSettings } from "@shared/schema";
 import { gaiaAgent, pandoraAgent } from "@shared/agentIdentities";
 import { deriveContextBudgetPlan } from "@shared/contextBudget";
 import { isSubflowIgnored } from "@shared/graph";
@@ -509,6 +509,13 @@ export function ProjectToolbar({
         voice: (codexRealtimeV2Voices as readonly CodexRealtimeVoice[]).includes(nextVoiceSettings.codexRealtime.voice)
           ? nextVoiceSettings.codexRealtime.voice
           : defaultCodexRealtimeV2Voice
+      },
+      atlasRealtime: {
+        ...nextVoiceSettings.atlasRealtime,
+        model: nextVoiceSettings.atlasRealtime.model?.trim() || defaultCodexRealtimeModel,
+        voice: (codexRealtimeV2Voices as readonly CodexRealtimeVoice[]).includes(nextVoiceSettings.atlasRealtime.voice)
+          ? nextVoiceSettings.atlasRealtime.voice
+          : defaultAtlasRealtimeVoice
       }
     });
   }, [settingsOpen, globalCodeIdeSettings, globalSpeechSettings, globalTtsSettings, globalVoiceSettings]);
@@ -1051,9 +1058,15 @@ export function ProjectToolbar({
     setCodexRealtimeBusy(true);
     setCodexRealtimeNotice(null);
     try {
-      const status = await window.archicode.getCodexRealtimeStatus(voiceDraft.codexRealtime.model);
-      setCodexRealtimeStatus(status);
-      setCodexRealtimeNotice(status.message);
+      const [status, atlasStatus] = await Promise.all([
+        window.archicode.getCodexRealtimeStatus(voiceDraft.codexRealtime.model),
+        window.archicode.getCodexRealtimeStatus(voiceDraft.atlasRealtime.model)
+      ]);
+      const combinedStatus = atlasStatus.realtimeAvailable
+        ? status
+        : { ...atlasStatus, message: t("Atlas Realtime is not ready: {{message}}", { message: atlasStatus.message }) };
+      setCodexRealtimeStatus(combinedStatus);
+      setCodexRealtimeNotice(combinedStatus.message);
       if (status.realtimeAvailable && !(codexRealtimeV2Voices as readonly CodexRealtimeVoice[]).includes(voiceDraft.codexRealtime.voice)) {
         setVoiceDraft((current) => ({
           ...current,
@@ -1063,7 +1076,16 @@ export function ProjectToolbar({
           }
         }));
       }
-      return status;
+      if (atlasStatus.realtimeAvailable && !(codexRealtimeV2Voices as readonly CodexRealtimeVoice[]).includes(voiceDraft.atlasRealtime.voice)) {
+        setVoiceDraft((current) => ({
+          ...current,
+          atlasRealtime: {
+            ...current.atlasRealtime,
+            voice: defaultAtlasRealtimeVoice
+          }
+        }));
+      }
+      return combinedStatus;
     } catch (error) {
       const message = error instanceof Error ? error.message : "Could not check OpenAI Realtime audio.";
       setCodexRealtimeStatus(null);
@@ -1072,7 +1094,12 @@ export function ProjectToolbar({
     } finally {
       setCodexRealtimeBusy(false);
     }
-  }, [voiceDraft.codexRealtime.model, voiceDraft.codexRealtime.voice]);
+  }, [
+    voiceDraft.atlasRealtime.model,
+    voiceDraft.atlasRealtime.voice,
+    voiceDraft.codexRealtime.model,
+    voiceDraft.codexRealtime.voice
+  ]);
 
   const updateTtsModelStatus = useCallback((modelStatus: Awaited<ReturnType<typeof window.archicode.downloadTtsModel>>) => {
     setTtsStatus((current) => current ? {
@@ -1868,6 +1895,10 @@ export function ProjectToolbar({
   const codexRealtimeVoiceOptions = codexRealtimeV2Voices.map((voice) => ({
     value: voice,
     label: voice
+  }));
+  const atlasRealtimeVoiceOptions = codexRealtimeV2Voices.map((voice) => ({
+    value: voice,
+    label: voice === defaultAtlasRealtimeVoice ? t("ash — male (Atlas default)") : voice
   }));
   const codexRealtimeModelLabels: Record<(typeof codexRealtimeModels)[number], string> = {
     "gpt-realtime-2.1-mini": "gpt-realtime-2.1-mini - cheaper / faster",
@@ -4471,9 +4502,9 @@ export function ProjectToolbar({
                       />
                     </Field>
                     <Field
-                      label={t("OpenAI realtime voice")}
+                      label={t("Archi Realtime voice")}
                       hint={voiceDraft.mode === "openai-realtime"
-                        ? t("Used by direct OpenAI Realtime WebRTC sessions.")
+                        ? t("The voice Archi uses in live Research chat.")
                         : t("Available when OpenAI Realtime is selected.")}
                     >
                       <Select
@@ -4490,9 +4521,9 @@ export function ProjectToolbar({
                       />
                     </Field>
                     <Field
-                      label={t("OpenAI realtime model")}
+                      label={t("Archi Realtime model")}
                       hint={voiceDraft.mode === "openai-realtime"
-                        ? t("Used only for live audio sessions, not normal chat responses.")
+                        ? t("Used by Archi in live Research chat, not normal chat responses.")
                         : t("Available when OpenAI Realtime is selected.")}
                     >
                       <Select
@@ -4502,6 +4533,44 @@ export function ProjectToolbar({
                           ...voiceDraft,
                           codexRealtime: {
                             ...voiceDraft.codexRealtime,
+                            model: value as CodexRealtimeModel
+                          }
+                        })}
+                        options={codexRealtimeModelOptions}
+                      />
+                    </Field>
+                    <Field
+                      label={t("Atlas Realtime voice")}
+                      hint={voiceDraft.mode === "openai-realtime"
+                        ? t("The voice Atlas uses while discussing generated briefings.")
+                        : t("Available when OpenAI Realtime is selected.")}
+                    >
+                      <Select
+                        disabled={voiceDraft.mode !== "openai-realtime"}
+                        value={voiceDraft.atlasRealtime.voice}
+                        onValueChange={(value) => setVoiceDraft({
+                          ...voiceDraft,
+                          atlasRealtime: {
+                            ...voiceDraft.atlasRealtime,
+                            voice: value as CodexRealtimeVoice
+                          }
+                        })}
+                        options={atlasRealtimeVoiceOptions}
+                      />
+                    </Field>
+                    <Field
+                      label={t("Atlas Realtime model")}
+                      hint={voiceDraft.mode === "openai-realtime"
+                        ? t("Used only for Atlas discussions inside generated briefings.")
+                        : t("Available when OpenAI Realtime is selected.")}
+                    >
+                      <Select
+                        disabled={voiceDraft.mode !== "openai-realtime"}
+                        value={voiceDraft.atlasRealtime.model || defaultCodexRealtimeModel}
+                        onValueChange={(value) => setVoiceDraft({
+                          ...voiceDraft,
+                          atlasRealtime: {
+                            ...voiceDraft.atlasRealtime,
                             model: value as CodexRealtimeModel
                           }
                         })}

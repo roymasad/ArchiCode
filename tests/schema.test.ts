@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { applyNodePatch, codeIdeSettingsSchema, defaultCodexRealtimeModel, flowSchema, llmPatchProposalSchema, projectSchema, researchCanvasActionSchema, researchChatSessionSchema, researchGraphChangeSetSchema, runGuidanceSchema, runImplementationTaskSchema, runSchema, voiceSettingsSchema, type ArchicodeNode } from "../src/shared/schema";
+import { applyNodePatch, codeIdeSettingsSchema, defaultAtlasRealtimeVoice, defaultCodexRealtimeModel, flowSchema, llmPatchProposalSchema, projectSchema, researchCanvasActionSchema, researchChatSessionSchema, researchGraphChangeSetSchema, runGuidanceSchema, runImplementationTaskSchema, runSchema, voiceSettingsSchema, type ArchicodeNode } from "../src/shared/schema";
 import flowFixture from "../fixtures/sample-project/.archicode/flows/flow-main.json";
 import projectFixture from "../fixtures/sample-project/.archicode/project.json";
 
@@ -20,6 +20,10 @@ describe("ArchiCode JSON schemas", () => {
         outputModality: "audio",
         model: defaultCodexRealtimeModel,
         includeStartupContext: true
+      },
+      atlasRealtime: {
+        voice: defaultAtlasRealtimeVoice,
+        model: defaultCodexRealtimeModel
       }
     });
     expect(voiceSettingsSchema.parse({
@@ -33,6 +37,16 @@ describe("ArchiCode JSON schemas", () => {
         voice: "juniper"
       }
     })).toMatchObject({ mode: "openai-realtime", codexRealtime: { model: defaultCodexRealtimeModel } });
+    expect(voiceSettingsSchema.parse({
+      mode: "openai-realtime",
+      codexRealtime: {
+        model: "gpt-realtime",
+        voice: "cove"
+      }
+    }).atlasRealtime).toEqual({
+      voice: defaultAtlasRealtimeVoice,
+      model: defaultCodexRealtimeModel
+    });
     expect(voiceSettingsSchema.parse({
       mode: "codex-realtime",
       codexRealtime: {

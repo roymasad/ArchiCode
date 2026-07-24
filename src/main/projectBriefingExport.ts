@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { BrowserWindow } from "electron";
+import JSZip from "jszip";
 import type PptxGenJSImport from "pptxgenjs";
 import type { ProjectBriefing, ProjectBriefingVisualItem } from "../shared/projectBriefing";
 
@@ -10,6 +11,8 @@ export type ProjectBriefingExportFormat = "pdf" | "pptx";
 
 const requireFromProjectBriefingExport = createRequire(import.meta.url);
 const PptxGenJS = requireFromProjectBriefingExport("pptxgenjs") as typeof PptxGenJSImport;
+const contentTypeOverridePattern = /<Override\b[^>]*\bPartName="\/([^"]+)"[^>]*\/>/g;
+const slideMasterOverridePattern = /<Override\b[^>]*\bPartName="\/(ppt\/slideMasters\/slideMaster\d+\.xml)"[^>]*\/>/g;
 
 const tones: Record<ProjectBriefingVisualItem["tone"], { fill: string; line: string }> = {
   cyan: { fill: "173C46", line: "22D3EE" },
@@ -134,6 +137,27 @@ function itemPositions(count: number): Array<{ x: number; y: number; w: number; 
   }));
 }
 
+async function normalizePptxForMicrosoftOffice(targetFilePath: string): Promise<void> {
+  const archive = await JSZip.loadAsync(await readFile(targetFilePath));
+  const contentTypesEntry = archive.file("[Content_Types].xml");
+  if (!contentTypesEntry) throw new Error("The generated PowerPoint package has no content-type manifest.");
+
+  const contentTypes = await contentTypesEntry.async("text");
+  const normalizedContentTypes = contentTypes.replace(
+    slideMasterOverridePattern,
+    (declaration, declaredPart: string) => archive.file(declaredPart) ? declaration : ""
+  );
+
+  if (normalizedContentTypes === contentTypes) return;
+  archive.file("[Content_Types].xml", normalizedContentTypes);
+  const normalizedPackage = await archive.generateAsync({
+    type: "nodebuffer",
+    compression: "DEFLATE",
+    compressionOptions: { level: 6 }
+  });
+  await writeFile(targetFilePath, normalizedPackage);
+}
+
 async function exportPptx(briefing: ProjectBriefing, targetFilePath: string): Promise<void> {
   const pptx = new PptxGenJS();
   pptx.layout = "LAYOUT_WIDE";
@@ -206,6 +230,31 @@ async function exportPptx(briefing: ProjectBriefing, targetFilePath: string): Pr
   }
 
   await pptx.writeFile({ fileName: targetFilePath, compression: true });
+  // PptxGenJS 4.0.1 declares one slide master per slide in [Content_Types].xml
+  // while emitting only slideMaster1.xml. Keynote tolerates those phantom parts,
+  // but Microsoft PowerPoint may reject the package instead of repairing it.
+  await normalizePptxForMicrosoftOffice(targetFilePath);
+}
+
+async function validatePptxPackage(targetFilePath: string): Promise<void> {
+  const archive = await JSZip.loadAsync(await readFile(targetFilePath));
+  const requiredParts = [
+    "[Content_Types].xml",
+    "_rels/.rels",
+    "ppt/presentation.xml",
+    "ppt/_rels/presentation.xml.rels"
+  ];
+  const missingRequiredParts = requiredParts.filter((part) => !archive.file(part));
+  if (missingRequiredParts.length > 0) {
+    throw new Error(`The generated PowerPoint package is missing required parts: ${missingRequiredParts.join(", ")}.`);
+  }
+
+  const contentTypes = await archive.file("[Content_Types].xml")!.async("text");
+  const declaredParts = Array.from(contentTypes.matchAll(contentTypeOverridePattern), (match) => match[1]);
+  const danglingParts = declaredParts.filter((part) => !archive.file(part));
+  if (danglingParts.length > 0) {
+    throw new Error(`The generated PowerPoint package references missing parts: ${danglingParts.join(", ")}.`);
+  }
 }
 
 async function validateExport(targetFilePath: string, format: ProjectBriefingExportFormat): Promise<void> {
@@ -213,7 +262,10 @@ async function validateExport(targetFilePath: string, format: ProjectBriefingExp
   if (file.size < 2_000) throw new Error(`The generated ${format.toUpperCase()} file is unexpectedly small.`);
   const prefix = (await readFile(targetFilePath)).subarray(0, 4);
   if (format === "pdf" && prefix.toString("ascii") !== "%PDF") throw new Error("The generated file is not a valid PDF.");
-  if (format === "pptx" && prefix.subarray(0, 2).toString("ascii") !== "PK") throw new Error("The generated file is not a valid PowerPoint package.");
+  if (format === "pptx") {
+    if (prefix.subarray(0, 2).toString("ascii") !== "PK") throw new Error("The generated file is not a valid PowerPoint package.");
+    await validatePptxPackage(targetFilePath);
+  }
 }
 
 export async function exportProjectBriefing(

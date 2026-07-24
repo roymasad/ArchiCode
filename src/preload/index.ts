@@ -467,7 +467,7 @@ const api = {
     ipcRenderer.invoke("archicode:get-codex-realtime-status", model),
   startCodexRealtime: (input: CodexRealtimeStartInput): Promise<CodexRealtimeClientSecret> =>
     ipcRenderer.invoke("archicode:codex-realtime-start", input),
-  getCodexRealtimeContext: (input: { model?: string; projectRoot: string; researchSessionId: string }): Promise<string> =>
+  getCodexRealtimeContext: (input: Omit<CodexRealtimeStartInput, "voice"> & { projectRoot: string; researchSessionId: string }): Promise<string> =>
     ipcRenderer.invoke("archicode:get-codex-realtime-context", input),
   callCodexRealtimeReadTool: (input: {
     argumentsJson: string;
@@ -713,6 +713,7 @@ const api = {
   createResearchChat: (input: {
     projectRoot: string;
     scope: ResearchChatScope;
+    origin?: ResearchChatSession["origin"];
     title?: string;
     providerId?: string;
     modelId?: string;
