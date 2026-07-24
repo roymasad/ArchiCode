@@ -5,12 +5,27 @@ import { mkdtemp } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
-import { parseGitStatusPorcelain } from "../src/shared/projectTools";
+import { defaultGraphPreviewRefs, parseGitStatusPorcelain } from "../src/shared/projectTools";
 import { getGitStatus, gitCreateBranch, gitDiscardChanges, gitInit, gitPopStash, gitRepositoryFolderName, gitStashChanges, gitSwitchBranch, listProjectFiles, readProjectFile } from "../src/main/projectTools";
 
 const execFileAsync = promisify(execFile);
 
 describe("project tools", () => {
+  it("defaults graph previews to a feature candidate against main", () => {
+    expect(defaultGraphPreviewRefs(["main", "feature/testdiff1"], "main")).toEqual({
+      candidateRef: "feature/testdiff1",
+      baseRef: "main"
+    });
+    expect(defaultGraphPreviewRefs(["main", "feature/testdiff1"], "feature/testdiff1")).toEqual({
+      candidateRef: "feature/testdiff1",
+      baseRef: "main"
+    });
+    expect(defaultGraphPreviewRefs(["master", "topic"], "master")).toEqual({
+      candidateRef: "topic",
+      baseRef: "master"
+    });
+  });
+
   it("derives safe destination folder names from supported Git URLs", () => {
     expect(gitRepositoryFolderName("https://github.com/openai/codex.git")).toBe("codex");
     expect(gitRepositoryFolderName("git@github.com:openai/codex.git")).toBe("codex");

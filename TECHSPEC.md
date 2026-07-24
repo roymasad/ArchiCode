@@ -57,6 +57,7 @@ Main process modules:
 - `src/main/policies/architecturePolicies.ts`: deterministic architecture-policy evaluation over repository relationships, imports, files, node metadata, and graph structure.
 - `src/main/semanticIndex.ts`: local embedding index (BGE Small or MiniLM via `@huggingface/transformers`) for semantic code search and node semantic context.
 - `src/main/projectTools.ts`: Git status/actions (init, clone, pull, push, branch create/switch, stash/pop, discard, commit) and project file tree, text, and diff previews.
+- `src/main/graphBranchPreview.ts`: read-only PR-style graph comparison between committed local branches using their Git merge base, without checking out either revision or mutating project files.
 - `src/main/mcp.ts`: MCP server import, refresh, tool listing, trust checks, and tool execution.
 - `src/main/mcpHost.ts`: authenticated localhost MCP hosting, secret-safe bounded reads, resource templates, and validated graph mutations for external coding agents.
 - `src/main/skills.ts`: project-local skill creation, listing, and prompt injection.
@@ -83,7 +84,7 @@ Renderer files:
 
 - `src/renderer/src/App.tsx`: top-level IDE shell layout and workbench view switching.
 - `src/renderer/src/store/useArchicodeStore.ts`: Zustand store composed from slices under `src/renderer/src/store/` (`projectSlice`, `graphSlice`, `runsSlice`, `researchSlice`, `notesSlice`, `gitFilesSlice`, `capabilitiesSlice`, `uiSlice`).
-- `src/renderer/src/components/*`: UI surfaces and panels, including the 2D canvas, read-only 3D view (`FlowCanvas3DView`), code knowledge maps (`CodeKnowledgeMapView`, `CodeDetailKnowledgeMapView`), onboarding wizard, resync dialog, research panel with memory panel, and settings.
+- `src/renderer/src/components/*`: UI surfaces and panels, including the 2D canvas, read-only 3D view (`FlowCanvas3DView`), code knowledge maps (`CodeKnowledgeMapView`, `CodeDetailKnowledgeMapView`), guided branch graph preview (`GraphBranchPreviewDialog`), onboarding wizard, resync dialog, research panel with memory panel, and settings.
 - `src/renderer/src/utils/*`: presentation helpers for run progress/status, failure taxonomy display, keybindings, provider profiles, node context, previews, read-only logic-review prompts, and scoped Explain actions.
 - `src/renderer/src/styles/app.css`: semantic theme tokens and app styling.
 

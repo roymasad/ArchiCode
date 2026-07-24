@@ -126,7 +126,7 @@ export function ArchicodeEdge({
   const arrowColor = data?.arrowColor ?? "var(--accent)";
   const labelChip = label ? (
     <div
-      className={`archicode-edge-label-chip nodrag nopan${selected ? " is-selected" : ""}${data?.policyAlert ? " is-policy-alert" : ""}`}
+      className={`archicode-edge-label-chip nodrag nopan${selected ? " is-selected" : ""}${data?.policyAlert ? " is-policy-alert" : ""}${data?.previewState ? ` is-preview-${data.previewState}` : ""}`}
       style={{ transform: `translate(-50%, -50%) translate(${labelX}px, ${labelY}px)` }}
       tabIndex={data?.labelTooltip ? 0 : undefined}
       onClick={(event) => {

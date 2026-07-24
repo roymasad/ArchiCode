@@ -49,9 +49,10 @@ function hasLiveTrace(run: Run): boolean {
 }
 
 export function SettingsAndRuns({ open, height, onToggleOpen, panelAction, showCollapseControl = true }: SettingsAndRunsProps) {
-  const { bundle, rootPath, selectRun, selectNode, addNote, updateNoteResolved, dismissRunError, setWorkbenchView, refreshProjectFiles, selectProjectFile } = useArchicodeStore(useShallow((state) => ({
+  const { bundle, rootPath, gitStatus, selectRun, selectNode, addNote, updateNoteResolved, dismissRunError, setWorkbenchView, refreshProjectFiles, selectProjectFile } = useArchicodeStore(useShallow((state) => ({
     bundle: state.bundle,
     rootPath: state.rootPath,
+    gitStatus: state.gitStatus,
     selectRun: state.selectRun,
     selectNode: state.selectNode,
     addNote: state.addNote,
@@ -270,6 +271,22 @@ export function SettingsAndRuns({ open, height, onToggleOpen, panelAction, showC
       <div className="activity-panel-header">
         <div>
           <strong>{t("Activity")}</strong>
+          {gitStatus?.isRepo && gitStatus.currentBranch ? (
+            <Tooltip content={(
+              <span className="activity-branch-tooltip">
+                <strong>{t("Branch")}</strong>
+                <code>{gitStatus.currentBranch}</code>
+              </span>
+            )}>
+              <span
+                className="activity-branch-indicator"
+                aria-label={`${t("Branch")}: ${gitStatus.currentBranch}`}
+              >
+                <GitBranch size={12} aria-hidden="true" />
+                <code>{gitStatus.currentBranch}</code>
+              </span>
+            </Tooltip>
+          ) : null}
         </div>
         <div className="activity-summary">
           {maintenance && (maintenance.state === "scheduled" || maintenance.state === "running") ? (

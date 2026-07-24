@@ -1304,6 +1304,76 @@ describe("renderer UI system", () => {
     expect(settingsAndRuns).toContain("event.preventDefault()");
   });
 
+  it("shows the current Git branch beside the Activity label", () => {
+    const activity = readFileSync(resolve(repoRoot, "src/renderer/src/components/SettingsAndRuns.tsx"), "utf8");
+    const styles = readFileSync(resolve(repoRoot, "src/renderer/src/styles/app.css"), "utf8");
+
+    expect(activity).toContain("gitStatus: state.gitStatus");
+    expect(activity).toContain("activity-branch-indicator");
+    expect(activity).toContain("<code>{gitStatus.currentBranch}</code>");
+    expect(styles).toContain(".activity-branch-indicator");
+    expect(styles).toContain("text-overflow: ellipsis");
+  });
+
+  it("explains the read-only branch graph preview controls with tooltips", () => {
+    const gitPanel = readFileSync(resolve(repoRoot, "src/renderer/src/components/GitPanel.tsx"), "utf8");
+    const preview = readFileSync(resolve(repoRoot, "src/renderer/src/components/GraphBranchPreviewDialog.tsx"), "utf8");
+
+    expect(gitPanel).toContain("Compare committed graph changes between two local branches without switching branches or modifying files.");
+    expect(gitPanel).toContain("The branch whose committed graph changes you want to inspect.");
+    expect(gitPanel).toContain("The branch used as the comparison target. The preview follows PR-style merge-base semantics.");
+    expect(gitPanel).toContain("This preview never modifies files, branches, or the graph.");
+    expect(preview).toContain("Only position or size changed; graph meaning is unchanged.");
+  });
+
+  it("keeps graph preview zoom stable and offers direct change navigation", () => {
+    const preview = readFileSync(resolve(repoRoot, "src/renderer/src/components/GraphBranchPreviewDialog.tsx"), "utf8");
+    const styles = readFileSync(resolve(repoRoot, "src/renderer/src/styles/app.css"), "utf8");
+
+    expect(preview).toContain('t("Watch changes")');
+    expect(preview).toContain('t("All changes")');
+    expect(preview).toContain('t("All flows")');
+    expect(preview).toContain('t("Filter by flow")');
+    expect(preview).toContain("graph-branch-preview-change-list");
+    expect(preview).toContain("graph-branch-preview-change-group");
+    expect(preview).toContain("graph-branch-preview-flow-context");
+    expect(preview).toContain("scopedChangeIndexes");
+    expect(preview).toContain("onClick={() => setChangeIndex(index)}");
+    expect(preview).toContain("reactFlow.getZoom()");
+    expect(preview).toContain("minZoom: zoom");
+    expect(preview).toContain("maxZoom: zoom");
+    expect(preview).toContain("padding: 0");
+    expect(preview).toContain('change.changeKind === "added" ? " is-added-properties" : ""');
+    expect(styles).toContain(".graph-branch-preview-change-item.is-active");
+    expect(styles).toContain(".graph-branch-preview-change-group > header");
+    expect(styles).toContain("width: min(1240px, calc(100vw - 20px))");
+    expect(styles).toContain(".graph-branch-preview-fields.is-added-properties");
+    expect(styles).toContain("stroke: var(--preview-removed) !important");
+    expect(styles).toContain(".archicode-edge-label-chip.is-preview-removed");
+  });
+
+  it("explains the Git dialog actions with tooltips", () => {
+    const gitPanel = readFileSync(resolve(repoRoot, "src/renderer/src/components/GitPanel.tsx"), "utf8");
+
+    expect(gitPanel).toContain("Refresh Git status and repository details.");
+    expect(gitPanel).toContain("Fetch and integrate changes from the configured upstream branch.");
+    expect(gitPanel).toContain("Send local commits to the configured upstream branch.");
+    expect(gitPanel).toContain("Choose another local branch. Uncommitted changes must be stashed first.");
+    expect(gitPanel).toContain("Create and switch to a new local branch from the current commit.");
+    expect(gitPanel).toContain("Temporarily save uncommitted changes or restore a saved stash.");
+    expect(gitPanel).toContain("Permanently discard all tracked and untracked working-tree changes.");
+    expect(gitPanel).toContain("Select every changed file for the next commit.");
+    expect(gitPanel).toContain("Stage the selected files and create a local commit with this message.");
+  });
+
+  it("keeps the primary Git actions on one row in the wider desktop dialog", () => {
+    const styles = readFileSync(resolve(repoRoot, "src/renderer/src/styles/app.css"), "utf8");
+
+    expect(styles).toContain("width: min(1000px, calc(100vw - 24px))");
+    expect(styles).toMatch(/\.git-action-grid \{[\s\S]*?flex-wrap: nowrap;/);
+    expect(styles).toMatch(/@media \(max-width: 900px\)[\s\S]*?\.git-action-grid \{[\s\S]*?flex-direction: column;/);
+  });
+
   it("shows background code-data work beside the Activity detach control", () => {
     const activity = readFileSync(resolve(repoRoot, "src/renderer/src/components/SettingsAndRuns.tsx"), "utf8");
     const preload = readFileSync(resolve(repoRoot, "src/preload/index.ts"), "utf8");

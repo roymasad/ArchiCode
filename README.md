@@ -31,6 +31,7 @@ ArchiCode is under active development, but its core engineering loop already wor
 - **Architecture knowledge maps** — inspect relationship-derived functional communities, trace edges to source evidence, and drill into project-wide code detail.
 - **Reviewable graph proposals** — turn research into explicit node, edge, note, flow, acceptance-check, or implementation actions before anything changes.
 - **Code and graph resync** — reconcile architecture after external edits using deterministic, affected-scope updates and auditable reports.
+- **Read-only branch graph previews** — compare committed local branches and step through the nodes, relationships, flows, groups, subflows, metadata, and layout changes introduced by the candidate branch without checking it out or modifying files.
 - **Acceptance and policy checks** — attach executable criteria to architecture nodes and surface deterministic architecture-policy findings.
 - **Local-first project memory** — keep portable planning state under `.archicode/` while credentials and runtime-only data stay machine-local.
 - **Provider and tool choice** — use Codex, Claude Code, OpenCode, Google Antigravity, Grok Build, or Kimi Code locally; connect OpenAI-compatible or Anthropic-compatible APIs; and extend agents with project skills and MCP servers.

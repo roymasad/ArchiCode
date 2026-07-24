@@ -15,6 +15,7 @@ import type {
 } from "../shared/capabilities";
 import type { GitOperationResult, GitStatus, ProjectFileBrowserData, ProjectFileDiff, ProjectFileText } from "../shared/projectTools";
 import type { GraphHistoryPage, GraphHistoryPageOptions, GraphNodeHistory, HistoricalGraphBundle } from "../shared/graphHistory";
+import type { GraphBranchPreview } from "../shared/graphBranchPreview";
 import type { GlobalResearchPersonality, GlobalResearchVerbosity } from "../shared/researchPersonality";
 import type { AppUpdateStatus } from "../main/updater";
 import type { ExternalMcpHostStatus } from "../main/mcpHost";
@@ -567,6 +568,8 @@ const api = {
     ipcRenderer.invoke("archicode:read-chat-artifact", projectRoot, chatId, artifactId),
   getGitStatus: (projectRoot: string): Promise<GitStatus> =>
     ipcRenderer.invoke("archicode:get-git-status", projectRoot),
+  previewGraphBranches: (projectRoot: string, baseRef: string, candidateRef: string): Promise<GraphBranchPreview> =>
+    ipcRenderer.invoke("archicode:preview-graph-branches", projectRoot, baseRef, candidateRef),
   listGraphHistory: (projectRoot: string, options?: GraphHistoryPageOptions): Promise<GraphHistoryPage> =>
     ipcRenderer.invoke("archicode:list-graph-history", projectRoot, options),
   loadHistoricalGraph: (projectRoot: string, commit: string): Promise<HistoricalGraphBundle> =>

@@ -5823,6 +5823,11 @@ body.is-canvas-capture-exporting .code-detail-render-limit {
   opacity: 0.6;
 }
 
+.flow-node.is-preview-focused:not(.is-selected) {
+  outline: 3px solid color-mix(in srgb, var(--focus) 78%, white);
+  outline-offset: 6px;
+}
+
 /* Preserve preview semantics while avoiding blur rasterization during viewport
    movement. The full glow returns shortly after panning or zooming ends. */
 .canvas-shell.is-viewport-moving .flow-node.is-preview-added,
@@ -6147,16 +6152,19 @@ body.is-canvas-capture-exporting .code-detail-render-limit {
 }
 
 .react-flow__edge-path.archicode-edge.is-preview-added {
+  stroke: var(--preview-added) !important;
   filter: drop-shadow(0 0 2px var(--preview-added)) drop-shadow(0 0 6px color-mix(in srgb, var(--preview-added) 55%, transparent));
 }
 
 .react-flow__edge-path.archicode-edge.is-preview-modified {
+  stroke: var(--preview-modified) !important;
   opacity: 1;
   filter: drop-shadow(0 0 2px var(--preview-modified)) drop-shadow(0 0 6px color-mix(in srgb, var(--preview-modified) 55%, transparent));
 }
 
 .react-flow__edge-path.archicode-edge.is-preview-removed {
-  opacity: 0.55;
+  stroke: var(--preview-removed) !important;
+  opacity: 0.92;
   filter: drop-shadow(0 0 2px var(--preview-removed)) drop-shadow(0 0 6px color-mix(in srgb, var(--preview-removed) 55%, transparent));
 }
 
@@ -6259,6 +6267,20 @@ body.is-canvas-capture-exporting .code-detail-render-limit {
   background: color-mix(in srgb, #b81738 88%, var(--surface-raised));
   outline: 2px solid #ff3f5f;
   box-shadow: 0 3px 14px rgb(0 0 0 / 34%), 0 0 12px color-mix(in srgb, #ff3f5f 52%, transparent);
+}
+
+.archicode-edge-label-chip.is-preview-added {
+  outline: 2px solid var(--preview-added);
+}
+
+.archicode-edge-label-chip.is-preview-modified {
+  outline: 2px solid var(--preview-modified);
+}
+
+.archicode-edge-label-chip.is-preview-removed {
+  color: var(--preview-removed);
+  outline: 2px dashed var(--preview-removed);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--preview-removed) 38%, transparent);
 }
 
 .node-signals {
@@ -8765,6 +8787,44 @@ body.is-canvas-capture-exporting .code-detail-render-limit {
 .activity-panel-header strong {
   font-size: 15px;
   line-height: 1;
+}
+
+.activity-branch-indicator {
+  display: inline-flex;
+  max-width: min(320px, 38vw);
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--text-muted);
+  background: color-mix(in srgb, var(--surface-muted) 72%, transparent);
+  line-height: 1;
+}
+
+.activity-branch-indicator code {
+  overflow: hidden;
+  min-width: 0;
+  color: inherit;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.activity-branch-indicator svg {
+  flex: 0 0 auto;
+}
+
+.activity-branch-tooltip {
+  display: grid;
+  gap: 4px;
+}
+
+.activity-branch-tooltip code {
+  font-family: var(--font-mono);
 }
 
 .activity-summary {
@@ -14873,7 +14933,7 @@ button.activity-maintenance-indicator {
 }
 
 .git-dialog {
-  width: min(780px, calc(100vw - 48px));
+  width: min(1000px, calc(100vw - 24px));
   grid-template-rows: auto minmax(0, 1fr);
 }
 
@@ -15093,7 +15153,7 @@ button.activity-maintenance-indicator {
 
 .git-action-grid {
   display: flex;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   gap: 8px;
 }
 
@@ -15116,6 +15176,475 @@ button.activity-maintenance-indicator {
 .git-branch-row .ui-button {
   flex: 0 0 auto;
   min-width: 118px;
+}
+
+.git-graph-preview-box .git-section-head > div {
+  display: grid;
+  gap: 3px;
+}
+
+.git-tooltip-action {
+  display: inline-flex;
+}
+
+.git-tooltip-action.is-wide,
+.git-tooltip-action.is-wide .ui-button {
+  width: 100%;
+}
+
+.git-graph-preview-box .git-section-head small {
+  color: var(--text-muted);
+  line-height: 1.4;
+}
+
+.git-graph-preview-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.git-graph-preview-fields .ui-select-trigger {
+  width: 100%;
+}
+
+.git-graph-preview-error {
+  color: var(--danger);
+  line-height: 1.4;
+}
+
+.graph-branch-preview-dialog {
+  gap: 8px;
+  width: min(1240px, calc(100vw - 20px));
+  height: min(860px, calc(100vh - 20px));
+  max-height: calc(100vh - 20px);
+  padding: 12px;
+  grid-template-rows: auto minmax(0, 1fr);
+}
+
+.graph-branch-preview-dialog > .ui-dialog-header {
+  align-items: center;
+  gap: 10px;
+}
+
+.graph-branch-preview-dialog > .ui-dialog-header > div:first-child {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.graph-branch-preview-dialog > .ui-dialog-header h2 {
+  flex: 0 0 auto;
+  font-size: 18px;
+}
+
+.graph-branch-preview-dialog > .ui-dialog-header p {
+  overflow: hidden;
+  min-width: 0;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-branch-preview-dialog > .ui-dialog-header .ui-icon-button {
+  width: 30px;
+  height: 30px;
+}
+
+.graph-branch-preview {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 8px;
+  min-height: 0;
+}
+
+.graph-branch-preview:has(.graph-branch-preview-navigation) {
+  grid-template-rows: auto minmax(0, 1fr) auto;
+}
+
+.graph-branch-preview-summary,
+.graph-branch-preview-refs,
+.graph-branch-preview-counts,
+.graph-branch-preview-detail-head,
+.graph-branch-preview-navigation {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.graph-branch-preview-summary {
+  justify-content: space-between;
+  flex-wrap: wrap;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.graph-branch-preview-refs span {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  min-width: 0;
+}
+
+.graph-branch-preview-refs strong,
+.graph-branch-preview-refs small {
+  overflow: hidden;
+  max-width: 230px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-branch-preview-refs small {
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.graph-branch-preview-counts {
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.graph-branch-preview-stage {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(270px, 320px);
+  gap: 8px;
+  min-height: 0;
+}
+
+.graph-branch-preview-canvas {
+  position: relative;
+  min-width: 0;
+  min-height: 420px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--canvas);
+}
+
+.graph-branch-preview-canvas .react-flow__controls {
+  left: 10px;
+  bottom: 10px;
+}
+
+.graph-branch-preview-detail {
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.graph-branch-preview-side-tabs {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  gap: 8px;
+  height: 100%;
+  min-height: 0;
+}
+
+.graph-branch-preview-tab-list {
+  width: 100%;
+}
+
+.graph-branch-preview-tab-list [role="tab"] {
+  flex: 1 1 0;
+}
+
+.graph-branch-preview-tab {
+  min-height: 0;
+  overflow: auto;
+}
+
+.graph-branch-preview-watch {
+  display: grid;
+  align-content: start;
+  gap: 10px;
+}
+
+.graph-branch-preview-flow-context {
+  display: grid;
+  gap: 2px;
+  padding: 7px 8px;
+  border-left: 3px solid var(--accent);
+  border-radius: 0 6px 6px 0;
+  background: var(--surface-muted);
+}
+
+.graph-branch-preview-flow-context strong {
+  overflow: hidden;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-branch-preview-detail h3,
+.graph-branch-preview-detail p {
+  margin: 0;
+}
+
+.graph-branch-preview-detail p {
+  color: var(--text-muted);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.graph-branch-preview-detail-head {
+  flex-wrap: wrap;
+}
+
+.graph-branch-preview-detail-head > span:not(.ui-badge) {
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.graph-branch-preview-fields {
+  display: grid;
+  gap: 9px;
+}
+
+.graph-branch-preview-fields article {
+  display: grid;
+  gap: 6px;
+  padding: 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.graph-branch-preview-fields article > strong {
+  font-size: 12px;
+}
+
+.graph-branch-preview-fields article > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 6px;
+}
+
+.graph-branch-preview-fields article span {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.graph-branch-preview-fields article small {
+  color: var(--text-muted);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.graph-branch-preview-fields article code {
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 11px;
+  white-space: pre-wrap;
+}
+
+.graph-branch-preview-fields.is-added-properties {
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.graph-branch-preview-fields.is-added-properties article {
+  grid-template-columns: minmax(78px, 0.42fr) minmax(0, 1fr);
+  align-items: start;
+  gap: 8px;
+  padding: 7px 8px;
+  border: 0;
+  border-bottom: 1px solid var(--border-subtle);
+  border-radius: 0;
+  background: transparent;
+}
+
+.graph-branch-preview-fields.is-added-properties article:last-child {
+  border-bottom: 0;
+}
+
+.graph-branch-preview-fields.is-added-properties article > code {
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+}
+
+.graph-branch-preview-change-list {
+  display: grid;
+  gap: 10px;
+}
+
+.graph-branch-preview-flow-filter {
+  display: grid;
+  gap: 5px;
+  margin-bottom: 8px;
+}
+
+.graph-branch-preview-flow-filter .ui-select-trigger {
+  width: 100%;
+}
+
+.graph-branch-preview-change-group {
+  display: grid;
+  gap: 6px;
+}
+
+.graph-branch-preview-change-group > header {
+  position: sticky;
+  z-index: 2;
+  top: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 3px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.graph-branch-preview-change-group > header strong {
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.graph-branch-preview-change-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 9px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--surface-muted);
+  text-align: left;
+  cursor: pointer;
+}
+
+.graph-branch-preview-change-item:hover,
+.graph-branch-preview-change-item:focus-visible {
+  border-color: var(--border-strong);
+  background: var(--surface-raised);
+}
+
+.graph-branch-preview-change-item.is-active {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.graph-branch-preview-change-item > span:nth-child(2) {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.graph-branch-preview-change-item strong,
+.graph-branch-preview-change-item small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.graph-branch-preview-change-item small,
+.graph-branch-preview-change-item code {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.graph-branch-preview-change-marker {
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: var(--warning);
+}
+
+.graph-branch-preview-change-item.is-added .graph-branch-preview-change-marker {
+  background: var(--success);
+}
+
+.graph-branch-preview-change-item.is-removed .graph-branch-preview-change-marker {
+  background: var(--danger);
+}
+
+.graph-branch-preview-navigation {
+  justify-content: space-between;
+  padding-top: 6px;
+  border-top: 1px solid var(--border);
+}
+
+.graph-branch-preview-navigation > div {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  text-align: center;
+}
+
+.graph-branch-preview-navigation small {
+  color: var(--text-muted);
+}
+
+.graph-branch-preview-navigation small span {
+  font-weight: 700;
+}
+
+.graph-branch-preview-navigation .ui-button {
+  min-height: 30px;
+}
+
+.graph-branch-preview-empty {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: 10px;
+  min-height: 360px;
+  padding: 28px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+.graph-branch-preview-empty strong {
+  color: var(--text);
+}
+
+.graph-branch-preview-empty p {
+  max-width: 560px;
+  margin: 0;
+  line-height: 1.5;
+}
+
+@media (max-width: 880px) {
+  .graph-branch-preview-dialog > .ui-dialog-header > div:first-child {
+    display: grid;
+    gap: 2px;
+  }
+
+  .git-graph-preview-fields,
+  .graph-branch-preview-stage {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .graph-branch-preview-canvas {
+    min-height: 340px;
+  }
+
+  .graph-branch-preview-detail {
+    max-height: 240px;
+  }
 }
 
 .git-section-head {

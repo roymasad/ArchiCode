@@ -1,11 +1,13 @@
 import { formatDateTime } from "@renderer/i18n";
 import { t } from "@renderer/i18n";
-import { Archive, FileDiff, GitBranch, GitCommit, GitPullRequestArrow, Loader2, Plus, RefreshCw, SendHorizontal, Sparkles, Trash2, Undo2 } from "lucide-react";
+import { Archive, Eye, FileDiff, GitBranch, GitCommit, GitPullRequestArrow, Loader2, Plus, RefreshCw, SendHorizontal, Sparkles, Trash2, Undo2 } from "lucide-react";
 import { Fragment, useEffect, useMemo, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { isConflictedGitFileStatus, type GitFileStatus, type ProjectFileDiff } from "@shared/projectTools";
+import { defaultGraphPreviewRefs, isConflictedGitFileStatus, type GitFileStatus, type ProjectFileDiff } from "@shared/projectTools";
+import type { GraphBranchPreview } from "@shared/graphBranchPreview";
 import { useArchicodeStore } from "../store/useArchicodeStore";
 import { Badge, Button, DialogContent, DialogRoot, DialogTrigger, Field, IconButton, ScrollArea, Select, TextArea, TextInput, Tooltip } from "./ui";
+import { GraphBranchPreviewDialog } from "./GraphBranchPreviewDialog";
 
 const gitScopeHelp = "ArchiCode supports a small Git subset: local init, status, selected-file commits, pull, push, switching or creating local branches, and discard. Use your Git client or terminal for remotes, merge, rebase, conflict resolution, tags, and stashes.";
 const initGitHelp = "Creates a local .git repository in this project folder. This does not create a GitHub repository, add a remote, publish code, make an initial commit, or configure branch strategy.";
@@ -84,10 +86,16 @@ export function GitPanel() {
   const [newBranchName, setNewBranchName] = useState("");
   const [stashName, setStashName] = useState("ArchiCode manual stash");
   const [pendingStashBranch, setPendingStashBranch] = useState<string | null>(null);
-  const [activeGitTool, setActiveGitTool] = useState<"switch" | "create" | "stash" | null>(null);
+  const [activeGitTool, setActiveGitTool] = useState<"switch" | "create" | "stash" | "preview" | null>(null);
   const [diffOpenPath, setDiffOpenPath] = useState<string | null>(null);
   const [diffLoadingPath, setDiffLoadingPath] = useState<string | null>(null);
   const [diffCache, setDiffCache] = useState<Record<string, ProjectFileDiff>>({});
+  const [previewBaseRef, setPreviewBaseRef] = useState("");
+  const [previewCandidateRef, setPreviewCandidateRef] = useState("");
+  const [graphPreview, setGraphPreview] = useState<GraphBranchPreview | null>(null);
+  const [graphPreviewOpen, setGraphPreviewOpen] = useState(false);
+  const [graphPreviewLoading, setGraphPreviewLoading] = useState(false);
+  const [graphPreviewError, setGraphPreviewError] = useState<string | null>(null);
   const changedFiles = gitStatus?.changes ?? [];
   const recentCommits = gitStatus?.recentCommits ?? [];
   const stashes = gitStatus?.stashes ?? [];
@@ -112,6 +120,13 @@ export function GitPanel() {
   useEffect(() => {
     if (gitStatus?.currentBranch) setBranchDraft(gitStatus.currentBranch);
   }, [gitStatus?.currentBranch]);
+
+  useEffect(() => {
+    const branches = gitStatus?.branches ?? [];
+    const defaults = defaultGraphPreviewRefs(branches, gitStatus?.currentBranch);
+    setPreviewCandidateRef(defaults.candidateRef);
+    setPreviewBaseRef(defaults.baseRef);
+  }, [gitStatus?.branches, gitStatus?.currentBranch]);
 
   const toggleFile = (path: string) => {
     setSelectedFiles((current) => current.includes(path) ? current.filter((item) => item !== path) : [...current, path]);
@@ -176,12 +191,32 @@ export function GitPanel() {
     if (confirmed) void discardGitChanges();
   };
 
-  const toggleGitTool = (tool: "switch" | "create" | "stash") => {
+  const toggleGitTool = (tool: "switch" | "create" | "stash" | "preview") => {
     setActiveGitTool((current) => {
       const next = current === tool ? null : tool;
       if (next !== "stash") setPendingStashBranch(null);
       return next;
     });
+  };
+
+  const requestGraphPreview = async (): Promise<void> => {
+    if (!rootPath || !previewBaseRef || !previewCandidateRef || previewBaseRef === previewCandidateRef) return;
+    if (!window.archicode?.previewGraphBranches) {
+      setGraphPreviewError(t("Restart ArchiCode to load branch graph preview support."));
+      return;
+    }
+    setGraphPreviewLoading(true);
+    setGraphPreviewError(null);
+    try {
+      const preview = await window.archicode.previewGraphBranches(rootPath, previewBaseRef, previewCandidateRef);
+      setGraphPreview(preview);
+      setOpen(false);
+      setGraphPreviewOpen(true);
+    } catch (error) {
+      setGraphPreviewError(error instanceof Error ? error.message : String(error));
+    } finally {
+      setGraphPreviewLoading(false);
+    }
   };
 
   const runNamedStash = async (): Promise<void> => {
@@ -213,6 +248,7 @@ export function GitPanel() {
   };
 
   return (
+    <>
     <DialogRoot open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>
         <IconButton title={t("Open Git")} className="toolbar-git-button">
@@ -242,10 +278,14 @@ export function GitPanel() {
                   </Button>
                 </span>
               </Tooltip>
-              <Button type="button" onClick={() => void refreshGitStatus()} disabled={gitBusy}>
-                <RefreshCw size={14} />
-                <span>{t("Check again")}</span>
-              </Button>
+              <Tooltip content={t("Refresh Git status and repository details.")}>
+                <span className="git-tooltip-action">
+                  <Button type="button" onClick={() => void refreshGitStatus()} disabled={gitBusy}>
+                    <RefreshCw size={14} />
+                    <span>{t("Check again")}</span>
+                  </Button>
+                </span>
+              </Tooltip>
             </div>
           </div>
         ) : (
@@ -280,34 +320,72 @@ export function GitPanel() {
             ) : null}
 
             <section className="git-action-grid">
-              <Button type="button" size="sm" onClick={() => void refreshGitStatus()} disabled={gitBusy}>
-                <RefreshCw size={15} />
-                <span>{t("Refresh")}</span>
-              </Button>
-              <Button type="button" size="sm" onClick={() => void runGitOperation("pull")} disabled={gitBusy}>
-                <GitPullRequestArrow size={15} />
-                <span>{t("Pull")}</span>
-              </Button>
-              <Button type="button" size="sm" onClick={() => void runGitOperation("push")} disabled={gitBusy}>
-                <SendHorizontal size={15} />
-                <span>{t("Push")}</span>
-              </Button>
-              <Button type="button" size="sm" onClick={() => toggleGitTool("switch")} disabled={!branchOptions.length}>
-                <GitBranch size={15} />
-                <span>{t("Switch")}</span>
-              </Button>
-              <Button type="button" size="sm" onClick={() => toggleGitTool("create")}>
-                <Plus size={15} />
-                <span>{t("Branch")}</span>
-              </Button>
-              <Button type="button" size="sm" onClick={() => toggleGitTool("stash")}>
-                <Archive size={15} />
-                <span>{t("Stashes {{value1}}", { value1: stashes.length ? `(${stashes.length})` : "" })}</span>
-              </Button>
-              <Button type="button" size="sm" variant="danger" onClick={confirmDiscardChanges} disabled={!canDiscardChanges}>
-                <Trash2 size={15} />
-                <span>{t("Disregard changes")}</span>
-              </Button>
+              <Tooltip content={t("Refresh Git status and repository details.")}>
+                <span className="git-tooltip-action">
+                  <Button type="button" size="sm" onClick={() => void refreshGitStatus()} disabled={gitBusy}>
+                    <RefreshCw size={15} />
+                    <span>{t("Refresh")}</span>
+                  </Button>
+                </span>
+              </Tooltip>
+              <Tooltip content={t("Fetch and integrate changes from the configured upstream branch.")}>
+                <span className="git-tooltip-action">
+                  <Button type="button" size="sm" onClick={() => void runGitOperation("pull")} disabled={gitBusy}>
+                    <GitPullRequestArrow size={15} />
+                    <span>{t("Pull")}</span>
+                  </Button>
+                </span>
+              </Tooltip>
+              <Tooltip content={t("Send local commits to the configured upstream branch.")}>
+                <span className="git-tooltip-action">
+                  <Button type="button" size="sm" onClick={() => void runGitOperation("push")} disabled={gitBusy}>
+                    <SendHorizontal size={15} />
+                    <span>{t("Push")}</span>
+                  </Button>
+                </span>
+              </Tooltip>
+              <Tooltip content={t("Choose another local branch. Uncommitted changes must be stashed first.")}>
+                <span className="git-tooltip-action">
+                  <Button type="button" size="sm" onClick={() => toggleGitTool("switch")} disabled={!branchOptions.length}>
+                    <GitBranch size={15} />
+                    <span>{t("Switch")}</span>
+                  </Button>
+                </span>
+              </Tooltip>
+              <Tooltip content={t("Create and switch to a new local branch from the current commit.")}>
+                <span className="git-tooltip-action">
+                  <Button type="button" size="sm" onClick={() => toggleGitTool("create")}>
+                    <Plus size={15} />
+                    <span>{t("Branch")}</span>
+                  </Button>
+                </span>
+              </Tooltip>
+              <Tooltip content={t("Temporarily save uncommitted changes or restore a saved stash.")}>
+                <span className="git-tooltip-action">
+                  <Button type="button" size="sm" onClick={() => toggleGitTool("stash")}>
+                    <Archive size={15} />
+                    <span>{t("Stashes {{value1}}", { value1: stashes.length ? `(${stashes.length})` : "" })}</span>
+                  </Button>
+                </span>
+              </Tooltip>
+              <Tooltip content={branchOptions.length < 2
+                ? t("Create or fetch another local branch before previewing graph changes.")
+                : t("Compare committed graph changes between two local branches without switching branches or modifying files.")}>
+                <span className="git-tooltip-action">
+                  <Button type="button" size="sm" onClick={() => toggleGitTool("preview")} disabled={branchOptions.length < 2}>
+                    <Eye size={15} />
+                    <span>{t("Preview graph")}</span>
+                  </Button>
+                </span>
+              </Tooltip>
+              <Tooltip content={t("Permanently discard all tracked and untracked working-tree changes.")}>
+                <span className="git-tooltip-action">
+                  <Button type="button" size="sm" variant="danger" onClick={confirmDiscardChanges} disabled={!canDiscardChanges}>
+                    <Trash2 size={15} />
+                    <span>{t("Disregard changes")}</span>
+                  </Button>
+                </span>
+              </Tooltip>
             </section>
 
             {activeGitTool === "switch" && branchOptions.length ? (
@@ -315,14 +393,18 @@ export function GitPanel() {
                 <Field label={t("Switch branch")} hint={t("Only local branches are shown. Branch changes reload the project data from disk. Merge, rebase, resolve conflicts, and manage remotes in your Git client or terminal.")}>
                   <div className="git-branch-row">
                     <Select value={branchDraft} onValueChange={setBranchDraft} options={branchOptions} />
-                    <Button
-                      type="button"
-                      onClick={() => void requestBranchSwitch(branchDraft)}
-                      disabled={gitBusy || !branchDraft || branchDraft === gitStatus.currentBranch}
-                    >
-                      <GitBranch size={14} />
-                      <span>{t("Switch")}</span>
-                    </Button>
+                    <Tooltip content={t("Switch to the selected local branch.")}>
+                      <span className="git-tooltip-action">
+                        <Button
+                          type="button"
+                          onClick={() => void requestBranchSwitch(branchDraft)}
+                          disabled={gitBusy || !branchDraft || branchDraft === gitStatus.currentBranch}
+                        >
+                          <GitBranch size={14} />
+                          <span>{t("Switch")}</span>
+                        </Button>
+                      </span>
+                    </Tooltip>
                   </div>
                 </Field>
               </section>
@@ -338,19 +420,23 @@ export function GitPanel() {
                       placeholder={t("feature/my-change")}
                       disabled={gitBusy}
                     />
-                    <Button
-                      type="button"
-                      onClick={() => {
-                        const branch = newBranchName.trim();
-                        if (!branch) return;
-                        void createGitBranch(branch);
-                        setNewBranchName("");
-                      }}
-                      disabled={gitBusy || !newBranchName.trim()}
-                    >
-                      <Plus size={14} />
-                      <span>{t("Create")}</span>
-                    </Button>
+                    <Tooltip content={t("Create and switch to this new local branch.")}>
+                      <span className="git-tooltip-action">
+                        <Button
+                          type="button"
+                          onClick={() => {
+                            const branch = newBranchName.trim();
+                            if (!branch) return;
+                            void createGitBranch(branch);
+                            setNewBranchName("");
+                          }}
+                          disabled={gitBusy || !newBranchName.trim()}
+                        >
+                          <Plus size={14} />
+                          <span>{t("Create")}</span>
+                        </Button>
+                      </span>
+                    </Tooltip>
                   </div>
                 </Field>
               </section>
@@ -380,17 +466,21 @@ export function GitPanel() {
                     </span>
                   </Tooltip>
                   {pendingStashBranch ? (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => {
-                        setPendingStashBranch(null);
-                        setStashName("ArchiCode manual stash");
-                      }}
-                    >
-                      <span>{t("Cancel switch")}</span>
-                    </Button>
+                    <Tooltip content={t("Keep the current branch and leave the working changes unstashed.")}>
+                      <span className="git-tooltip-action">
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => {
+                            setPendingStashBranch(null);
+                            setStashName("ArchiCode manual stash");
+                          }}
+                        >
+                          <span>{t("Cancel switch")}</span>
+                        </Button>
+                      </span>
+                    </Tooltip>
                   ) : null}
                 </div>
                 {pendingStashBranch ? (
@@ -421,12 +511,71 @@ export function GitPanel() {
               </section>
             ) : null}
 
+            {activeGitTool === "preview" ? (
+              <section className="git-branch-box git-graph-preview-box">
+                <div className="git-section-head">
+                  <div>
+                    <span className="ui-eyebrow">{t("Graph change preview")}</span>
+                    <small>{t("Walk through committed graph changes without switching branches or modifying files.")}</small>
+                  </div>
+                  <Tooltip content={t("This preview never modifies files, branches, or the graph.")}>
+                    <span><Badge>{t("Read-only")}</Badge></span>
+                  </Tooltip>
+                </div>
+                <div className="git-graph-preview-fields">
+                  <Field
+                    label={t("Candidate branch")}
+                    hint={t("The branch whose committed graph changes you want to inspect.")}
+                  >
+                    <Select
+                      value={previewCandidateRef}
+                      onValueChange={(value) => {
+                        setPreviewCandidateRef(value);
+                        if (value === previewBaseRef) {
+                          setPreviewBaseRef(branchOptions.find((option) => option.value !== value)?.value ?? "");
+                        }
+                      }}
+                      options={branchOptions}
+                    />
+                  </Field>
+                  <Field
+                    label={t("Base branch")}
+                    hint={t("The branch used as the comparison target. The preview follows PR-style merge-base semantics.")}
+                  >
+                    <Select
+                      value={previewBaseRef}
+                      onValueChange={setPreviewBaseRef}
+                      options={branchOptions.filter((option) => option.value !== previewCandidateRef)}
+                    />
+                  </Field>
+                </div>
+                <Tooltip content={t("Compare committed graph changes between two local branches without switching branches or modifying files.")}>
+                  <span className="git-tooltip-action is-wide">
+                    <Button
+                      type="button"
+                      variant="primary"
+                      onClick={() => void requestGraphPreview()}
+                      disabled={graphPreviewLoading || !previewBaseRef || !previewCandidateRef || previewBaseRef === previewCandidateRef}
+                    >
+                      {graphPreviewLoading ? <Loader2 size={15} className="is-spinning" /> : <Eye size={15} />}
+                      <span>{graphPreviewLoading ? t("Building preview...") : t("Preview graph changes")}</span>
+                    </Button>
+                  </span>
+                </Tooltip>
+                {graphPreviewError ? <small className="git-graph-preview-error">{graphPreviewError}</small> : null}
+              </section>
+            ) : null}
+
             <section className="git-commit-box">
               <div className="git-section-head">
                 <span className="ui-eyebrow">{t("Commit")}</span>
-                <Button type="button" size="sm" onClick={() => setSelectedFiles(changedFiles.map((change) => change.path))} disabled={!changedFiles.length}>
-                  <span>{t("Select all")}</span>
-                </Button>
+                <Tooltip content={t("Select every changed file for the next commit.")}>
+                  <span className="git-tooltip-action">
+                    <Button type="button" size="sm" onClick={() => setSelectedFiles(changedFiles.map((change) => change.path))} disabled={!changedFiles.length}>
+                      <span>{t("Select all")}</span>
+                    </Button>
+                  </span>
+                </Tooltip>
               </div>
               <ScrollArea className="git-change-scroll">
                 {changedFiles.length ? changedFiles.map((change) => {
@@ -504,18 +653,22 @@ export function GitPanel() {
                   placeholder={t("Describe this change")}
                 />
               </Field>
-              <Button
-                type="button"
-                variant="primary"
-                onClick={() => {
-                  void commitGitFiles(commitMessage, selectedFiles);
-                  setCommitMessage("");
-                }}
-                disabled={!canCommit}
-              >
-                <GitCommit size={16} />
-                <span>{t("Stage selected and commit")}</span>
-              </Button>
+              <Tooltip content={t("Stage the selected files and create a local commit with this message.")}>
+                <span className="git-tooltip-action is-wide">
+                  <Button
+                    type="button"
+                    variant="primary"
+                    onClick={() => {
+                      void commitGitFiles(commitMessage, selectedFiles);
+                      setCommitMessage("");
+                    }}
+                    disabled={!canCommit}
+                  >
+                    <GitCommit size={16} />
+                    <span>{t("Stage selected and commit")}</span>
+                  </Button>
+                </span>
+              </Tooltip>
             </section>
 
             <section className="git-dialog-log">
@@ -545,5 +698,7 @@ export function GitPanel() {
         )}
       </DialogContent>
     </DialogRoot>
+    <GraphBranchPreviewDialog open={graphPreviewOpen} preview={graphPreview} onOpenChange={setGraphPreviewOpen} />
+    </>
   );
 }

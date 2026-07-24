@@ -38,6 +38,25 @@ export type GitStatus = {
   merging?: boolean;
 };
 
+export function defaultGraphPreviewRefs(
+  branches: string[],
+  currentBranch?: string
+): { candidateRef: string; baseRef: string } {
+  const current = currentBranch && branches.includes(currentBranch) ? currentBranch : branches[0] ?? "";
+  const canonicalBase = branches.includes("main")
+    ? "main"
+    : branches.includes("master")
+      ? "master"
+      : "";
+  const candidateRef = canonicalBase && current === canonicalBase
+    ? branches.find((branch) => branch !== canonicalBase) ?? current
+    : current;
+  const baseRef = canonicalBase && canonicalBase !== candidateRef
+    ? canonicalBase
+    : branches.find((branch) => branch !== candidateRef) ?? "";
+  return { candidateRef, baseRef };
+}
+
 const CONFLICT_STATUS_CODES = new Set(["UU", "AA", "DU", "UD", "AU", "UA"]);
 
 export function isConflictedGitFileStatus(change: Pick<GitFileStatus, "index" | "workingTree">): boolean {

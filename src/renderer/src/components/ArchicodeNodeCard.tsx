@@ -156,6 +156,7 @@ export function ArchicodeNodeCard({ data, selected, dragging }: NodeProps) {
   const isBusyTests = Boolean(data.busyTests);
   const isHistoricalChange = Boolean(data.historicalChange);
   const previewState = data.previewState as "added" | "modified" | "removed" | undefined;
+  const previewFocused = Boolean(data.previewFocused);
   const onExplainPolicyViolations = data.onExplainPolicyViolations as (() => void) | undefined;
   const flags = new Set(node.flags);
   const primarySignal = primaryNodeSignal(flags, signals);
@@ -175,7 +176,7 @@ export function ArchicodeNodeCard({ data, selected, dragging }: NodeProps) {
 
   const card = (
     <div
-      className={`flow-node shape-${shape} stage-${node.stage} zoom-${zoomMode} ${isSelected ? "is-selected" : ""} ${isOverlapping ? "is-overlapping" : ""} ${node.locked ? "is-locked" : ""} ${node.ignored ? "is-ignored" : ""} ${isBusyTests ? "is-authoring-tests" : ""} ${signals?.policyViolations ? "has-policy-violation" : ""} ${isHistoricalChange ? "is-historical-change" : ""} ${previewState ? `is-preview-${previewState}` : ""}`}
+      className={`flow-node shape-${shape} stage-${node.stage} zoom-${zoomMode} ${isSelected ? "is-selected" : ""} ${isOverlapping ? "is-overlapping" : ""} ${node.locked ? "is-locked" : ""} ${node.ignored ? "is-ignored" : ""} ${isBusyTests ? "is-authoring-tests" : ""} ${signals?.policyViolations ? "has-policy-violation" : ""} ${isHistoricalChange ? "is-historical-change" : ""} ${previewState ? `is-preview-${previewState}` : ""} ${previewFocused ? "is-preview-focused" : ""}`}
       style={nodeStyle}
     >
       {isBusyTests ? (

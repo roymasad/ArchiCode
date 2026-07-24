@@ -103,6 +103,7 @@ import {
   readProjectFileDiff
 } from "./projectTools";
 import { getGraphNodeHistory, listGraphHistory, listHistoricalProjectFiles, loadHistoricalGraphBundle, readHistoricalProjectFile } from "./graphHistory";
+import { previewGraphBranches } from "./graphBranchPreview";
 import {
   deleteSpeechModel,
   downloadSpeechModel,
@@ -3006,6 +3007,9 @@ function registerIpc(): void {
   ipcMain.handle("archicode:list-chat-artifacts", async (_event, projectRoot, chatId) => listChatArtifacts(projectRoot, chatId));
   ipcMain.handle("archicode:read-chat-artifact", async (_event, projectRoot, chatId, artifactId) => readChatArtifact(projectRoot, chatId, artifactId));
   ipcMain.handle("archicode:get-git-status", async (_event, projectRoot: string) => getGitStatus(projectRoot));
+  ipcMain.handle("archicode:preview-graph-branches", async (_event, projectRoot: string, baseRef: string, candidateRef: string) =>
+    previewGraphBranches(projectRoot, baseRef, candidateRef)
+  );
   ipcMain.handle("archicode:list-graph-history", async (_event, projectRoot: string, options) => listGraphHistory(projectRoot, options));
   ipcMain.handle("archicode:load-historical-graph", async (_event, projectRoot: string, commit: string) =>
     loadHistoricalGraphBundle(projectRoot, commit)
